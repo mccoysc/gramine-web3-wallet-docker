@@ -1,0 +1,99 @@
+name: Monitor Gramine Repository
+
+on:
+  schedule:
+    # Run every 6 hours to check for updates in mccoy/gramine
+    - cron: '0 */6 * * *'
+  workflow_dispatch:
+    inputs:
+      force_rebuild:
+        description: 'Force rebuild even if no changes detected'
+        required: false
+        type: boolean
+        default: false
+
+jobs:
+  check-gramine-updates:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      packages: write
+      actions: write
+      
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Check for Gramine repository updates
+        id: check_updates
+        run: |
+          # Get the latest commit SHA from mccoy/gramine
+          LATEST_GRAMINE_SHA=$(curl -s https://api.github.com/repos/mccoysc/gramine/commits/master | jq -r '.sha')
+          echo "Latest Gramine SHA: $LATEST_GRAMINE_SHA"
+          
+          # Check if we have a record of the last built SHA
+          if [ -f .gramine-version ]; then
+            LAST_BUILT_SHA=$(cat .gramine-version)
+            echo "Last built SHA: $LAST_BUILT_SHA"
+          else
+            LAST_BUILT_SHA=""
+            echo "No previous build record found"
+          fi
+          
+          # Determine if we need to rebuild
+          if [ "${{ github.event.inputs.force_rebuild }}" == "true" ]; then
+            echo "Force rebuild requested"
+            echo "needs_rebuild=true" >> $GITHUB_OUTPUT
+          elif [ "$LATEST_GRAMINE_SHA" != "$LAST_BUILT_SHA" ]; then
+            echo "New Gramine version detected"
+            echo "needs_rebuild=true" >> $GITHUB_OUTPUT
+          else
+            echo "No updates detected"
+            echo "needs_rebuild=false" >> $GITHUB_OUTPUT
+          fi
+          
+          echo "gramine_sha=$LATEST_GRAMINE_SHA" >> $GITHUB_OUTPUT
+
+      - name: Update Gramine version file
+        if: steps.check_updates.outputs.needs_rebuild == 'true'
+        run: |
+          echo "${{ steps.check_updates.outputs.gramine_sha }}" > .gramine-version
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add .gramine-version
+          git diff --staged --quiet || git commit -m "Update Gramine version to ${{ steps.check_updates.outputs.gramine_sha }}"
+          git push
+
+      - name: Trigger Docker image rebuild
+        if: steps.check_updates.outputs.needs_rebuild == 'true'
+        uses: actions/github-script@v7
+        with:
+          script: |
+            await github.rest.actions.createWorkflowDispatch({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              workflow_id: 'build-and-push.yml',
+              ref: 'main',
+              inputs: {
+                gramine_ref: '${{ steps.check_updates.outputs.gramine_sha }}'
+              }
+            });
+
+      - name: Create summary
+        run: |
+          echo "## Gramine Repository Monitor" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "### Status" >> $GITHUB_STEP_SUMMARY
+          if [ "${{ steps.check_updates.outputs.needs_rebuild }}" == "true" ]; then
+            echo "✅ **Rebuild triggered**" >> $GITHUB_STEP_SUMMARY
+            echo "" >> $GITHUB_STEP_SUMMARY
+            echo "- **Gramine SHA**: \`${{ steps.check_updates.outputs.gramine_sha }}\`" >> $GITHUB_STEP_SUMMARY
+            echo "- **Action**: Docker image rebuild initiated" >> $GITHUB_STEP_SUMMARY
+          else
+            echo "ℹ️ **No updates detected**" >> $GITHUB_STEP_SUMMARY
+            echo "" >> $GITHUB_STEP_SUMMARY
+            echo "- **Current Gramine SHA**: \`${{ steps.check_updates.outputs.gramine_sha }}\`" >> $GITHUB_STEP_SUMMARY
+            echo "- **Action**: No rebuild needed" >> $GITHUB_STEP_SUMMARY
+          fi

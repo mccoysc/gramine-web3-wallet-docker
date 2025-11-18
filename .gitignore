@@ -1,0 +1,61 @@
+# Docker
+*.log
+docker-compose.override.yml
+
+# Wallet data and keys (sensitive)
+wallet/
+keys/
+*.pem
+*.key
+*.p12
+*.pfx
+
+# Data directories
+data/
+manifests/*.manifest.sgx
+manifests/*.sig
+
+# Node.js
+node_modules/
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+package-lock.json
+yarn.lock
+
+# Environment variables
+.env
+.env.local
+.env.*.local
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+.DS_Store
+
+# Build artifacts
+build/
+dist/
+*.o
+*.so
+*.a
+
+# Temporary files
+tmp/
+temp/
+*.tmp
+
+# SGX specific
+*.token
+*.sig
+enclave.signed.so
+
+# Logs
+logs/
+*.log
+
+# OS
+Thumbs.db

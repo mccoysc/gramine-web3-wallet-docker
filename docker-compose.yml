@@ -1,0 +1,62 @@
+version: '3.8'
+
+services:
+  gramine-web3-wallet:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: ghcr.io/mccoysc/gramine-web3-wallet-docker:latest
+    container_name: gramine-web3-wallet
+    
+    # Enable SGX device access (if available)
+    devices:
+      - /dev/sgx_enclave:/dev/sgx_enclave
+      - /dev/sgx_provision:/dev/sgx_provision
+    
+    # Mount volumes for persistent data
+    volumes:
+      - ./wallet:/app/wallet
+      - ./manifests:/app/manifests
+      - ./keys:/app/keys
+      - ./data:/app/data
+    
+    # Environment variables
+    environment:
+      - GRAMINE_SGX_MODE=1
+      - GRAMINE_DIRECT_MODE=0
+      - NODE_ENV=production
+    
+    # Network ports
+    ports:
+      - "8545:8545"  # Ethereum JSON-RPC
+      - "8546:8546"  # Ethereum WebSocket
+      - "30303:30303"  # Ethereum P2P
+    
+    # Security options
+    security_opt:
+      - seccomp:unconfined
+    
+    # Keep container running
+    stdin_open: true
+    tty: true
+    
+    # Restart policy
+    restart: unless-stopped
+
+  # Optional: Local Ethereum test network
+  ganache:
+    image: trufflesuite/ganache:latest
+    container_name: ganache-testnet
+    ports:
+      - "7545:8545"
+    command: >
+      --deterministic
+      --accounts 10
+      --defaultBalanceEther 1000
+      --gasLimit 10000000
+      --gasPrice 1
+    restart: unless-stopped
+
+networks:
+  default:
+    name: gramine-web3-network
