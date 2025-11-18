@@ -35,6 +35,7 @@ sgx.debug = false
 sgx.nonpie_binary = true
 sgx.enclave_size = "2G"
 sgx.max_threads = 32
+sgx.edmm= 1
 
 # Enable attestation
 sgx.remote_attestation = "dcap"
