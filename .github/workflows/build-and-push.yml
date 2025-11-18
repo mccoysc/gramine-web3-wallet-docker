@@ -177,7 +177,7 @@ jobs:
           # Commit and push
           git commit -m "$COMMIT_MSG" || echo "No changes to commit"
           git pull origin ${{ github.head_ref || github.ref_name }} --rebase
-          git push origin HEAD:${{ github.head_ref || github.ref_name }}
+          git push origin HEAD:${{ github.head_ref || github.ref_name }} --force
 
       - name: Build and extract OpenSSL,then push
         if: needs.check-versions.outputs.needs_openssl_rebuild == 'true'
@@ -231,7 +231,7 @@ jobs:
           # Commit and push
           git commit -m "$COMMIT_MSG" || echo "No changes to commit"
           git pull origin ${{ github.head_ref || github.ref_name }} --rebase
-          git push origin HEAD:${{ github.head_ref || github.ref_name }}
+          git push origin HEAD:${{ github.head_ref || github.ref_name }} --force
 
       - name: Build and extract Node.js,then push
         if: needs.check-versions.outputs.needs_nodejs_rebuild == 'true'
@@ -297,7 +297,7 @@ jobs:
           # Commit and push
           git commit -m "$COMMIT_MSG" || echo "No changes to commit"
           git pull origin ${{ github.head_ref || github.ref_name }} --rebase
-          git push origin HEAD:${{ github.head_ref || github.ref_name }}
+          git push origin HEAD:${{ github.head_ref || github.ref_name }} --force
 
   build-and-push:
     needs: [check-versions, update-prebuilt]
