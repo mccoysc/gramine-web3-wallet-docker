@@ -175,6 +175,7 @@ jobs:
           fi
 
           # Commit and push
+          git pull origin ${{ github.head_ref || github.ref_name }} --rebase
           git commit -m "$COMMIT_MSG" || echo "No changes to commit"
           git push origin HEAD:${{ github.head_ref || github.ref_name }}
 
@@ -228,6 +229,7 @@ jobs:
           fi
 
           # Commit and push
+          git pull origin ${{ github.head_ref || github.ref_name }} --rebase
           git commit -m "$COMMIT_MSG" || echo "No changes to commit"
           git push origin HEAD:${{ github.head_ref || github.ref_name }}
 
@@ -293,6 +295,7 @@ jobs:
           fi
 
           # Commit and push
+          git pull origin ${{ github.head_ref || github.ref_name }} --rebase
           git commit -m "$COMMIT_MSG" || echo "No changes to commit"
           git push origin HEAD:${{ github.head_ref || github.ref_name }}
 
