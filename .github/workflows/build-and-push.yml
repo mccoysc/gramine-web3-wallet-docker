@@ -257,7 +257,7 @@ jobs:
 
   build-and-push:
     needs: [check-versions, update-prebuilt]
-    if: always() && (needs.check-versions.result == 'success')
+    if: needs.check-versions.result == 'success' && (needs.update-prebuilt.result == 'success' || needs.update-prebuilt.result == 'skipped')
     runs-on: ubuntu-latest
     permissions:
       contents: read

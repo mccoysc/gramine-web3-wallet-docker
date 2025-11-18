@@ -4,13 +4,24 @@
 # using Gramine LibOS with Intel SGX support
 
 #==============================================================================
+# Global Build Arguments: Define before any FROM to enable variable expansion
+#==============================================================================
+ARG GRAMINE_SRC=gramine-builder
+ARG OPENSSL_SRC=openssl-builder
+ARG NODEJS_SRC=nodejs-builder
+ARG GRAMINE_TARBALL
+ARG OPENSSL_TARBALL
+ARG NODEJS_TARBALL
+ARG ARCH=linux-x86_64
+
+#==============================================================================
 # Prebuilt Import Stages: Use cached binaries from repository
 #==============================================================================
 
 # Gramine prebuilt import stage
 FROM ubuntu:22.04 AS gramine-prebuilt
-ARG ARCH=linux-x86_64
 ARG GRAMINE_TARBALL
+ARG ARCH
 RUN apt-get update && apt-get install -y --no-install-recommends zstd && rm -rf /var/lib/apt/lists/*
 COPY ${GRAMINE_TARBALL} /tmp/gramine.tar.zst
 RUN mkdir -p /opt/gramine-install && \
@@ -19,8 +30,8 @@ RUN mkdir -p /opt/gramine-install && \
 
 # OpenSSL prebuilt import stage
 FROM ubuntu:22.04 AS openssl-prebuilt
-ARG ARCH=linux-x86_64
 ARG OPENSSL_TARBALL
+ARG ARCH
 RUN apt-get update && apt-get install -y --no-install-recommends zstd && rm -rf /var/lib/apt/lists/*
 COPY ${OPENSSL_TARBALL} /tmp/openssl.tar.zst
 RUN mkdir -p /opt/node-ssl && \
@@ -29,8 +40,8 @@ RUN mkdir -p /opt/node-ssl && \
 
 # Node.js prebuilt import stage
 FROM ubuntu:22.04 AS nodejs-prebuilt
-ARG ARCH=linux-x86_64
 ARG NODEJS_TARBALL
+ARG ARCH
 RUN apt-get update && apt-get install -y --no-install-recommends zstd && rm -rf /var/lib/apt/lists/*
 COPY ${NODEJS_TARBALL} /tmp/nodejs.tar.zst
 RUN mkdir -p /opt/nodejs && \
@@ -142,6 +153,13 @@ RUN wget -q https://www.openssl.org/source/openssl-${OPENSSL_VERSION}.tar.gz \
     && cd / && rm -rf /tmp/openssl-build
 
 #==============================================================================
+# OpenSSL Selector Stage: Choose between prebuilt and builder
+#==============================================================================
+# This selector must be defined before nodejs-builder since nodejs-builder uses it
+ARG OPENSSL_SRC
+FROM ${OPENSSL_SRC} AS openssl-selected
+
+#==============================================================================
 # Node.js Builder Stage: Compile Node.js from source with dynamic OpenSSL linking
 #==============================================================================
 FROM ubuntu:22.04 AS nodejs-builder
@@ -172,10 +190,9 @@ ENV LDFLAGS="-L/opt/node-ssl/lib"
 ENV CPPFLAGS="-I/opt/node-ssl/include"
 ENV PKG_CONFIG_PATH="/opt/node-ssl/lib/pkgconfig"
 
-# Copy OpenSSL from either prebuilt or builder stage
+# Copy OpenSSL from selected stage
 # This allows Node.js to link against OpenSSL during compilation
-ARG OPENSSL_SRC=openssl-prebuilt
-COPY --from=${OPENSSL_SRC} /opt/node-ssl /opt/node-ssl
+COPY --from=openssl-selected /opt/node-ssl /opt/node-ssl
 
 # Download and build Node.js from source with shared OpenSSL
 ARG NODE_VERSION
@@ -202,6 +219,19 @@ RUN export LD_LIBRARY_PATH="/opt/node-ssl/lib:$LD_LIBRARY_PATH" \
     && /opt/nodejs/bin/node -v \
     && /opt/nodejs/bin/npm -v \
     && ldd /opt/nodejs/bin/node | grep -E 'libssl|libcrypto' || (echo "ERROR: Node.js is not dynamically linked to OpenSSL" && exit 1)
+
+#==============================================================================
+# Remaining Selector Stages: Choose between prebuilt and builder stages
+#==============================================================================
+# These stages use ARGs from global scope to select the appropriate source stage
+# This is the Docker-supported way to achieve conditional COPY operations
+# Note: openssl-selected is defined earlier (before nodejs-builder) since nodejs-builder uses it
+
+ARG GRAMINE_SRC
+FROM ${GRAMINE_SRC} AS gramine-selected
+
+ARG NODEJS_SRC
+FROM ${NODEJS_SRC} AS nodejs-selected
 
 #==============================================================================
 # Runtime Stage: Clean image with only installed Gramine and runtime dependencies
@@ -254,9 +284,8 @@ RUN curl -fsSLo /etc/apt/keyrings/intel-sgx-deb.asc https://download.01.org/inte
     libsgx-aesm-ecdsa-plugin \
     && rm -rf /var/lib/apt/lists/*
 
-# Copy installed Gramine from either prebuilt or builder stage
-ARG GRAMINE_SRC=gramine-prebuilt
-COPY --from=${GRAMINE_SRC} /opt/gramine-install/ /
+# Copy installed Gramine from selected stage
+COPY --from=gramine-selected /opt/gramine-install/ /
 
 # Update dynamic linker cache to recognize Gramine libraries
 RUN ldconfig
@@ -271,11 +300,9 @@ RUN chmod +x /usr/local/bin/gramine-manifest-wrapper.py && \
         ln -s /usr/local/bin/gramine-manifest-wrapper.py /usr/local/bin/gramine-manifest; \
     fi
 
-# Copy compiled Node.js and private OpenSSL from either prebuilt or builder stages
-ARG NODEJS_SRC=nodejs-prebuilt
-ARG OPENSSL_SRC=openssl-prebuilt
-COPY --from=${NODEJS_SRC} /opt/nodejs /opt/nodejs
-COPY --from=${OPENSSL_SRC} /opt/node-ssl /opt/node-ssl
+# Copy compiled Node.js and private OpenSSL from selected stages
+COPY --from=nodejs-selected /opt/nodejs /opt/nodejs
+COPY --from=openssl-selected /opt/node-ssl /opt/node-ssl
 
 # Create Node.js wrapper script to set up private OpenSSL environment
 RUN echo '#!/usr/bin/env sh\n\
