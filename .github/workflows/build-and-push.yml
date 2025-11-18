@@ -7,10 +7,20 @@ on:
       - master
     tags:
       - 'v*'
+    paths:
+      - 'Dockerfile'
+      - '.github/workflows/**'
+      - 'scripts/**'
+      - 'docker-compose.yml'
   pull_request:
     branches:
       - main
       - master
+    paths:
+      - 'Dockerfile'
+      - '.github/workflows/**'
+      - 'scripts/**'
+      - 'docker-compose.yml'
   workflow_dispatch:
     inputs:
       gramine_ref:

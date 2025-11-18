@@ -8,9 +8,16 @@ echo "=========================================="
 echo ""
 
 echo "Starting aesmd service..."
-mkdir -p /var/run/aesmd
-/usr/sbin/aesmd &
+mkdir -p /var/run/aesmd /var/opt/aesmd
+
+if [ -f /opt/intel/sgx-aesm-service/aesm/linksgx.sh ]; then
+    /opt/intel/sgx-aesm-service/aesm/linksgx.sh 2>/dev/null || true
+fi
+
+cd /opt/intel/sgx-aesm-service/aesm
+LD_LIBRARY_PATH=/opt/intel/sgx-aesm-service/aesm /opt/intel/sgx-aesm-service/aesm/aesm_service &
 AESMD_PID=$!
+cd /app
 
 echo "Waiting for aesmd to be ready..."
 TIMEOUT=30
