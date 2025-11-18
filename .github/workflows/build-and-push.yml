@@ -176,7 +176,7 @@ jobs:
 
           # Commit and push
           git commit -m "$COMMIT_MSG" || echo "No changes to commit"
-          git push
+          git push origin HEAD:main
 
       - name: Build and extract OpenSSL,then push
         if: needs.check-versions.outputs.needs_openssl_rebuild == 'true'
@@ -229,7 +229,7 @@ jobs:
 
           # Commit and push
           git commit -m "$COMMIT_MSG" || echo "No changes to commit"
-          git push
+          git push origin HEAD:main
 
       - name: Build and extract Node.js,then push
         if: needs.check-versions.outputs.needs_nodejs_rebuild == 'true'
@@ -294,7 +294,7 @@ jobs:
 
           # Commit and push
           git commit -m "$COMMIT_MSG" || echo "No changes to commit"
-          git push
+          git push origin HEAD:main
 
   build-and-push:
     needs: [check-versions, update-prebuilt]
