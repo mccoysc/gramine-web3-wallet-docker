@@ -125,7 +125,7 @@ jobs:
       - name: Install dependencies
         run: sudo apt-get update && sudo apt-get install -y jq zstd
 
-      - name: Build and extract Gramine
+      - name: Build and extract Gramine,then push
         if: needs.check-versions.outputs.needs_gramine_rebuild == 'true'
         run: |
           set -euo pipefail
@@ -161,7 +161,24 @@ jobs:
           # Cleanup
           rm -rf /tmp/gramine-extract
 
-      - name: Build and extract OpenSSL
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          
+          # Add all prebuilt files
+          git add prebuilt/
+          git add .gitattributes
+          
+          # Create commit message
+          COMMIT_MSG="chore(prebuilt): update binaries"
+          if [ "${{ needs.check-versions.outputs.needs_gramine_rebuild }}" = "true" ]; then
+            COMMIT_MSG="gramine=${{ needs.check-versions.outputs.gramine_latest }}"
+          fi
+
+          # Commit and push
+          git commit -m "$COMMIT_MSG" || echo "No changes to commit"
+          git push
+
+      - name: Build and extract OpenSSL,then push
         if: needs.check-versions.outputs.needs_openssl_rebuild == 'true'
         run: |
           set -euo pipefail
@@ -197,7 +214,24 @@ jobs:
           # Cleanup
           rm -rf /tmp/openssl-extract
 
-      - name: Build and extract Node.js
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          
+          # Add all prebuilt files
+          git add prebuilt/
+          git add .gitattributes
+          
+          # Create commit message
+          COMMIT_MSG="chore(prebuilt): update binaries"
+          if [ "${{ needs.check-versions.outputs.needs_openssl_rebuild }}" = "true" ]; then
+            COMMIT_MSG="openssl=${{ needs.check-versions.outputs.openssl_latest }}"
+          fi
+
+          # Commit and push
+          git commit -m "$COMMIT_MSG" || echo "No changes to commit"
+          git push
+
+      - name: Build and extract Node.js,then push
         if: needs.check-versions.outputs.needs_nodejs_rebuild == 'true'
         run: |
           set -euo pipefail
@@ -245,8 +279,6 @@ jobs:
           # Cleanup
           rm -rf /tmp/nodejs-extract
 
-      - name: Commit and push prebuilt binaries
-        run: |
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
           
@@ -256,16 +288,10 @@ jobs:
           
           # Create commit message
           COMMIT_MSG="chore(prebuilt): update binaries"
-          if [ "${{ needs.check-versions.outputs.needs_gramine_rebuild }}" = "true" ]; then
-            COMMIT_MSG="$COMMIT_MSG gramine=${{ needs.check-versions.outputs.gramine_latest }}"
-          fi
-          if [ "${{ needs.check-versions.outputs.needs_openssl_rebuild }}" = "true" ]; then
-            COMMIT_MSG="$COMMIT_MSG openssl=${{ needs.check-versions.outputs.openssl_latest }}"
-          fi
           if [ "${{ needs.check-versions.outputs.needs_nodejs_rebuild }}" = "true" ]; then
-            COMMIT_MSG="$COMMIT_MSG nodejs=${{ needs.check-versions.outputs.nodejs_latest }}"
+            COMMIT_MSG="nodejs=${{ needs.check-versions.outputs.nodejs_latest }}"
           fi
-          
+
           # Commit and push
           git commit -m "$COMMIT_MSG" || echo "No changes to commit"
           git push
