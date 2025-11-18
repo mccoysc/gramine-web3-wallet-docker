@@ -175,8 +175,8 @@ jobs:
           fi
 
           # Commit and push
-          git pull origin ${{ github.head_ref || github.ref_name }} --rebase
           git commit -m "$COMMIT_MSG" || echo "No changes to commit"
+          git pull origin ${{ github.head_ref || github.ref_name }} --rebase
           git push origin HEAD:${{ github.head_ref || github.ref_name }}
 
       - name: Build and extract OpenSSL,then push
@@ -229,8 +229,8 @@ jobs:
           fi
 
           # Commit and push
-          git pull origin ${{ github.head_ref || github.ref_name }} --rebase
           git commit -m "$COMMIT_MSG" || echo "No changes to commit"
+          git pull origin ${{ github.head_ref || github.ref_name }} --rebase
           git push origin HEAD:${{ github.head_ref || github.ref_name }}
 
       - name: Build and extract Node.js,then push
@@ -295,8 +295,8 @@ jobs:
           fi
 
           # Commit and push
-          git pull origin ${{ github.head_ref || github.ref_name }} --rebase
           git commit -m "$COMMIT_MSG" || echo "No changes to commit"
+          git pull origin ${{ github.head_ref || github.ref_name }} --rebase
           git push origin HEAD:${{ github.head_ref || github.ref_name }}
 
   build-and-push:
