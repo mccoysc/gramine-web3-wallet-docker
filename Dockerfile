@@ -99,6 +99,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     python3-tomli \
     python3-tomli-w \
     python3-voluptuous \
+    python3-cryptography \
     python3-pip \
     python3-venv \
     libcurl4 \
