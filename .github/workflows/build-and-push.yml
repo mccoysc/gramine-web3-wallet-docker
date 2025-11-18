@@ -128,6 +128,7 @@ jobs:
       - name: Build and extract Gramine
         if: needs.check-versions.outputs.needs_gramine_rebuild == 'true'
         run: |
+          set -euo pipefail
           GRAMINE_REF="${{ needs.check-versions.outputs.gramine_latest }}"
           echo "Building Gramine from commit $GRAMINE_REF"
           
@@ -137,13 +138,17 @@ jobs:
             --build-arg GRAMINE_REF="$GRAMINE_REF" \
             .
           
-          # Extract binaries
+          # Extract binaries with correct path structure
           CID=$(docker create cache:gramine)
-          mkdir -p /tmp/gramine-extract
-          docker cp $CID:/opt/gramine-install /tmp/gramine-extract/
+          mkdir -p /tmp/gramine-extract/opt
+          docker cp $CID:/opt/gramine-install /tmp/gramine-extract/opt/
           docker rm -f $CID
           
-          # Compress to tarball
+          # Verify extraction
+          ls -la /tmp/gramine-extract/opt/gramine-install || (echo "ERROR: Gramine extraction failed" && exit 1)
+          
+          # Create output directory and compress to tarball
+          mkdir -p prebuilt/linux-x86_64/gramine
           ARTIFACT_NAME="gramine-${GRAMINE_REF:0:8}.tar.zst"
           tar -C /tmp/gramine-extract -I 'zstd -19' -cf "prebuilt/linux-x86_64/gramine/$ARTIFACT_NAME" opt/gramine-install
           
@@ -159,6 +164,7 @@ jobs:
       - name: Build and extract OpenSSL
         if: needs.check-versions.outputs.needs_openssl_rebuild == 'true'
         run: |
+          set -euo pipefail
           OPENSSL_VERSION="${{ needs.check-versions.outputs.openssl_latest }}"
           echo "Building OpenSSL version $OPENSSL_VERSION"
           
@@ -168,13 +174,17 @@ jobs:
             --build-arg OPENSSL_VERSION="$OPENSSL_VERSION" \
             .
           
-          # Extract binaries
+          # Extract binaries with correct path structure
           CID=$(docker create cache:openssl)
-          mkdir -p /tmp/openssl-extract
-          docker cp $CID:/opt/node-ssl /tmp/openssl-extract/
+          mkdir -p /tmp/openssl-extract/opt
+          docker cp $CID:/opt/node-ssl /tmp/openssl-extract/opt/
           docker rm -f $CID
           
-          # Compress to tarball
+          # Verify extraction
+          ls -la /tmp/openssl-extract/opt/node-ssl || (echo "ERROR: OpenSSL extraction failed" && exit 1)
+          
+          # Create output directory and compress to tarball
+          mkdir -p prebuilt/linux-x86_64/openssl
           ARTIFACT_NAME="openssl-${OPENSSL_VERSION}.tar.zst"
           tar -C /tmp/openssl-extract -I 'zstd -19' -cf "prebuilt/linux-x86_64/openssl/$ARTIFACT_NAME" opt/node-ssl
           
@@ -190,6 +200,7 @@ jobs:
       - name: Build and extract Node.js
         if: needs.check-versions.outputs.needs_nodejs_rebuild == 'true'
         run: |
+          set -euo pipefail
           NODEJS_VERSION="${{ needs.check-versions.outputs.nodejs_latest }}"
           OPENSSL_VERSION="${{ needs.check-versions.outputs.openssl_latest }}"
           echo "Building Node.js version $NODEJS_VERSION"
@@ -211,13 +222,17 @@ jobs:
             ${OPENSSL_TARBALL:+--build-arg OPENSSL_TARBALL="$OPENSSL_TARBALL"} \
             .
           
-          # Extract binaries
+          # Extract binaries with correct path structure
           CID=$(docker create cache:nodejs)
-          mkdir -p /tmp/nodejs-extract
-          docker cp $CID:/opt/nodejs /tmp/nodejs-extract/
+          mkdir -p /tmp/nodejs-extract/opt
+          docker cp $CID:/opt/nodejs /tmp/nodejs-extract/opt/
           docker rm -f $CID
           
-          # Compress to tarball
+          # Verify extraction
+          ls -la /tmp/nodejs-extract/opt/nodejs || (echo "ERROR: Node.js extraction failed" && exit 1)
+          
+          # Create output directory and compress to tarball
+          mkdir -p prebuilt/linux-x86_64/nodejs
           ARTIFACT_NAME="node-${NODEJS_VERSION}.tar.zst"
           tar -C /tmp/nodejs-extract -I 'zstd -19' -cf "prebuilt/linux-x86_64/nodejs/$ARTIFACT_NAME" opt/nodejs
           
