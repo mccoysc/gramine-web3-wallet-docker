@@ -1,0 +1,31 @@
+{
+  "HTTPS_PORT": 8081,
+  "HTTP_PORT": 8080,
+  "uri": "https://api.trustedservices.intel.com/sgx/certification/v4/",
+  "ApiKey": "",
+  "proxy": "",
+  "RefreshSchedule": "0 0 1 * * *",
+  "UserTokenHash": "",
+  "AdminTokenHash": "",
+  "CachingFillMode": "LAZY",
+  "LogLevel": "info",
+  "DB_CONFIG": "sqlite",
+  "sqlite": {
+    "database": "pccs.db",
+    "username": "",
+    "password": "",
+    "options": {
+      "host": "",
+      "dialect": "sqlite",
+      "storage": "/opt/intel/sgx-dcap-pccs/data/pccs.db",
+      "logging": false,
+      "operatorsAliases": false,
+      "pool": {
+        "max": 5,
+        "min": 0,
+        "acquire": 30000,
+        "idle": 10000
+      }
+    }
+  }
+}

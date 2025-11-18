@@ -1,60 +1,62 @@
-# Gramine Web3 钱包 Docker 镜像
+# Gramine Web3 Wallet Docker Image
 
-这个仓库专门用于构建和发布基于 Gramine 项目的 Web3 钱包 Docker 镜像。镜像会自动构建并推送到 GitHub Container Registry (GHCR)。
+**English** | [中文文档](README.zh-CN.md)
 
-## 功能特性
+This repository is dedicated to building and publishing Docker images for Web3 wallet projects based on the Gramine project. Images are automatically built and pushed to GitHub Container Registry (GHCR).
 
-- ✅ 基于 [mccoysc/gramine](https://github.com/mccoysc/gramine) 构建
-- ✅ 支持 Intel SGX 可信执行环境
-- ✅ 预装 Node.js 和常用 Web3 开发工具
-- ✅ 自动监控 Gramine 仓库更新并触发重新构建
-- ✅ 自动构建并推送镜像到 GitHub Container Registry
-- ✅ 支持多种标签策略（latest, 版本号, SHA 等）
+## Features
 
-## 架构说明
+- ✅ Built from [mccoysc/gramine](https://github.com/mccoysc/gramine)
+- ✅ Intel SGX Trusted Execution Environment support
+- ✅ Pre-installed Node.js and common Web3 development tools
+- ✅ Automatic monitoring of Gramine repository updates and rebuild triggers
+- ✅ Automatic build and push to GitHub Container Registry
+- ✅ Multiple tagging strategies (latest, version, SHA, etc.)
 
-### 自动化工作流
+## Architecture
 
-1. **构建和推送镜像** (`.github/workflows/build-and-push.yml`)
-   - 触发条件：
-     - 推送到 main/master 分支
-     - 创建版本标签（v*）
-     - 手动触发
-   - 自动操作：
-     - 构建 Docker 镜像
-     - 推送到 GitHub Container Registry
-     - 生成多个标签（latest, 版本号, SHA 等）
+### Automated Workflows
 
-2. **监控 Gramine 仓库** (`.github/workflows/monitor-gramine.yml`)
-   - 触发条件：
-     - 每 6 小时自动检查一次
-     - 手动触发
-   - 自动操作：
-     - 检查 mccoysc/gramine 仓库是否有更新
-     - 如果有更新，自动触发镜像重新构建
-     - 更新 `.gramine-version` 文件记录版本
+1. **Build and Push Image** (`.github/workflows/build-and-push.yml`)
+   - Triggers:
+     - Push to main/master branch
+     - Create version tags (v*)
+     - Manual trigger
+   - Actions:
+     - Build Docker image
+     - Push to GitHub Container Registry
+     - Generate multiple tags (latest, version, SHA, etc.)
 
-## 使用方法
+2. **Monitor Gramine Repository** (`.github/workflows/monitor-gramine.yml`)
+   - Triggers:
+     - Automatic check every 6 hours
+     - Manual trigger
+   - Actions:
+     - Check for updates in mccoysc/gramine repository
+     - Automatically trigger image rebuild if updates found
+     - Update `.gramine-version` file to record version
 
-### 拉取镜像
+## Usage
+
+### Pull Image
 
 ```bash
-# 拉取最新版本
+# Pull latest version
 docker pull ghcr.io/mccoysc/gramine-web3-wallet-docker:latest
 
-# 拉取特定版本
+# Pull specific version
 docker pull ghcr.io/mccoysc/gramine-web3-wallet-docker:v1.0.0
 ```
 
-### 运行容器
+### Run Container
 
-#### 使用 Docker 命令
+#### Using Docker Command
 
 ```bash
-# 基本运行
+# Basic run
 docker run -it ghcr.io/mccoysc/gramine-web3-wallet-docker:latest
 
-# 启用 SGX 支持（需要 SGX 硬件）
+# Enable SGX support (requires SGX hardware)
 docker run -it \
   --device=/dev/sgx_enclave \
   --device=/dev/sgx_provision \
@@ -64,171 +66,220 @@ docker run -it \
   ghcr.io/mccoysc/gramine-web3-wallet-docker:latest
 ```
 
-#### 使用 Docker Compose
+#### Using Docker Compose
 
 ```bash
-# 启动服务
+# Start services
 docker-compose up -d
 
-# 查看日志
+# View logs
 docker-compose logs -f
 
-# 进入容器
+# Enter container
 docker-compose exec gramine-web3-wallet bash
 
-# 停止服务
+# Stop services
 docker-compose down
 ```
 
-### 本地构建
+### Local Build
 
 ```bash
-# 克隆仓库
+# Clone repository
 git clone https://github.com/mccoysc/gramine-web3-wallet-docker.git
 cd gramine-web3-wallet-docker
 
-# 构建镜像
+# Build image
 docker build -t gramine-web3-wallet:local .
 
-# 运行本地构建的镜像
+# Run locally built image
 docker run -it gramine-web3-wallet:local
 ```
 
-## 目录结构
+## Directory Structure
 
 ```
 gramine-web3-wallet-docker/
 ├── .github/
 │   └── workflows/
-│       ├── build-and-push.yml      # 构建和推送镜像的工作流
-│       └── monitor-gramine.yml     # 监控 Gramine 仓库的工作流
-├── docker/                         # Docker 相关配置
+│       ├── build-and-push.yml      # Build and push image workflow
+│       └── monitor-gramine.yml     # Monitor Gramine repository workflow
+├── config/
+│   └── pccs-default.json          # PCCS default configuration
 ├── scripts/
-│   └── entrypoint.sh              # 容器启动脚本
-├── Dockerfile                      # Docker 镜像定义
-├── docker-compose.yml             # Docker Compose 配置
-├── .gramine-version               # 记录当前使用的 Gramine 版本
-└── README.md                      # 本文档
+│   └── entrypoint.sh              # Container startup script
+├── Dockerfile                      # Docker image definition
+├── docker-compose.yml             # Docker Compose configuration
+├── .gramine-version               # Record current Gramine version
+└── README.md                      # This document
 ```
 
-## 环境变量
+## Environment Variables
 
-| 变量名 | 说明 | 默认值 |
-|--------|------|--------|
-| `GRAMINE_SGX_MODE` | 是否启用 SGX 模式 | `1` |
-| `GRAMINE_DIRECT_MODE` | 是否启用直接模式 | `0` |
-| `NODE_ENV` | Node.js 环境 | `production` |
+| Variable | Description | Default | Required |
+|----------|-------------|---------|----------|
+| `GRAMINE_SGX_MODE` | Enable SGX mode | `1` | No |
+| `GRAMINE_DIRECT_MODE` | Enable direct mode | `0` | No |
+| `NODE_ENV` | Node.js environment | `production` | No |
+| `PCCS_API_KEY` | Intel PCCS API key | Empty | Recommended |
 
-## 预装工具
+### API Key Configuration
 
-镜像中预装了以下工具：
+#### PCCS API Key
 
-- **Gramine LibOS**: 从 mccoysc/gramine 构建
-- **Node.js**: v20.x LTS
-- **Web3 工具**:
+PCCS (Provisioning Certificate Caching Service) is used for SGX DCAP remote attestation. If you need to fetch the latest SGX certificates from Intel, you need to configure an API key.
+
+**Obtain API Key**:
+1. Visit [Intel PCS Portal](https://api.portal.trustedservices.intel.com/)
+2. Register and create a subscription
+3. Get API key (Primary Key or Secondary Key)
+
+**Configuration Methods**:
+
+Using Docker command line:
+```bash
+docker run -it \
+  -e PCCS_API_KEY="your-api-key-here" \
+  --device=/dev/sgx_enclave \
+  --device=/dev/sgx_provision \
+  ghcr.io/mccoysc/gramine-web3-wallet-docker:latest
+```
+
+Using Docker Compose, add to `docker-compose.yml`:
+```yaml
+services:
+  gramine-web3-wallet:
+    image: ghcr.io/mccoysc/gramine-web3-wallet-docker:latest
+    environment:
+      - PCCS_API_KEY=${PCCS_API_KEY}
+    # ... other configurations
+```
+
+Then create `.env` file:
+```bash
+PCCS_API_KEY=your-api-key-here
+```
+
+**Important Notes**:
+- Keep API keys confidential, do not commit to code repository
+- If API key is not configured, PCCS will still start but cannot fetch latest certificates from Intel
+- For development and testing environments, API key configuration is optional
+
+## Pre-installed Tools
+
+The image includes the following pre-installed tools:
+
+- **Gramine LibOS**: Built from mccoysc/gramine (DCAP mode supported)
+- **Node.js**: v24.x
+- **Python**: 3.10.x
+- **SGX Services**:
+  - aesmd (SGX Architectural Enclave Service Manager)
+  - PCCS (Provisioning Certificate Caching Service)
+  - QPL (Quote Provider Library)
+- **Web3 Tools**:
   - web3.js
   - ethers.js
   - Hardhat
   - Truffle
   - Ganache
 
-## 开发指南
+## Development Guide
 
-### 修改 Dockerfile
+### Modify Dockerfile
 
-1. 编辑 `Dockerfile` 文件
-2. 提交更改到仓库
-3. GitHub Actions 会自动构建新镜像
+1. Edit `Dockerfile`
+2. Commit changes to repository
+3. GitHub Actions will automatically build new image
 
-### 手动触发构建
+### Manual Trigger Build
 
-1. 进入仓库的 Actions 页面
-2. 选择 "Build and Push Docker Image" 工作流
-3. 点击 "Run workflow"
-4. 选择分支并运行
+1. Go to repository Actions page
+2. Select "Build and Push Docker Image" workflow
+3. Click "Run workflow"
+4. Select branch and run
 
-### 强制重新构建
+### Force Rebuild
 
-如果需要强制重新构建镜像（即使 Gramine 仓库没有更新）：
+If you need to force rebuild the image (even if Gramine repository has no updates):
 
-1. 进入仓库的 Actions 页面
-2. 选择 "Monitor Gramine Repository" 工作流
-3. 点击 "Run workflow"
-4. 勾选 "Force rebuild" 选项
-5. 运行工作流
+1. Go to repository Actions page
+2. Select "Monitor Gramine Repository" workflow
+3. Click "Run workflow"
+4. Check "Force rebuild" option
+5. Run workflow
 
-## 镜像标签策略
+## Image Tagging Strategy
 
-GitHub Actions 会自动生成以下标签：
+GitHub Actions automatically generates the following tags:
 
-- `latest`: 最新的 main/master 分支构建
-- `v1.0.0`: 版本标签（如果推送了 git tag）
-- `v1.0`: 主版本号和次版本号
-- `v1`: 主版本号
-- `main-abc1234`: 分支名-提交 SHA
-- `pr-123`: Pull Request 编号
+- `latest`: Latest main/master branch build
+- `v1.0.0`: Version tag (if git tag is pushed)
+- `v1.0`: Major and minor version
+- `v1`: Major version
+- `main-abc1234`: Branch name-commit SHA
+- `pr-123`: Pull Request number
 
-## 安全注意事项
+## Security Considerations
 
-1. **SGX 设备访问**: 容器需要访问 `/dev/sgx_enclave` 和 `/dev/sgx_provision` 设备
-2. **密钥管理**: 建议将私钥存储在加密卷中，不要提交到仓库
-3. **网络安全**: 生产环境中请配置适当的防火墙规则
-4. **权限控制**: 使用最小权限原则运行容器
+1. **SGX Device Access**: Container needs access to `/dev/sgx_enclave` and `/dev/sgx_provision` devices
+2. **Key Management**: Recommend storing private keys in encrypted volumes, do not commit to repository
+3. **Network Security**: Configure appropriate firewall rules in production environments
+4. **Permission Control**: Run containers with least privilege principle
 
-## 故障排除
+## Troubleshooting
 
-### SGX 设备未找到
+### SGX Device Not Found
 
-如果看到 "SGX device not found" 警告：
+If you see "SGX device not found" warning:
 
-1. 确认主机支持 Intel SGX
-2. 确认 SGX 驱动已安装
-3. 确认 Docker 运行时有权限访问 SGX 设备
+1. Confirm host supports Intel SGX
+2. Confirm SGX driver is installed
+3. Confirm Docker runtime has permission to access SGX devices
 
-### 构建失败
+### Build Failure
 
-如果 GitHub Actions 构建失败：
+If GitHub Actions build fails:
 
-1. 查看 Actions 日志
-2. 检查 Dockerfile 语法
-3. 确认依赖项可访问
+1. Check Actions logs
+2. Verify Dockerfile syntax
+3. Confirm dependencies are accessible
 
-### 镜像拉取失败
+### Image Pull Failure
 
-如果无法拉取镜像：
+If unable to pull image:
 
-1. 确认已登录 GitHub Container Registry：
+1. Confirm logged in to GitHub Container Registry:
    ```bash
    echo $GITHUB_TOKEN | docker login ghcr.io -u USERNAME --password-stdin
    ```
-2. 确认镜像仓库权限设置正确
+2. Confirm image repository permissions are set correctly
 
-## 贡献指南
+## Contributing
 
-欢迎提交 Issue 和 Pull Request！
+Issues and Pull Requests are welcome!
 
-1. Fork 本仓库
-2. 创建特性分支 (`git checkout -b feature/amazing-feature`)
-3. 提交更改 (`git commit -m 'Add some amazing feature'`)
-4. 推送到分支 (`git push origin feature/amazing-feature`)
-5. 创建 Pull Request
+1. Fork this repository
+2. Create feature branch (`git checkout -b feature/amazing-feature`)
+3. Commit changes (`git commit -m 'Add some amazing feature'`)
+4. Push to branch (`git push origin feature/amazing-feature`)
+5. Create Pull Request
 
-## 许可证
+## License
 
-本项目采用 LGPL-3.0 许可证，与 Gramine 项目保持一致。
+This project uses the LGPL-3.0 license, consistent with the Gramine project.
 
-## 相关链接
+## Related Links
 
-- [Gramine 官方文档](https://gramine.readthedocs.io/)
-- [mccoysc/gramine 仓库](https://github.com/mccoysc/gramine)
-- [Intel SGX 文档](https://www.intel.com/content/www/us/en/developer/tools/software-guard-extensions/overview.html)
-- [GitHub Container Registry 文档](https://docs.github.com/en/packages/working-with-a-github-packages-registry/working-with-the-container-registry)
+- [Gramine Official Documentation](https://gramine.readthedocs.io/)
+- [mccoysc/gramine Repository](https://github.com/mccoysc/gramine)
+- [Intel SGX Documentation](https://www.intel.com/content/www/us/en/developer/tools/software-guard-extensions/overview.html)
+- [GitHub Container Registry Documentation](https://docs.github.com/en/packages/working-with-a-github-packages-registry/working-with-the-container-registry)
 
-## 联系方式
+## Contact
 
 - GitHub: [@mccoysc](https://github.com/mccoysc)
 - Email: hbzgzr@gmail.com
 
 ---
 
-**注意**: 本镜像仅用于开发和测试目的。生产环境使用前请进行充分的安全审计。
+**Note**: This image is for development and testing purposes only. Conduct thorough security audits before production use.
