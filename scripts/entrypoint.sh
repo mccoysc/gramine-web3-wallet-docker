@@ -39,6 +39,19 @@ else
 fi
 
 echo ""
+echo "Starting PCCS (Provisioning Certificate Caching Service)..."
+if [ -f /opt/intel/sgx-dcap-pccs/pccs_server.js ]; then
+    cd /opt/intel/sgx-dcap-pccs
+    node pccs_server.js &
+    PCCS_PID=$!
+    echo "✓ PCCS started (PID: $PCCS_PID)"
+    echo "  HTTP port: 8080, HTTPS port: 8081"
+    cd /app
+else
+    echo "⚠ PCCS not found at /opt/intel/sgx-dcap-pccs/pccs_server.js"
+fi
+
+echo ""
 
 if [ -e /dev/sgx_enclave ]; then
     echo "✓ SGX device detected: /dev/sgx_enclave"

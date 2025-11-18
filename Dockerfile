@@ -116,7 +116,9 @@ RUN curl -fsSLo /etc/apt/keyrings/intel-sgx-deb.asc https://download.01.org/inte
     libsgx-urts \
     libsgx-enclave-common \
     sgx-aesm-service \
+    libsgx-aesm-launch-plugin \
     libsgx-aesm-pce-plugin \
+    libsgx-aesm-epid-plugin \
     libsgx-aesm-quote-ex-plugin \
     libsgx-aesm-ecdsa-plugin \
     && rm -rf /var/lib/apt/lists/*
@@ -127,11 +129,59 @@ COPY --from=builder /opt/gramine-install/ /
 # Update dynamic linker cache to recognize Gramine libraries
 RUN ldconfig
 
-# Install Node.js (latest LTS version)
-ARG NODE_MAJOR=20
+# Install Node.js 24 (BEFORE PCCS to avoid conflicts)
+ARG NODE_MAJOR=24
 RUN curl -fsSL https://deb.nodesource.com/setup_${NODE_MAJOR}.x | bash - \
     && apt-get install -y nodejs \
     && rm -rf /var/lib/apt/lists/*
+
+# Install PCCS by extracting .deb to temp directory (avoids systemd postinst issues)
+RUN curl -fsSLo /etc/apt/keyrings/intel-sgx-deb.asc https://download.01.org/intel-sgx/sgx_repo/ubuntu/intel-sgx-deb.key \
+    && echo "deb [arch=amd64 signed-by=/etc/apt/keyrings/intel-sgx-deb.asc] https://download.01.org/intel-sgx/sgx_repo/ubuntu jammy main" > /etc/apt/sources.list.d/intel-sgx.list \
+    && apt-get update \
+    && cd /tmp \
+    && apt-get download sgx-dcap-pccs \
+    && dpkg-deb -x sgx-dcap-pccs_*.deb /tmp/pccs-extract \
+    && mkdir -p /opt/intel \
+    && cp -r /tmp/pccs-extract/opt/intel/sgx-dcap-pccs /opt/intel/ \
+    && rm -rf /tmp/pccs-extract /tmp/sgx-dcap-pccs_*.deb \
+    && apt-get clean \
+    && rm -rf /var/lib/apt/lists/*
+
+# Install PCCS dependencies (node_modules)
+RUN cd /opt/intel/sgx-dcap-pccs \
+    && if [ -f package-lock.json ]; then \
+        npm ci --omit=dev; \
+    else \
+        npm install --omit=dev; \
+    fi \
+    && npm cache clean --force
+
+# Configure PCCS with default settings (API key should be provided via environment variable)
+RUN mkdir -p /opt/intel/sgx-dcap-pccs/config \
+    && echo '{\n\
+  "HTTPS_PORT": 8081,\n\
+  "HTTP_PORT": 8080,\n\
+  "uri": "https://api.trustedservices.intel.com/sgx/certification/v4/",\n\
+  "ApiKey": "",\n\
+  "proxy": "",\n\
+  "RefreshSchedule": "0 0 1 * * *",\n\
+  "UserTokenHash": "",\n\
+  "AdminTokenHash": "",\n\
+  "CachingFillMode": "LAZY",\n\
+  "LogLevel": "info"\n\
+}' > /opt/intel/sgx-dcap-pccs/config/default.json
+
+# Configure QPL to use local PCCS
+RUN echo '{\n\
+  "pccs_url": "https://localhost:8081/sgx/certification/v4/",\n\
+  "use_secure_cert": false,\n\
+  "collateral_service": "https://api.trustedservices.intel.com/sgx/certification/v4/",\n\
+  "retry_times": 6,\n\
+  "retry_delay": 10,\n\
+  "local_pck_url": "",\n\
+  "pck_cache_expire_hours": 168\n\
+}' > /etc/sgx_default_qcnl.conf
 
 # Install common Web3 libraries (optional, can be disabled with build arg)
 ARG INSTALL_WEB3_TOOLS=true
@@ -155,8 +205,8 @@ ENV GRAMINE_SGX_MODE=1
 # Set working directory
 WORKDIR /app
 
-# Expose common Web3 ports
-EXPOSE 8545 8546 30303
+# Expose common Web3 ports and PCCS ports
+EXPOSE 8545 8546 30303 8080 8081
 
 # Health check to verify aesmd is running
 HEALTHCHECK --interval=30s --timeout=10s --start-period=5s --retries=3 \
