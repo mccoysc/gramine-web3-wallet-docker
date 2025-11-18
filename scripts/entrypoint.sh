@@ -8,9 +8,16 @@ echo "=========================================="
 echo ""
 
 echo "Starting aesmd service..."
-mkdir -p /var/run/aesmd
-/usr/sbin/aesmd &
+mkdir -p /var/run/aesmd /var/opt/aesmd
+
+if [ -f /opt/intel/sgx-aesm-service/aesm/linksgx.sh ]; then
+    /opt/intel/sgx-aesm-service/aesm/linksgx.sh 2>/dev/null || true
+fi
+
+cd /opt/intel/sgx-aesm-service/aesm
+LD_LIBRARY_PATH=/opt/intel/sgx-aesm-service/aesm /opt/intel/sgx-aesm-service/aesm/aesm_service &
 AESMD_PID=$!
+cd /app
 
 echo "Waiting for aesmd to be ready..."
 TIMEOUT=30
@@ -29,6 +36,19 @@ if [ -S /var/run/aesmd/aesm.socket ]; then
     echo "✓ aesmd service started successfully"
 else
     echo "⚠ aesmd service may not be running properly"
+fi
+
+echo ""
+echo "Starting PCCS (Provisioning Certificate Caching Service)..."
+if [ -f /opt/intel/sgx-dcap-pccs/pccs_server.js ]; then
+    cd /opt/intel/sgx-dcap-pccs
+    node pccs_server.js &
+    PCCS_PID=$!
+    echo "✓ PCCS started (PID: $PCCS_PID)"
+    echo "  HTTP port: 8080, HTTPS port: 8081"
+    cd /app
+else
+    echo "⚠ PCCS not found at /opt/intel/sgx-dcap-pccs/pccs_server.js"
 fi
 
 echo ""

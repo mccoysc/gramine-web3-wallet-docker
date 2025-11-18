@@ -11,41 +11,43 @@ FROM ubuntu:22.04 AS builder
 # Avoid interactive prompts during package installation
 ENV DEBIAN_FRONTEND=noninteractive
 
-# Install build dependencies
+# Install build dependencies (following Gramine documentation)
 RUN apt-get update && apt-get install -y --no-install-recommends \
     build-essential \
-    curl \
-    wget \
-    git \
-    ca-certificates \
-    gnupg \
-    python3 \
-    python3-pip \
     autoconf \
     bison \
     gawk \
+    meson \
     nasm \
-    ninja-build \
     pkg-config \
-    libcurl4-openssl-dev \
+    python3 \
+    python3-click \
+    python3-jinja2 \
+    python3-pyelftools \
+    python3-tomli \
+    python3-tomli-w \
+    python3-voluptuous \
+    wget \
+    curl \
+    git \
+    ca-certificates \
+    gnupg \
+    cmake \
     libprotobuf-c-dev \
     protobuf-c-compiler \
     protobuf-compiler \
     python3-cryptography \
+    python3-pip \
     python3-protobuf \
+    libcurl4-openssl-dev \
     && rm -rf /var/lib/apt/lists/*
 
-# Install Meson build system
-RUN pip3 install meson tomli tomli-w
-
-# Install Intel SGX development dependencies
-RUN curl -fsSL https://download.01.org/intel-sgx/sgx_repo/ubuntu/intel-sgx-deb.key | gpg --dearmor -o /usr/share/keyrings/intel-sgx.gpg \
-    && echo "deb [arch=amd64 signed-by=/usr/share/keyrings/intel-sgx.gpg] https://download.01.org/intel-sgx/sgx_repo/ubuntu jammy main" > /etc/apt/sources.list.d/intel-sgx.list \
+# Install Intel SGX development dependencies (following Gramine documentation)
+RUN curl -fsSLo /etc/apt/keyrings/intel-sgx-deb.asc https://download.01.org/intel-sgx/sgx_repo/ubuntu/intel-sgx-deb.key \
+    && echo "deb [arch=amd64 signed-by=/etc/apt/keyrings/intel-sgx-deb.asc] https://download.01.org/intel-sgx/sgx_repo/ubuntu jammy main" > /etc/apt/sources.list.d/intel-sgx.list \
     && apt-get update \
     && apt-get install -y --no-install-recommends \
-    libsgx-dcap-ql-dev \
     libsgx-dcap-quote-verify-dev \
-    libsgx-dcap-default-qpl-dev \
     libsgx-urts \
     libsgx-enclave-common-dev \
     && rm -rf /var/lib/apt/lists/*
@@ -84,22 +86,28 @@ LABEL org.opencontainers.image.licenses=LGPL-3.0
 # Avoid interactive prompts during package installation
 ENV DEBIAN_FRONTEND=noninteractive
 
-# Install runtime dependencies only (no build tools)
+# Install runtime dependencies (including Python deps for Gramine CLI tools)
 RUN apt-get update && apt-get install -y --no-install-recommends \
     ca-certificates \
     curl \
     wget \
     gnupg \
     python3 \
+    python3-click \
+    python3-jinja2 \
+    python3-pyelftools \
+    python3-tomli \
+    python3-tomli-w \
+    python3-voluptuous \
     python3-pip \
     python3-venv \
     libcurl4 \
     libprotobuf-c1 \
     && rm -rf /var/lib/apt/lists/*
 
-# Install Intel SGX runtime dependencies and aesmd service
-RUN curl -fsSL https://download.01.org/intel-sgx/sgx_repo/ubuntu/intel-sgx-deb.key | gpg --dearmor -o /usr/share/keyrings/intel-sgx.gpg \
-    && echo "deb [arch=amd64 signed-by=/usr/share/keyrings/intel-sgx.gpg] https://download.01.org/intel-sgx/sgx_repo/ubuntu jammy main" > /etc/apt/sources.list.d/intel-sgx.list \
+# Install Intel SGX runtime dependencies and aesmd service (following Gramine documentation)
+RUN curl -fsSLo /etc/apt/keyrings/intel-sgx-deb.asc https://download.01.org/intel-sgx/sgx_repo/ubuntu/intel-sgx-deb.key \
+    && echo "deb [arch=amd64 signed-by=/etc/apt/keyrings/intel-sgx-deb.asc] https://download.01.org/intel-sgx/sgx_repo/ubuntu jammy main" > /etc/apt/sources.list.d/intel-sgx.list \
     && apt-get update \
     && apt-get install -y --no-install-recommends \
     libsgx-dcap-ql \
@@ -107,9 +115,10 @@ RUN curl -fsSL https://download.01.org/intel-sgx/sgx_repo/ubuntu/intel-sgx-deb.k
     libsgx-dcap-default-qpl \
     libsgx-urts \
     libsgx-enclave-common \
-    libsgx-aesm-service \
+    sgx-aesm-service \
     libsgx-aesm-launch-plugin \
     libsgx-aesm-pce-plugin \
+    libsgx-aesm-epid-plugin \
     libsgx-aesm-quote-ex-plugin \
     libsgx-aesm-ecdsa-plugin \
     && rm -rf /var/lib/apt/lists/*
@@ -120,11 +129,59 @@ COPY --from=builder /opt/gramine-install/ /
 # Update dynamic linker cache to recognize Gramine libraries
 RUN ldconfig
 
-# Install Node.js (latest LTS version)
-ARG NODE_MAJOR=20
+# Install Node.js 24 (BEFORE PCCS to avoid conflicts)
+ARG NODE_MAJOR=24
 RUN curl -fsSL https://deb.nodesource.com/setup_${NODE_MAJOR}.x | bash - \
     && apt-get install -y nodejs \
     && rm -rf /var/lib/apt/lists/*
+
+# Install PCCS by extracting .deb to temp directory (avoids systemd postinst issues)
+RUN curl -fsSLo /etc/apt/keyrings/intel-sgx-deb.asc https://download.01.org/intel-sgx/sgx_repo/ubuntu/intel-sgx-deb.key \
+    && echo "deb [arch=amd64 signed-by=/etc/apt/keyrings/intel-sgx-deb.asc] https://download.01.org/intel-sgx/sgx_repo/ubuntu jammy main" > /etc/apt/sources.list.d/intel-sgx.list \
+    && apt-get update \
+    && cd /tmp \
+    && apt-get download sgx-dcap-pccs \
+    && dpkg-deb -x sgx-dcap-pccs_*.deb /tmp/pccs-extract \
+    && mkdir -p /opt/intel \
+    && cp -r /tmp/pccs-extract/opt/intel/sgx-dcap-pccs /opt/intel/ \
+    && rm -rf /tmp/pccs-extract /tmp/sgx-dcap-pccs_*.deb \
+    && apt-get clean \
+    && rm -rf /var/lib/apt/lists/*
+
+# Install PCCS dependencies (node_modules)
+RUN cd /opt/intel/sgx-dcap-pccs \
+    && if [ -f package-lock.json ]; then \
+        npm ci --omit=dev; \
+    else \
+        npm install --omit=dev; \
+    fi \
+    && npm cache clean --force
+
+# Configure PCCS with default settings (API key should be provided via environment variable)
+RUN mkdir -p /opt/intel/sgx-dcap-pccs/config \
+    && echo '{\n\
+  "HTTPS_PORT": 8081,\n\
+  "HTTP_PORT": 8080,\n\
+  "uri": "https://api.trustedservices.intel.com/sgx/certification/v4/",\n\
+  "ApiKey": "",\n\
+  "proxy": "",\n\
+  "RefreshSchedule": "0 0 1 * * *",\n\
+  "UserTokenHash": "",\n\
+  "AdminTokenHash": "",\n\
+  "CachingFillMode": "LAZY",\n\
+  "LogLevel": "info"\n\
+}' > /opt/intel/sgx-dcap-pccs/config/default.json
+
+# Configure QPL to use local PCCS
+RUN echo '{\n\
+  "pccs_url": "https://localhost:8081/sgx/certification/v4/",\n\
+  "use_secure_cert": false,\n\
+  "collateral_service": "https://api.trustedservices.intel.com/sgx/certification/v4/",\n\
+  "retry_times": 6,\n\
+  "retry_delay": 10,\n\
+  "local_pck_url": "",\n\
+  "pck_cache_expire_hours": 168\n\
+}' > /etc/sgx_default_qcnl.conf
 
 # Install common Web3 libraries (optional, can be disabled with build arg)
 ARG INSTALL_WEB3_TOOLS=true
@@ -141,15 +198,15 @@ RUN chmod +x /usr/local/bin/entrypoint.sh
 
 # Set environment variables
 ENV PATH="/usr/local/bin:${PATH}"
-ENV LD_LIBRARY_PATH="/usr/local/lib:${LD_LIBRARY_PATH}"
+ENV LD_LIBRARY_PATH="/usr/local/lib"
 ENV GRAMINE_DIRECT_MODE=0
 ENV GRAMINE_SGX_MODE=1
 
 # Set working directory
 WORKDIR /app
 
-# Expose common Web3 ports
-EXPOSE 8545 8546 30303
+# Expose common Web3 ports and PCCS ports
+EXPOSE 8545 8546 30303 8080 8081
 
 # Health check to verify aesmd is running
 HEALTHCHECK --interval=30s --timeout=10s --start-period=5s --retries=3 \
