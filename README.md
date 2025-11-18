@@ -278,7 +278,6 @@ This project uses the LGPL-3.0 license, consistent with the Gramine project.
 ## Contact
 
 - GitHub: [@mccoysc](https://github.com/mccoysc)
-- Email: hbzgzr@gmail.com
 
 ---
 
