@@ -277,7 +277,6 @@ GitHub Actions 会自动生成以下标签：
 ## 联系方式
 
 - GitHub: [@mccoysc](https://github.com/mccoysc)
-- Email: hbzgzr@gmail.com
 
 ---
 
