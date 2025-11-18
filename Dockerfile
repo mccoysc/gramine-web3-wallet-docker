@@ -12,12 +12,13 @@ FROM ubuntu:22.04 AS builder
 ENV DEBIAN_FRONTEND=noninteractive
 
 # Install build dependencies
-RUN apt-get update && apt-get install -y \
+RUN apt-get update && apt-get install -y --no-install-recommends \
     build-essential \
     curl \
     wget \
     git \
     ca-certificates \
+    gnupg \
     python3 \
     python3-pip \
     autoconf \
@@ -38,10 +39,10 @@ RUN apt-get update && apt-get install -y \
 RUN pip3 install meson tomli tomli-w
 
 # Install Intel SGX development dependencies
-RUN curl -fsSL https://download.01.org/intel-sgx/sgx_repo/ubuntu/intel-sgx-deb.key | apt-key add - \
-    && echo "deb [arch=amd64] https://download.01.org/intel-sgx/sgx_repo/ubuntu jammy main" > /etc/apt/sources.list.d/intel-sgx.list \
+RUN curl -fsSL https://download.01.org/intel-sgx/sgx_repo/ubuntu/intel-sgx-deb.key | gpg --dearmor -o /usr/share/keyrings/intel-sgx.gpg \
+    && echo "deb [arch=amd64 signed-by=/usr/share/keyrings/intel-sgx.gpg] https://download.01.org/intel-sgx/sgx_repo/ubuntu jammy main" > /etc/apt/sources.list.d/intel-sgx.list \
     && apt-get update \
-    && apt-get install -y \
+    && apt-get install -y --no-install-recommends \
     libsgx-dcap-ql-dev \
     libsgx-dcap-quote-verify-dev \
     libsgx-dcap-default-qpl-dev \
@@ -84,10 +85,11 @@ LABEL org.opencontainers.image.licenses=LGPL-3.0
 ENV DEBIAN_FRONTEND=noninteractive
 
 # Install runtime dependencies only (no build tools)
-RUN apt-get update && apt-get install -y \
+RUN apt-get update && apt-get install -y --no-install-recommends \
     ca-certificates \
     curl \
     wget \
+    gnupg \
     python3 \
     python3-pip \
     python3-venv \
@@ -96,10 +98,10 @@ RUN apt-get update && apt-get install -y \
     && rm -rf /var/lib/apt/lists/*
 
 # Install Intel SGX runtime dependencies and aesmd service
-RUN curl -fsSL https://download.01.org/intel-sgx/sgx_repo/ubuntu/intel-sgx-deb.key | apt-key add - \
-    && echo "deb [arch=amd64] https://download.01.org/intel-sgx/sgx_repo/ubuntu jammy main" > /etc/apt/sources.list.d/intel-sgx.list \
+RUN curl -fsSL https://download.01.org/intel-sgx/sgx_repo/ubuntu/intel-sgx-deb.key | gpg --dearmor -o /usr/share/keyrings/intel-sgx.gpg \
+    && echo "deb [arch=amd64 signed-by=/usr/share/keyrings/intel-sgx.gpg] https://download.01.org/intel-sgx/sgx_repo/ubuntu jammy main" > /etc/apt/sources.list.d/intel-sgx.list \
     && apt-get update \
-    && apt-get install -y \
+    && apt-get install -y --no-install-recommends \
     libsgx-dcap-ql \
     libsgx-dcap-quote-verify \
     libsgx-dcap-default-qpl \
@@ -109,7 +111,7 @@ RUN curl -fsSL https://download.01.org/intel-sgx/sgx_repo/ubuntu/intel-sgx-deb.k
     libsgx-aesm-launch-plugin \
     libsgx-aesm-pce-plugin \
     libsgx-aesm-quote-ex-plugin \
-    libsgx-aesm-dcap-plugin \
+    libsgx-aesm-ecdsa-plugin \
     && rm -rf /var/lib/apt/lists/*
 
 # Copy installed Gramine from builder stage
