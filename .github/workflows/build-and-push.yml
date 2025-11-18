@@ -7,33 +7,257 @@ on:
       - master
     tags:
       - 'v*'
-    paths:
-      - 'Dockerfile'
-      - '.github/workflows/**'
-      - 'scripts/**'
-      - 'docker-compose.yml'
   pull_request:
     branches:
       - main
       - master
-    paths:
-      - 'Dockerfile'
-      - '.github/workflows/**'
-      - 'scripts/**'
-      - 'docker-compose.yml'
   workflow_dispatch:
     inputs:
-      gramine_ref:
-        description: 'Gramine repository ref (branch/tag/commit)'
+      force_rebuild:
+        description: 'Force rebuild all components'
         required: false
-        default: 'master'
+        type: boolean
+        default: false
 
 env:
   REGISTRY: ghcr.io
   IMAGE_NAME: ${{ github.repository }}
 
 jobs:
+  check-versions:
+    runs-on: ubuntu-latest
+    outputs:
+      gramine_current: ${{ steps.check.outputs.gramine_current }}
+      gramine_latest: ${{ steps.check.outputs.gramine_latest }}
+      openssl_current: ${{ steps.check.outputs.openssl_current }}
+      openssl_latest: ${{ steps.check.outputs.openssl_latest }}
+      nodejs_current: ${{ steps.check.outputs.nodejs_current }}
+      nodejs_latest: ${{ steps.check.outputs.nodejs_latest }}
+      needs_gramine_rebuild: ${{ steps.check.outputs.needs_gramine_rebuild }}
+      needs_openssl_rebuild: ${{ steps.check.outputs.needs_openssl_rebuild }}
+      needs_nodejs_rebuild: ${{ steps.check.outputs.needs_nodejs_rebuild }}
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Install jq
+        run: sudo apt-get update && sudo apt-get install -y jq
+
+      - name: Check component versions
+        id: check
+        run: |
+          # Read current versions from versions.json
+          GRAMINE_CURRENT=$(jq -r '.gramine.ref // ""' prebuilt/versions.json)
+          OPENSSL_CURRENT=$(jq -r '.openssl.version // ""' prebuilt/versions.json)
+          NODEJS_CURRENT=$(jq -r '.nodejs.version // ""' prebuilt/versions.json)
+          
+          # Get latest Gramine commit SHA from mccoysc/gramine
+          GRAMINE_LATEST=$(git ls-remote https://github.com/mccoysc/gramine.git HEAD | awk '{print $1}')
+          
+          # OpenSSL version is pinned for now
+          OPENSSL_LATEST="3.0.15"
+          
+          # Get latest stable Node.js version (excluding pre-releases)
+          NODEJS_LATEST=$(curl -s https://nodejs.org/dist/index.json | jq -r '[.[] | select(.version | test("^v[0-9]+\\.[0-9]+\\.[0-9]+$"))] | .[0].version')
+          
+          # Determine if rebuilds are needed
+          FORCE_REBUILD="${{ github.event.inputs.force_rebuild }}"
+          
+          if [ "$FORCE_REBUILD" = "true" ] || [ -z "$GRAMINE_CURRENT" ] || [ "$GRAMINE_CURRENT" != "$GRAMINE_LATEST" ]; then
+            NEEDS_GRAMINE_REBUILD="true"
+          else
+            NEEDS_GRAMINE_REBUILD="false"
+          fi
+          
+          if [ "$FORCE_REBUILD" = "true" ] || [ -z "$OPENSSL_CURRENT" ] || [ "$OPENSSL_CURRENT" != "$OPENSSL_LATEST" ]; then
+            NEEDS_OPENSSL_REBUILD="true"
+          else
+            NEEDS_OPENSSL_REBUILD="false"
+          fi
+          
+          # If OpenSSL changed, Node.js must be rebuilt (dependency)
+          if [ "$FORCE_REBUILD" = "true" ] || [ -z "$NODEJS_CURRENT" ] || [ "$NODEJS_CURRENT" != "$NODEJS_LATEST" ] || [ "$NEEDS_OPENSSL_REBUILD" = "true" ]; then
+            NEEDS_NODEJS_REBUILD="true"
+          else
+            NEEDS_NODEJS_REBUILD="false"
+          fi
+          
+          # Output results
+          echo "gramine_current=$GRAMINE_CURRENT" >> $GITHUB_OUTPUT
+          echo "gramine_latest=$GRAMINE_LATEST" >> $GITHUB_OUTPUT
+          echo "openssl_current=$OPENSSL_CURRENT" >> $GITHUB_OUTPUT
+          echo "openssl_latest=$OPENSSL_LATEST" >> $GITHUB_OUTPUT
+          echo "nodejs_current=$NODEJS_CURRENT" >> $GITHUB_OUTPUT
+          echo "nodejs_latest=$NODEJS_LATEST" >> $GITHUB_OUTPUT
+          echo "needs_gramine_rebuild=$NEEDS_GRAMINE_REBUILD" >> $GITHUB_OUTPUT
+          echo "needs_openssl_rebuild=$NEEDS_OPENSSL_REBUILD" >> $GITHUB_OUTPUT
+          echo "needs_nodejs_rebuild=$NEEDS_NODEJS_REBUILD" >> $GITHUB_OUTPUT
+          
+          # Print summary
+          echo "## Version Check Summary" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "| Component | Current | Latest | Rebuild Needed |" >> $GITHUB_STEP_SUMMARY
+          echo "|-----------|---------|--------|----------------|" >> $GITHUB_STEP_SUMMARY
+          echo "| Gramine | ${GRAMINE_CURRENT:0:8} | ${GRAMINE_LATEST:0:8} | $NEEDS_GRAMINE_REBUILD |" >> $GITHUB_STEP_SUMMARY
+          echo "| OpenSSL | $OPENSSL_CURRENT | $OPENSSL_LATEST | $NEEDS_OPENSSL_REBUILD |" >> $GITHUB_STEP_SUMMARY
+          echo "| Node.js | $NODEJS_CURRENT | $NODEJS_LATEST | $NEEDS_NODEJS_REBUILD |" >> $GITHUB_STEP_SUMMARY
+
+  update-prebuilt:
+    needs: check-versions
+    if: needs.check-versions.outputs.needs_gramine_rebuild == 'true' || needs.check-versions.outputs.needs_openssl_rebuild == 'true' || needs.check-versions.outputs.needs_nodejs_rebuild == 'true'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          lfs: true
+
+      - name: Set up Git LFS
+        run: |
+          git lfs install
+          git lfs track "prebuilt/**/*.tar.zst"
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Install dependencies
+        run: sudo apt-get update && sudo apt-get install -y jq zstd
+
+      - name: Build and extract Gramine
+        if: needs.check-versions.outputs.needs_gramine_rebuild == 'true'
+        run: |
+          GRAMINE_REF="${{ needs.check-versions.outputs.gramine_latest }}"
+          echo "Building Gramine from commit $GRAMINE_REF"
+          
+          # Build Gramine
+          docker build -t cache:gramine \
+            --target gramine-builder \
+            --build-arg GRAMINE_REF="$GRAMINE_REF" \
+            .
+          
+          # Extract binaries
+          CID=$(docker create cache:gramine)
+          mkdir -p /tmp/gramine-extract
+          docker cp $CID:/opt/gramine-install /tmp/gramine-extract/
+          docker rm -f $CID
+          
+          # Compress to tarball
+          ARTIFACT_NAME="gramine-${GRAMINE_REF:0:8}.tar.zst"
+          tar -C /tmp/gramine-extract -I 'zstd -19' -cf "prebuilt/linux-x86_64/gramine/$ARTIFACT_NAME" opt/gramine-install
+          
+          # Calculate checksum
+          sha256sum "prebuilt/linux-x86_64/gramine/$ARTIFACT_NAME" > "prebuilt/linux-x86_64/gramine/$ARTIFACT_NAME.sha256"
+          
+          # Update versions.json
+          bash scripts/update-versions.sh --component gramine --version "$GRAMINE_REF" --artifact "$ARTIFACT_NAME"
+          
+          # Cleanup
+          rm -rf /tmp/gramine-extract
+
+      - name: Build and extract OpenSSL
+        if: needs.check-versions.outputs.needs_openssl_rebuild == 'true'
+        run: |
+          OPENSSL_VERSION="${{ needs.check-versions.outputs.openssl_latest }}"
+          echo "Building OpenSSL version $OPENSSL_VERSION"
+          
+          # Build OpenSSL
+          docker build -t cache:openssl \
+            --target openssl-builder \
+            --build-arg OPENSSL_VERSION="$OPENSSL_VERSION" \
+            .
+          
+          # Extract binaries
+          CID=$(docker create cache:openssl)
+          mkdir -p /tmp/openssl-extract
+          docker cp $CID:/opt/node-ssl /tmp/openssl-extract/
+          docker rm -f $CID
+          
+          # Compress to tarball
+          ARTIFACT_NAME="openssl-${OPENSSL_VERSION}.tar.zst"
+          tar -C /tmp/openssl-extract -I 'zstd -19' -cf "prebuilt/linux-x86_64/openssl/$ARTIFACT_NAME" opt/node-ssl
+          
+          # Calculate checksum
+          sha256sum "prebuilt/linux-x86_64/openssl/$ARTIFACT_NAME" > "prebuilt/linux-x86_64/openssl/$ARTIFACT_NAME.sha256"
+          
+          # Update versions.json
+          bash scripts/update-versions.sh --component openssl --version "$OPENSSL_VERSION" --artifact "$ARTIFACT_NAME"
+          
+          # Cleanup
+          rm -rf /tmp/openssl-extract
+
+      - name: Build and extract Node.js
+        if: needs.check-versions.outputs.needs_nodejs_rebuild == 'true'
+        run: |
+          NODEJS_VERSION="${{ needs.check-versions.outputs.nodejs_latest }}"
+          OPENSSL_VERSION="${{ needs.check-versions.outputs.openssl_latest }}"
+          echo "Building Node.js version $NODEJS_VERSION"
+          
+          # Determine OpenSSL source (use prebuilt if available, otherwise builder)
+          if [ "${{ needs.check-versions.outputs.needs_openssl_rebuild }}" = "true" ]; then
+            OPENSSL_SRC="openssl-builder"
+          else
+            OPENSSL_SRC="openssl-prebuilt"
+            OPENSSL_TARBALL="prebuilt/linux-x86_64/openssl/openssl-${OPENSSL_VERSION}.tar.zst"
+          fi
+          
+          # Build Node.js
+          docker build -t cache:nodejs \
+            --target nodejs-builder \
+            --build-arg NODE_VERSION="$NODEJS_VERSION" \
+            --build-arg OPENSSL_VERSION="$OPENSSL_VERSION" \
+            --build-arg OPENSSL_SRC="$OPENSSL_SRC" \
+            ${OPENSSL_TARBALL:+--build-arg OPENSSL_TARBALL="$OPENSSL_TARBALL"} \
+            .
+          
+          # Extract binaries
+          CID=$(docker create cache:nodejs)
+          mkdir -p /tmp/nodejs-extract
+          docker cp $CID:/opt/nodejs /tmp/nodejs-extract/
+          docker rm -f $CID
+          
+          # Compress to tarball
+          ARTIFACT_NAME="node-${NODEJS_VERSION}.tar.zst"
+          tar -C /tmp/nodejs-extract -I 'zstd -19' -cf "prebuilt/linux-x86_64/nodejs/$ARTIFACT_NAME" opt/nodejs
+          
+          # Calculate checksum
+          sha256sum "prebuilt/linux-x86_64/nodejs/$ARTIFACT_NAME" > "prebuilt/linux-x86_64/nodejs/$ARTIFACT_NAME.sha256"
+          
+          # Update versions.json
+          bash scripts/update-versions.sh --component nodejs --version "$NODEJS_VERSION" --artifact "$ARTIFACT_NAME"
+          
+          # Cleanup
+          rm -rf /tmp/nodejs-extract
+
+      - name: Commit and push prebuilt binaries
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          
+          # Add all prebuilt files
+          git add prebuilt/
+          git add .gitattributes
+          
+          # Create commit message
+          COMMIT_MSG="chore(prebuilt): update binaries"
+          if [ "${{ needs.check-versions.outputs.needs_gramine_rebuild }}" = "true" ]; then
+            COMMIT_MSG="$COMMIT_MSG gramine=${{ needs.check-versions.outputs.gramine_latest }}"
+          fi
+          if [ "${{ needs.check-versions.outputs.needs_openssl_rebuild }}" = "true" ]; then
+            COMMIT_MSG="$COMMIT_MSG openssl=${{ needs.check-versions.outputs.openssl_latest }}"
+          fi
+          if [ "${{ needs.check-versions.outputs.needs_nodejs_rebuild }}" = "true" ]; then
+            COMMIT_MSG="$COMMIT_MSG nodejs=${{ needs.check-versions.outputs.nodejs_latest }}"
+          fi
+          
+          # Commit and push
+          git commit -m "$COMMIT_MSG" || echo "No changes to commit"
+          git push
+
   build-and-push:
+    needs: [check-versions, update-prebuilt]
+    if: always() && (needs.check-versions.result == 'success')
     runs-on: ubuntu-latest
     permissions:
       contents: read
@@ -42,6 +266,13 @@ jobs:
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
+        with:
+          lfs: true
+          ref: ${{ github.ref }}
+
+      - name: Pull latest changes (if prebuilt was updated)
+        if: needs.update-prebuilt.result == 'success'
+        run: git pull origin ${{ github.ref_name }}
 
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3
@@ -68,6 +299,46 @@ jobs:
             type=sha,prefix=sha-
             type=raw,value=latest,enable={{is_default_branch}}
 
+      - name: Prepare build arguments
+        id: build-args
+        run: |
+          # Read versions from versions.json
+          GRAMINE_REF=$(jq -r '.gramine.ref // "master"' prebuilt/versions.json)
+          GRAMINE_ARTIFACT=$(jq -r '.gramine.artifact // ""' prebuilt/versions.json)
+          OPENSSL_VERSION=$(jq -r '.openssl.version // "3.0.15"' prebuilt/versions.json)
+          OPENSSL_ARTIFACT=$(jq -r '.openssl.artifact // ""' prebuilt/versions.json)
+          NODEJS_VERSION=$(jq -r '.nodejs.version // ""' prebuilt/versions.json)
+          NODEJS_ARTIFACT=$(jq -r '.nodejs.artifact // ""' prebuilt/versions.json)
+          
+          # Determine source stages (prebuilt if artifacts exist, otherwise builder)
+          if [ -f "prebuilt/linux-x86_64/gramine/$GRAMINE_ARTIFACT" ]; then
+            GRAMINE_SRC="gramine-prebuilt"
+            echo "GRAMINE_TARBALL=prebuilt/linux-x86_64/gramine/$GRAMINE_ARTIFACT" >> $GITHUB_OUTPUT
+          else
+            GRAMINE_SRC="gramine-builder"
+          fi
+          
+          if [ -f "prebuilt/linux-x86_64/openssl/$OPENSSL_ARTIFACT" ]; then
+            OPENSSL_SRC="openssl-prebuilt"
+            echo "OPENSSL_TARBALL=prebuilt/linux-x86_64/openssl/$OPENSSL_ARTIFACT" >> $GITHUB_OUTPUT
+          else
+            OPENSSL_SRC="openssl-builder"
+          fi
+          
+          if [ -f "prebuilt/linux-x86_64/nodejs/$NODEJS_ARTIFACT" ]; then
+            NODEJS_SRC="nodejs-prebuilt"
+            echo "NODEJS_TARBALL=prebuilt/linux-x86_64/nodejs/$NODEJS_ARTIFACT" >> $GITHUB_OUTPUT
+          else
+            NODEJS_SRC="nodejs-builder"
+          fi
+          
+          echo "GRAMINE_SRC=$GRAMINE_SRC" >> $GITHUB_OUTPUT
+          echo "OPENSSL_SRC=$OPENSSL_SRC" >> $GITHUB_OUTPUT
+          echo "NODEJS_SRC=$NODEJS_SRC" >> $GITHUB_OUTPUT
+          echo "GRAMINE_REF=$GRAMINE_REF" >> $GITHUB_OUTPUT
+          echo "OPENSSL_VERSION=$OPENSSL_VERSION" >> $GITHUB_OUTPUT
+          echo "NODEJS_VERSION=$NODEJS_VERSION" >> $GITHUB_OUTPUT
+
       - name: Build and push Docker image
         uses: docker/build-push-action@v5
         with:
@@ -79,7 +350,15 @@ jobs:
           cache-from: type=gha
           cache-to: type=gha,mode=max
           build-args: |
-            GRAMINE_REF=${{ github.event.inputs.gramine_ref || 'master' }}
+            GRAMINE_REF=${{ steps.build-args.outputs.GRAMINE_REF }}
+            OPENSSL_VERSION=${{ steps.build-args.outputs.OPENSSL_VERSION }}
+            NODE_VERSION=${{ steps.build-args.outputs.NODEJS_VERSION }}
+            GRAMINE_SRC=${{ steps.build-args.outputs.GRAMINE_SRC }}
+            OPENSSL_SRC=${{ steps.build-args.outputs.OPENSSL_SRC }}
+            NODEJS_SRC=${{ steps.build-args.outputs.NODEJS_SRC }}
+            GRAMINE_TARBALL=${{ steps.build-args.outputs.GRAMINE_TARBALL }}
+            OPENSSL_TARBALL=${{ steps.build-args.outputs.OPENSSL_TARBALL }}
+            NODEJS_TARBALL=${{ steps.build-args.outputs.NODEJS_TARBALL }}
 
       - name: Generate build summary
         if: github.event_name != 'pull_request'
@@ -93,6 +372,11 @@ jobs:
           echo '```' >> $GITHUB_STEP_SUMMARY
           echo "${{ steps.meta.outputs.tags }}" >> $GITHUB_STEP_SUMMARY
           echo '```' >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "### Component Versions" >> $GITHUB_STEP_SUMMARY
+          echo "- **Gramine**: ${{ steps.build-args.outputs.GRAMINE_REF }}" >> $GITHUB_STEP_SUMMARY
+          echo "- **OpenSSL**: ${{ steps.build-args.outputs.OPENSSL_VERSION }}" >> $GITHUB_STEP_SUMMARY
+          echo "- **Node.js**: ${{ steps.build-args.outputs.NODEJS_VERSION }}" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
           echo "### Pull Command" >> $GITHUB_STEP_SUMMARY
           echo '```bash' >> $GITHUB_STEP_SUMMARY

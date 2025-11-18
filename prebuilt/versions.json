@@ -1,0 +1,21 @@
+{
+  "arch": "linux-x86_64",
+  "gramine": {
+    "ref": "",
+    "source": "mccoysc/gramine",
+    "artifact": "",
+    "built_at": ""
+  },
+  "openssl": {
+    "version": "",
+    "artifact": "",
+    "built_at": ""
+  },
+  "nodejs": {
+    "version": "",
+    "artifact": "",
+    "openssl_version": "",
+    "shared_openssl": true,
+    "built_at": ""
+  }
+}

@@ -1,0 +1,2 @@
+prebuilt/*.tar.zst filter=lfs diff=lfs merge=lfs -text
+prebuilt/**/*.tar.zst filter=lfs diff=lfs merge=lfs -text
