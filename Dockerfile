@@ -130,6 +130,16 @@ COPY --from=builder /opt/gramine-install/ /
 # Update dynamic linker cache to recognize Gramine libraries
 RUN ldconfig
 
+# Install gramine-manifest wrapper to auto-inject RA-TLS library into LD_PRELOAD
+# The wrapper renames the original gramine-manifest to gramine-manifest.real
+# and installs a Python wrapper that post-processes generated manifests
+COPY scripts/gramine-manifest-wrapper.py /usr/local/bin/gramine-manifest-wrapper.py
+RUN chmod +x /usr/local/bin/gramine-manifest-wrapper.py && \
+    if [ -f /usr/local/bin/gramine-manifest ]; then \
+        mv /usr/local/bin/gramine-manifest /usr/local/bin/gramine-manifest.real && \
+        ln -s /usr/local/bin/gramine-manifest-wrapper.py /usr/local/bin/gramine-manifest; \
+    fi
+
 # Install Node.js 24 (BEFORE PCCS to avoid conflicts)
 ARG NODE_MAJOR=24
 RUN curl -fsSL https://deb.nodesource.com/setup_${NODE_MAJOR}.x | bash - \
