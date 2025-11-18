@@ -158,20 +158,11 @@ RUN cd /opt/intel/sgx-dcap-pccs \
     fi \
     && npm cache clean --force
 
-# Configure PCCS with default settings (API key should be provided via environment variable)
-RUN mkdir -p /opt/intel/sgx-dcap-pccs/config \
-    && echo '{\n\
-  "HTTPS_PORT": 8081,\n\
-  "HTTP_PORT": 8080,\n\
-  "uri": "https://api.trustedservices.intel.com/sgx/certification/v4/",\n\
-  "ApiKey": "",\n\
-  "proxy": "",\n\
-  "RefreshSchedule": "0 0 1 * * *",\n\
-  "UserTokenHash": "",\n\
-  "AdminTokenHash": "",\n\
-  "CachingFillMode": "LAZY",\n\
-  "LogLevel": "info"\n\
-}' > /opt/intel/sgx-dcap-pccs/config/default.json
+# Copy PCCS default configuration with SQLite support
+COPY config/pccs-default.json /opt/intel/sgx-dcap-pccs/config/default.json
+
+# Create PCCS data directory for SQLite database
+RUN mkdir -p /opt/intel/sgx-dcap-pccs/data
 
 # Configure QPL to use local PCCS
 RUN echo '{\n\
