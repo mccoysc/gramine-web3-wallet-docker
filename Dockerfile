@@ -52,9 +52,14 @@ RUN curl -fsSL https://download.01.org/intel-sgx/sgx_repo/ubuntu/intel-sgx-deb.k
 # Set working directory
 WORKDIR /opt
 
+# Accept build argument for Gramine version/branch/commit
+ARG GRAMINE_REF=master
+
 # Clone and build Gramine from the mccoysc/gramine repository
 # This will be the base for running Web3 wallet applications
-RUN git clone https://github.com/mccoysc/gramine.git gramine
+RUN git clone https://github.com/mccoysc/gramine.git gramine && \
+    cd gramine && \
+    git checkout "$GRAMINE_REF"
 
 WORKDIR /opt/gramine
 
