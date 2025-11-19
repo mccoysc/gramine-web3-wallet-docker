@@ -37,6 +37,7 @@ jobs:
       needs_openssl: ${{ steps.check.outputs.needs_openssl }}
       needs_node: ${{ steps.check.outputs.needs_node }}
       needs_image: ${{ steps.check.outputs.needs_image }}
+      dockerfile_changed: ${{ steps.check.outputs.dockerfile_changed }}
       gramine_sha: ${{ steps.check.outputs.gramine_sha }}
       gramine_sha_short: ${{ steps.check.outputs.gramine_sha_short }}
       openssl_version: ${{ steps.check.outputs.openssl_version }}
@@ -203,6 +204,81 @@ jobs:
             
             const forceRebuild = '${{ github.event.inputs.force_rebuild }}' === 'true';
             
+            // 0. Check if Dockerfile or related image files changed
+            console.log('Checking for Dockerfile changes...');
+            let dockerfileChanged = false;
+            
+            if (context.eventName === 'pull_request') {
+              // For PRs, check changed files in the PR
+              const prNumber = context.payload.pull_request.number;
+              const files = await github.paginate(github.rest.pulls.listFiles, {
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                pull_number: prNumber,
+                per_page: 100
+              });
+              
+              // Check if any image-related files changed
+              dockerfileChanged = files.some(f => 
+                f.filename === 'Dockerfile' ||
+                f.filename === '.github/workflows/build-and-push.yml' ||
+                f.filename.startsWith('scripts/') ||
+                f.filename.startsWith('config/')
+              );
+              
+              if (dockerfileChanged) {
+                const changedFiles = files
+                  .filter(f => 
+                    f.filename === 'Dockerfile' ||
+                    f.filename === '.github/workflows/build-and-push.yml' ||
+                    f.filename.startsWith('scripts/') ||
+                    f.filename.startsWith('config/')
+                  )
+                  .map(f => f.filename);
+                console.log(`Dockerfile or related files changed: ${changedFiles.join(', ')}`);
+              }
+            } else if (context.eventName === 'push') {
+              // For push events, compare with previous commit
+              const base = context.payload.before;
+              const head = context.sha;
+              
+              if (base && base !== '0000000000000000000000000000000000000000') {
+                try {
+                  const comparison = await github.rest.repos.compareCommits({
+                    owner: context.repo.owner,
+                    repo: context.repo.repo,
+                    base,
+                    head
+                  });
+                  
+                  dockerfileChanged = (comparison.data.files || []).some(f =>
+                    f.filename === 'Dockerfile' ||
+                    f.filename === '.github/workflows/build-and-push.yml' ||
+                    f.filename.startsWith('scripts/') ||
+                    f.filename.startsWith('config/')
+                  );
+                  
+                  if (dockerfileChanged) {
+                    const changedFiles = (comparison.data.files || [])
+                      .filter(f =>
+                        f.filename === 'Dockerfile' ||
+                        f.filename === '.github/workflows/build-and-push.yml' ||
+                        f.filename.startsWith('scripts/') ||
+                        f.filename.startsWith('config/')
+                      )
+                      .map(f => f.filename);
+                    console.log(`Dockerfile or related files changed: ${changedFiles.join(', ')}`);
+                  }
+                } catch (error) {
+                  console.log(`Warning: Could not compare commits: ${error.message}`);
+                  // On error, assume no Dockerfile changes (schedule events have no before commit)
+                }
+              }
+            }
+            // For schedule and workflow_dispatch events, dockerfileChanged remains false
+            
+            console.log(`Dockerfile changed: ${dockerfileChanged}`);
+            
             // 1. Check Gramine version
             console.log('Checking Gramine version...');
             const { data: gramineRepo } = await github.rest.repos.get({
@@ -266,20 +342,31 @@ jobs:
             console.log(`Node.js: current=${currentNode || 'none'}, latest=${latestNode || 'unknown'}, exists_in_releases=${nodeExists}, needs_build=${needsNode}`);
             
             // 4. Determine if image needs rebuild
-            const needsImage = needsGramine || needsOpenSSL || needsNode;
-            console.log(`Docker image needs rebuild: ${needsImage}`);
+            const needsImage = dockerfileChanged || needsGramine || needsOpenSSL || needsNode;
+            console.log(`Docker image needs rebuild: ${needsImage} (dockerfile_changed=${dockerfileChanged}, deps_changed=${needsGramine || needsOpenSSL || needsNode})`);
             
             // Set outputs
             core.setOutput('needs_gramine', needsGramine.toString());
             core.setOutput('needs_openssl', needsOpenSSL.toString());
             core.setOutput('needs_node', needsNode.toString());
             core.setOutput('needs_image', needsImage.toString());
+            core.setOutput('dockerfile_changed', dockerfileChanged.toString());
             core.setOutput('gramine_sha', latestGramineSha);
             core.setOutput('gramine_sha_short', latestGramineShaShort);
             core.setOutput('openssl_version', latestOpenSSL || '');
             core.setOutput('node_version', latestNode || '');
             
             // Create summary
+            let imageReason = '';
+            if (needsImage) {
+              const reasons = [];
+              if (dockerfileChanged) reasons.push('Dockerfile changed');
+              if (needsGramine) reasons.push('Gramine updated');
+              if (needsOpenSSL) reasons.push('OpenSSL updated');
+              if (needsNode) reasons.push('Node.js updated');
+              imageReason = reasons.join(', ');
+            }
+            
             core.summary
               .addHeading('Version Check Results')
               .addTable([
@@ -287,7 +374,8 @@ jobs:
                 ['Gramine', currentGramineSha.substring(0,8) || 'none', latestGramineShaShort, needsGramine ? '✅' : '⏭️'],
                 ['OpenSSL', currentOpenSSL || 'none', latestOpenSSL || 'unknown', needsOpenSSL ? '✅' : '⏭️'],
                 ['Node.js', currentNode || 'none', latestNode || 'unknown', needsNode ? '✅' : '⏭️'],
-                ['Docker Image', '-', '-', needsImage ? '✅' : '⏭️']
+                ['Dockerfile', '-', '-', dockerfileChanged ? '✅ Changed' : '⏭️'],
+                ['Docker Image', '-', '-', needsImage ? `✅ (${imageReason})` : '⏭️']
               ])
               .write();
 
