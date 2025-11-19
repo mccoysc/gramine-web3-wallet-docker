@@ -18,6 +18,16 @@ on:
         required: false
         type: boolean
         default: false
+      gramine_ref:
+        description: 'Gramine git ref (commit SHA, branch, or tag) to build. Leave empty for auto-detection.'
+        required: false
+        type: string
+        default: ''
+      gramine_owner:
+        description: 'Gramine repository owner. Use "auto" for automatic detection, or specify owner name.'
+        required: false
+        type: string
+        default: 'auto'
   schedule:
     # Run every 6 hours to check for updates
     - cron: '0 */6 * * *'
@@ -282,40 +292,68 @@ jobs:
             
             // 0.5. Determine Gramine repository owner (fork-friendly)
             console.log('Determining Gramine repository owner...');
-            let gramineOwner = context.repo.owner; // Default to current repo owner
+            const inputOwner = '${{ github.event.inputs.gramine_owner }}' || 'auto';
+            let gramineOwner;
             
-            // Check if the current owner has a gramine fork
-            try {
-              await github.rest.repos.get({
-                owner: gramineOwner,
-                repo: 'gramine'
-              });
-              console.log(`Using Gramine repository from ${gramineOwner}/gramine`);
-            } catch (error) {
-              if (error.status === 404) {
-                console.log(`${gramineOwner}/gramine not found, falling back to mccoysc/gramine`);
-                gramineOwner = 'mccoysc';
-              } else {
-                console.log(`Warning: Error checking ${gramineOwner}/gramine: ${error.message}, using mccoysc as fallback`);
-                gramineOwner = 'mccoysc';
+            if (inputOwner !== 'auto' && inputOwner !== '') {
+              // Use explicitly specified owner from workflow input
+              gramineOwner = inputOwner;
+              console.log(`Using Gramine repository owner from input: ${gramineOwner}`);
+            } else {
+              // Auto-detect: try current repo owner first, fallback to mccoysc
+              gramineOwner = context.repo.owner;
+              
+              // Check if the current owner has a gramine fork
+              try {
+                await github.rest.repos.get({
+                  owner: gramineOwner,
+                  repo: 'gramine'
+                });
+                console.log(`Using Gramine repository from ${gramineOwner}/gramine`);
+              } catch (error) {
+                if (error.status === 404) {
+                  console.log(`${gramineOwner}/gramine not found, falling back to mccoysc/gramine`);
+                  gramineOwner = 'mccoysc';
+                } else {
+                  console.log(`Warning: Error checking ${gramineOwner}/gramine: ${error.message}, using mccoysc as fallback`);
+                  gramineOwner = 'mccoysc';
+                }
               }
             }
             
             // 1. Check Gramine version
             console.log('Checking Gramine version...');
-            const { data: gramineRepo } = await github.rest.repos.get({
-              owner: gramineOwner,
-              repo: 'gramine'
-            });
-            const gramineBranch = gramineRepo.default_branch;
+            const inputGramineRef = '${{ github.event.inputs.gramine_ref }}' || '';
+            let latestGramineSha;
+            let latestGramineShaShort;
             
-            const { data: gramineCommit } = await github.rest.repos.getCommit({
-              owner: gramineOwner,
-              repo: 'gramine',
-              ref: gramineBranch
-            });
-            const latestGramineSha = gramineCommit.sha;
-            const latestGramineShaShort = latestGramineSha.substring(0, 8);
+            if (inputGramineRef && inputGramineRef !== '') {
+              // Use explicitly specified gramine ref from workflow input
+              console.log(`Using Gramine ref from input: ${inputGramineRef}`);
+              const { data: gramineCommit } = await github.rest.repos.getCommit({
+                owner: gramineOwner,
+                repo: 'gramine',
+                ref: inputGramineRef
+              });
+              latestGramineSha = gramineCommit.sha;
+              latestGramineShaShort = latestGramineSha.substring(0, 8);
+              console.log(`Resolved to SHA: ${latestGramineSha}`);
+            } else {
+              // Auto-detect latest from default branch
+              const { data: gramineRepo } = await github.rest.repos.get({
+                owner: gramineOwner,
+                repo: 'gramine'
+              });
+              const gramineBranch = gramineRepo.default_branch;
+              
+              const { data: gramineCommit } = await github.rest.repos.getCommit({
+                owner: gramineOwner,
+                repo: 'gramine',
+                ref: gramineBranch
+              });
+              latestGramineSha = gramineCommit.sha;
+              latestGramineShaShort = latestGramineSha.substring(0, 8);
+            }
             
             const currentGramineSha = readVersionFile('prebuilt/gramine/VERSION') || 
                                       readVersionFile('.gramine-version') || '';

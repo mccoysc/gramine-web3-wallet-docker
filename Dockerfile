@@ -85,7 +85,7 @@ RUN if [ "$USE_PREBUILT" = "true" ] && [ -f /tmp/prebuilt/gramine/gramine-instal
 #==============================================================================
 FROM ubuntu:22.04
 
-LABEL org.opencontainers.image.source=https://github.com/mccoysc/gramine-web3-wallet-docker
+# Labels are set by docker/metadata-action in the workflow for fork-friendly builds
 LABEL org.opencontainers.image.description="Gramine-based Web3 Wallet Docker Image with SGX support"
 LABEL org.opencontainers.image.licenses=LGPL-3.0
 
