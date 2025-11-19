@@ -117,23 +117,37 @@ jobs:
             
             async function getLatestNodeLTS() {
               // Fetch Node.js dist index to find latest LTS version
+              // Compatible with Ubuntu 22.04 (GCC 11): max Node.js v22
+              // Node.js v24+ requires GCC 13+ for C++20 constexpr features
+              const maxMajor = 22;
+              
               try {
                 const response = await fetch('https://nodejs.org/dist/index.json');
                 const releases = await response.json();
                 
                 // Filter for LTS releases (have lts field that's not false)
                 // and exclude pre-releases
+                // Apply compatibility cap for GCC 11 (Ubuntu 22.04)
                 const ltsReleases = releases
                   .filter(r => r.lts && !isNodePreRelease(r.version))
                   .map(r => parseNodeTag(r.version))
                   .filter(Boolean)
+                  .filter(v => v.major <= maxMajor) // Compatibility cap for GCC 11
                   .sort((a, b) => {
                     if (a.major !== b.major) return b.major - a.major;
                     if (a.minor !== b.minor) return b.minor - a.minor;
                     return b.patch - a.patch;
                   });
                 
-                return ltsReleases.length ? ltsReleases[0].name : null;
+                if (ltsReleases.length > 0) {
+                  const selected = ltsReleases[0];
+                  console.log(`Selected Node.js LTS ${selected.name} (max major: ${maxMajor} for GCC 11/Ubuntu 22.04)`);
+                  if (releases.some(r => r.lts && parseNodeTag(r.version)?.major > maxMajor)) {
+                    console.log(`Note: Skipped newer LTS versions (v${maxMajor + 1}+) due to GCC/toolchain compatibility`);
+                  }
+                  return selected.name;
+                }
+                return null;
               } catch (error) {
                 console.log('Failed to fetch from nodejs.org/dist/index.json, falling back to GitHub tags');
                 return null;
