@@ -12,6 +12,7 @@ FROM ubuntu:22.04 AS builder
 ENV DEBIAN_FRONTEND=noninteractive
 
 # Build arguments
+ARG GRAMINE_OWNER=mccoysc
 ARG GRAMINE_REF=master
 ARG USE_PREBUILT=false
 
@@ -65,7 +66,7 @@ RUN if [ "$USE_PREBUILT" = "true" ] && [ -f /tmp/prebuilt/gramine/gramine-instal
             libsgx-enclave-common-dev; \
         rm -rf /var/lib/apt/lists/*; \
         cd /opt; \
-        git clone https://github.com/mccoysc/gramine.git gramine; \
+        git clone https://github.com/${GRAMINE_OWNER}/gramine.git gramine; \
         cd gramine; \
         git checkout "$GRAMINE_REF"; \
         meson setup build/ \
