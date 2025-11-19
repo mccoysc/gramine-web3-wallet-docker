@@ -67,20 +67,70 @@ jobs:
               return '';
             }
             
-            // Helper to get latest stable tag (excluding rc/beta/alpha/preview)
-            async function getLatestStableTag(owner, repo, excludePattern = /-(rc|beta|alpha|preview|test)/i) {
-              const { data: tags } = await github.rest.repos.listTags({
-                owner,
-                repo,
+            // OpenSSL version parsing and detection
+            function parseOpenSSLTag(name) {
+              // Matches: openssl-3.0.14 or openssl-1.1.1w
+              const m = name.match(/^openssl-(\d+)\.(\d+)\.(\d+)([a-z])?$/);
+              if (!m) return null;
+              const major = parseInt(m[1], 10);
+              const minor = parseInt(m[2], 10);
+              const patch = parseInt(m[3], 10);
+              const letter = m[4] ? m[4].charCodeAt(0) : 0; // no letter = 0, 'a' > 0
+              return { name, major, minor, patch, letter };
+            }
+            
+            function isOpenSSLPreRelease(name) {
+              return /-(alpha|beta|pre|rc)/i.test(name);
+            }
+            
+            async function getLatestOpenSSL(github) {
+              const tags = await github.paginate(github.rest.repos.listTags, {
+                owner: 'openssl',
+                repo: 'openssl',
                 per_page: 100
               });
-              
-              const stableTags = tags.filter(t => !excludePattern.test(t.name));
-              if (stableTags.length > 0) {
-                return stableTags[0].name;
-              }
-              
-              return null;
+              const candidates = tags
+                .map(t => t.name)
+                .filter(n => !isOpenSSLPreRelease(n))
+                .map(parseOpenSSLTag)
+                .filter(Boolean);
+              if (candidates.length === 0) return null;
+              candidates.sort((a, b) => {
+                if (a.major !== b.major) return b.major - a.major;
+                if (a.minor !== b.minor) return b.minor - a.minor;
+                if (a.patch !== b.patch) return b.patch - a.patch;
+                return b.letter - a.letter;
+              });
+              return candidates[0].name;
+            }
+            
+            // Node.js version parsing and detection
+            function parseNodeTag(name) {
+              const m = name.match(/^v(\d+)\.(\d+)\.(\d+)$/);
+              if (!m) return null;
+              return { name, major: +m[1], minor: +m[2], patch: +m[3] };
+            }
+            
+            function isNodePreRelease(name) {
+              return /-(rc|beta|alpha|nightly)/i.test(name);
+            }
+            
+            async function getLatestNode(github) {
+              const tags = await github.paginate(github.rest.repos.listTags, {
+                owner: 'nodejs',
+                repo: 'node',
+                per_page: 100
+              });
+              const candidates = tags.map(t => t.name)
+                .filter(n => !isNodePreRelease(n))
+                .map(parseNodeTag)
+                .filter(Boolean)
+                .sort((a, b) => {
+                  if (a.major !== b.major) return b.major - a.major;
+                  if (a.minor !== b.minor) return b.minor - a.minor;
+                  return b.patch - a.patch;
+                });
+              return candidates.length ? candidates[0].name : null;
             }
             
             const forceRebuild = '${{ github.event.inputs.force_rebuild }}' === 'true';
@@ -105,23 +155,23 @@ jobs:
                                       readVersionFile('.gramine-version') || '';
             
             const needsGramine = forceRebuild || (latestGramineSha !== currentGramineSha);
-            console.log(`Gramine: current=${currentGramineSha.substring(0,8)}, latest=${latestGramineShaShort}, needs_build=${needsGramine}`);
+            console.log(`Gramine: current=${currentGramineSha.substring(0,8) || 'none'}, latest=${latestGramineShaShort}, needs_build=${needsGramine}`);
             
             // 2. Check OpenSSL version
             console.log('Checking OpenSSL version...');
-            const latestOpenSSL = await getLatestStableTag('openssl', 'openssl');
+            const latestOpenSSL = await getLatestOpenSSL(github);
             const currentOpenSSL = readVersionFile('prebuilt/openssl/VERSION');
             
             const needsOpenSSL = forceRebuild || (latestOpenSSL !== currentOpenSSL);
-            console.log(`OpenSSL: current=${currentOpenSSL || 'none'}, latest=${latestOpenSSL}, needs_build=${needsOpenSSL}`);
+            console.log(`OpenSSL: current=${currentOpenSSL || 'none'}, latest=${latestOpenSSL || 'unknown'}, needs_build=${needsOpenSSL}`);
             
             // 3. Check Node.js version
             console.log('Checking Node.js version...');
-            const latestNode = await getLatestStableTag('nodejs', 'node', /-(rc|beta|alpha|preview|test|nightly)/i);
+            const latestNode = await getLatestNode(github);
             const currentNode = readVersionFile('prebuilt/nodejs/VERSION');
             
             const needsNode = forceRebuild || (latestNode !== currentNode);
-            console.log(`Node.js: current=${currentNode || 'none'}, latest=${latestNode}, needs_build=${needsNode}`);
+            console.log(`Node.js: current=${currentNode || 'none'}, latest=${latestNode || 'unknown'}, needs_build=${needsNode}`);
             
             // 4. Determine if image needs rebuild
             const needsImage = needsGramine || needsOpenSSL || needsNode;
