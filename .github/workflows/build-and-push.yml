@@ -182,6 +182,25 @@ jobs:
               return candidates.length ? candidates[0].name : null;
             }
             
+            // Helper to check if a prebuilt asset exists in GitHub Releases
+            async function releaseAssetExists(tag, assetName) {
+              try {
+                const { data: release } = await github.rest.repos.getReleaseByTag({
+                  owner: context.repo.owner,
+                  repo: context.repo.repo,
+                  tag
+                });
+                const asset = release.assets.find(a => a.name === assetName);
+                return !!asset;
+              } catch (error) {
+                if (error.status === 404) {
+                  return false; // Release or asset not found
+                }
+                console.log(`Warning: Failed to check release ${tag}: ${error.message}`);
+                return false; // On error, assume asset doesn't exist (will trigger rebuild)
+              }
+            }
+            
             const forceRebuild = '${{ github.event.inputs.force_rebuild }}' === 'true';
             
             // 1. Check Gramine version
@@ -203,24 +222,48 @@ jobs:
             const currentGramineSha = readVersionFile('prebuilt/gramine/VERSION') || 
                                       readVersionFile('.gramine-version') || '';
             
-            const needsGramine = forceRebuild || (latestGramineSha !== currentGramineSha);
-            console.log(`Gramine: current=${currentGramineSha.substring(0,8) || 'none'}, latest=${latestGramineShaShort}, needs_build=${needsGramine}`);
+            // Check if prebuilt Gramine exists in Releases
+            const gramineTag = `prebuilt-gramine-${latestGramineShaShort}`;
+            const gramineAsset = `gramine-install-${latestGramineShaShort}.tar.gz`;
+            const gramineExists = await releaseAssetExists(gramineTag, gramineAsset);
+            
+            const needsGramine = forceRebuild || (!gramineExists && latestGramineSha !== currentGramineSha);
+            if (gramineExists) {
+              console.log(`Gramine: prebuilt found in Releases at ${gramineTag}, skipping build`);
+            }
+            console.log(`Gramine: current=${currentGramineSha.substring(0,8) || 'none'}, latest=${latestGramineShaShort}, exists_in_releases=${gramineExists}, needs_build=${needsGramine}`);
             
             // 2. Check OpenSSL version
             console.log('Checking OpenSSL version...');
             const latestOpenSSL = await getLatestOpenSSL(github);
             const currentOpenSSL = readVersionFile('prebuilt/openssl/VERSION');
             
-            const needsOpenSSL = forceRebuild || (latestOpenSSL !== currentOpenSSL);
-            console.log(`OpenSSL: current=${currentOpenSSL || 'none'}, latest=${latestOpenSSL || 'unknown'}, needs_build=${needsOpenSSL}`);
+            // Check if prebuilt OpenSSL exists in Releases
+            const opensslTag = `prebuilt-${latestOpenSSL}`;
+            const opensslAsset = `openssl-install-${latestOpenSSL}.tar.gz`;
+            const opensslExists = await releaseAssetExists(opensslTag, opensslAsset);
+            
+            const needsOpenSSL = forceRebuild || (!opensslExists && latestOpenSSL !== currentOpenSSL);
+            if (opensslExists) {
+              console.log(`OpenSSL: prebuilt found in Releases at ${opensslTag}, skipping build`);
+            }
+            console.log(`OpenSSL: current=${currentOpenSSL || 'none'}, latest=${latestOpenSSL || 'unknown'}, exists_in_releases=${opensslExists}, needs_build=${needsOpenSSL}`);
             
             // 3. Check Node.js version
             console.log('Checking Node.js version...');
             const latestNode = await getLatestNode(github);
             const currentNode = readVersionFile('prebuilt/nodejs/VERSION');
             
-            const needsNode = forceRebuild || (latestNode !== currentNode);
-            console.log(`Node.js: current=${currentNode || 'none'}, latest=${latestNode || 'unknown'}, needs_build=${needsNode}`);
+            // Check if prebuilt Node.js exists in Releases
+            const nodeTag = `prebuilt-${latestNode}`;
+            const nodeAsset = `node-install-${latestNode}.tar.gz`;
+            const nodeExists = await releaseAssetExists(nodeTag, nodeAsset);
+            
+            const needsNode = forceRebuild || (!nodeExists && latestNode !== currentNode);
+            if (nodeExists) {
+              console.log(`Node.js: prebuilt found in Releases at ${nodeTag}, skipping build`);
+            }
+            console.log(`Node.js: current=${currentNode || 'none'}, latest=${latestNode || 'unknown'}, exists_in_releases=${nodeExists}, needs_build=${needsNode}`);
             
             // 4. Determine if image needs rebuild
             const needsImage = needsGramine || needsOpenSSL || needsNode;
