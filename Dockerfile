@@ -143,7 +143,14 @@ RUN if [ "$USE_PREBUILT" = "true" ] && [ -f /tmp/prebuilt/openssl/openssl-instal
         cd /opt; \
         tar -xzf /tmp/prebuilt/openssl/openssl-install.tar.gz; \
         echo "Prebuilt OpenSSL extracted successfully"; \
-        /opt/openssl-install/bin/openssl version; \
+        OPENSSL_PREFIX=/opt/openssl-install; \
+        if [ -d "$OPENSSL_PREFIX/lib64" ]; then \
+            OPENSSL_LIB_DIR="$OPENSSL_PREFIX/lib64"; \
+        else \
+            OPENSSL_LIB_DIR="$OPENSSL_PREFIX/lib"; \
+        fi; \
+        echo "OpenSSL library directory: $OPENSSL_LIB_DIR"; \
+        LD_LIBRARY_PATH="$OPENSSL_LIB_DIR" /opt/openssl-install/bin/openssl version; \
     else \
         echo "Using system OpenSSL"; \
     fi
@@ -220,7 +227,7 @@ RUN chmod +x /usr/local/bin/entrypoint.sh
 
 # Set environment variables
 ENV PATH="/opt/node-install/bin:/opt/openssl-install/bin:/usr/local/bin:${PATH}"
-ENV LD_LIBRARY_PATH="/opt/openssl-install/lib:/usr/local/lib"
+ENV LD_LIBRARY_PATH="/opt/openssl-install/lib64:/opt/openssl-install/lib:/usr/local/lib"
 ENV GRAMINE_DIRECT_MODE=0
 ENV GRAMINE_SGX_MODE=1
 
