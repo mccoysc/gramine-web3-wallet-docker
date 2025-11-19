@@ -483,12 +483,42 @@ jobs:
           cd /opt
           tar -xzf /tmp/openssl-install-*.tar.gz
           echo "OpenSSL extracted"
-          /opt/openssl-install/bin/openssl version || echo "OpenSSL binary check failed"
+          
+          # Detect OpenSSL library directory (lib64 on x86_64, lib on others)
+          OPENSSL_PREFIX=/opt/openssl-install
+          if [ -d "$OPENSSL_PREFIX/lib64" ]; then
+            OPENSSL_LIB_DIR="$OPENSSL_PREFIX/lib64"
+          else
+            OPENSSL_LIB_DIR="$OPENSSL_PREFIX/lib"
+          fi
+          echo "OpenSSL library directory: $OPENSSL_LIB_DIR"
+          
+          # Verify OpenSSL with correct library path
+          LD_LIBRARY_PATH="$OPENSSL_LIB_DIR" /opt/openssl-install/bin/openssl version
+          echo "OpenSSL verification successful"
 
       - name: Download and build Node.js
         run: |
           VERSION="${{ needs.check-versions.outputs.node_version }}"
           echo "Building Node.js ${VERSION}"
+          
+          # Detect OpenSSL library directory (lib64 on x86_64, lib on others)
+          OPENSSL_PREFIX=/opt/openssl-install
+          if [ -d "$OPENSSL_PREFIX/lib64" ]; then
+            OPENSSL_LIB_DIR="$OPENSSL_PREFIX/lib64"
+          else
+            OPENSSL_LIB_DIR="$OPENSSL_PREFIX/lib"
+          fi
+          echo "Using OpenSSL from: $OPENSSL_PREFIX"
+          echo "OpenSSL library directory: $OPENSSL_LIB_DIR"
+          
+          # Set environment variables to ensure Node.js finds our OpenSSL
+          export LD_LIBRARY_PATH="$OPENSSL_LIB_DIR:$LD_LIBRARY_PATH"
+          export LIBRARY_PATH="$OPENSSL_LIB_DIR:$LIBRARY_PATH"
+          export PKG_CONFIG_PATH="$OPENSSL_LIB_DIR/pkgconfig:$PKG_CONFIG_PATH"
+          export CFLAGS="-I$OPENSSL_PREFIX/include $CFLAGS"
+          export CXXFLAGS="-I$OPENSSL_PREFIX/include $CXXFLAGS"
+          export LDFLAGS="-L$OPENSSL_LIB_DIR -Wl,-rpath,$OPENSSL_LIB_DIR $LDFLAGS"
           
           cd /tmp
           git clone --depth 1 --branch ${VERSION} https://github.com/nodejs/node.git
@@ -498,18 +528,25 @@ jobs:
           if [ -d /opt/openssl-install ]; then
             ./configure --prefix=/opt/node-install \
               --shared-openssl \
-              --shared-openssl-includes=/opt/openssl-install/include \
-              --shared-openssl-libpath=/opt/openssl-install/lib
+              --shared-openssl-includes="$OPENSSL_PREFIX/include" \
+              --shared-openssl-libpath="$OPENSSL_LIB_DIR" \
+              --with-intl=full-icu
           else
             ./configure --prefix=/opt/node-install \
-              --shared-openssl
+              --shared-openssl \
+              --with-intl=full-icu
           fi
           
+          # Build with verbose output to see link commands
           make -j$(nproc)
           make install
           
           echo "Node.js built successfully"
           /opt/node-install/bin/node --version
+          
+          # Verify Node.js is linked to our OpenSSL
+          echo "Checking Node.js library dependencies:"
+          ldd /opt/node-install/bin/node | grep -E 'ssl|crypto' || echo "No OpenSSL libraries found in ldd output"
 
       - name: Create tarball
         run: |
