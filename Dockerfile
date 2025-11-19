@@ -4,75 +4,80 @@
 # using Gramine LibOS with Intel SGX support
 
 #==============================================================================
-# Builder Stage: Compile Gramine from source
+# Builder Stage: Compile Gramine from source OR use prebuilt
 #==============================================================================
 FROM ubuntu:22.04 AS builder
 
 # Avoid interactive prompts during package installation
 ENV DEBIAN_FRONTEND=noninteractive
 
-# Install build dependencies (following Gramine documentation)
-RUN apt-get update && apt-get install -y --no-install-recommends \
-    build-essential \
-    autoconf \
-    bison \
-    gawk \
-    meson \
-    nasm \
-    pkg-config \
-    python3 \
-    python3-click \
-    python3-jinja2 \
-    python3-pyelftools \
-    python3-tomli \
-    python3-tomli-w \
-    python3-voluptuous \
-    wget \
-    curl \
-    git \
-    ca-certificates \
-    gnupg \
-    cmake \
-    libprotobuf-c-dev \
-    protobuf-c-compiler \
-    protobuf-compiler \
-    python3-cryptography \
-    python3-pip \
-    python3-protobuf \
-    libcurl4-openssl-dev \
-    && rm -rf /var/lib/apt/lists/*
-
-# Install Intel SGX development dependencies (following Gramine documentation)
-RUN curl -fsSLo /etc/apt/keyrings/intel-sgx-deb.asc https://download.01.org/intel-sgx/sgx_repo/ubuntu/intel-sgx-deb.key \
-    && echo "deb [arch=amd64 signed-by=/etc/apt/keyrings/intel-sgx-deb.asc] https://download.01.org/intel-sgx/sgx_repo/ubuntu jammy main" > /etc/apt/sources.list.d/intel-sgx.list \
-    && apt-get update \
-    && apt-get install -y --no-install-recommends \
-    libsgx-dcap-quote-verify-dev \
-    libsgx-urts \
-    libsgx-enclave-common-dev \
-    && rm -rf /var/lib/apt/lists/*
-
-# Accept build argument for Gramine version/branch/commit
+# Build arguments
 ARG GRAMINE_REF=master
+ARG USE_PREBUILT=false
 
-# Clone Gramine from the mccoysc/gramine repository
-WORKDIR /opt
-RUN git clone https://github.com/mccoysc/gramine.git gramine && \
-    cd gramine && \
-    git checkout "$GRAMINE_REF"
+# Copy prebuilt directory (downloaded by workflow before build)
+COPY prebuilt/ /tmp/prebuilt/
 
-# Build entire Gramine project with SGX and DCAP support
-WORKDIR /opt/gramine
-RUN meson setup build/ \
-    --buildtype=release \
-    -Ddirect=enabled \
-    -Dsgx=enabled \
-    -Ddcap=enabled \
-    -Dtests=disabled \
-    && ninja -C build/
-
-# Install Gramine to a staging directory (DESTDIR)
-RUN DESTDIR=/opt/gramine-install ninja -C build/ install
+# Check if we should use prebuilt Gramine
+RUN if [ "$USE_PREBUILT" = "true" ] && [ -f /tmp/prebuilt/gramine/gramine-install.tar.gz ]; then \
+        echo "Using prebuilt Gramine"; \
+        mkdir -p /opt; \
+        cd /opt; \
+        tar -xzf /tmp/prebuilt/gramine/gramine-install.tar.gz; \
+        echo "Prebuilt Gramine extracted successfully"; \
+    else \
+        echo "Building Gramine from source"; \
+        apt-get update && apt-get install -y --no-install-recommends \
+            build-essential \
+            autoconf \
+            bison \
+            gawk \
+            meson \
+            nasm \
+            pkg-config \
+            python3 \
+            python3-click \
+            python3-jinja2 \
+            python3-pyelftools \
+            python3-tomli \
+            python3-tomli-w \
+            python3-voluptuous \
+            wget \
+            curl \
+            git \
+            ca-certificates \
+            gnupg \
+            cmake \
+            libprotobuf-c-dev \
+            protobuf-c-compiler \
+            protobuf-compiler \
+            python3-cryptography \
+            python3-pip \
+            python3-protobuf \
+            libcurl4-openssl-dev \
+            && rm -rf /var/lib/apt/lists/*; \
+        curl -fsSLo /etc/apt/keyrings/intel-sgx-deb.asc https://download.01.org/intel-sgx/sgx_repo/ubuntu/intel-sgx-deb.key; \
+        echo "deb [arch=amd64 signed-by=/etc/apt/keyrings/intel-sgx-deb.asc] https://download.01.org/intel-sgx/sgx_repo/ubuntu jammy main" > /etc/apt/sources.list.d/intel-sgx.list; \
+        apt-get update; \
+        apt-get install -y --no-install-recommends \
+            libsgx-dcap-quote-verify-dev \
+            libsgx-urts \
+            libsgx-enclave-common-dev; \
+        rm -rf /var/lib/apt/lists/*; \
+        cd /opt; \
+        git clone https://github.com/mccoysc/gramine.git gramine; \
+        cd gramine; \
+        git checkout "$GRAMINE_REF"; \
+        meson setup build/ \
+            --buildtype=release \
+            -Ddirect=enabled \
+            -Dsgx=enabled \
+            -Ddcap=enabled \
+            -Dtests=disabled; \
+        ninja -C build/; \
+        DESTDIR=/opt/gramine-install ninja -C build/ install; \
+        echo "Gramine built from source successfully"; \
+    fi
 
 #==============================================================================
 # Runtime Stage: Clean image with only installed Gramine and runtime dependencies
@@ -130,11 +135,36 @@ COPY --from=builder /opt/gramine-install/ /
 # Update dynamic linker cache to recognize Gramine libraries
 RUN ldconfig
 
-# Install Node.js 24 (BEFORE PCCS to avoid conflicts)
+# Install OpenSSL (prebuilt or system)
+ARG USE_PREBUILT=false
+COPY prebuilt/ /tmp/prebuilt/
+RUN if [ "$USE_PREBUILT" = "true" ] && [ -f /tmp/prebuilt/openssl/openssl-install.tar.gz ]; then \
+        echo "Using prebuilt OpenSSL"; \
+        cd /opt; \
+        tar -xzf /tmp/prebuilt/openssl/openssl-install.tar.gz; \
+        echo "Prebuilt OpenSSL extracted successfully"; \
+        /opt/openssl-install/bin/openssl version; \
+    else \
+        echo "Using system OpenSSL"; \
+    fi
+
+# Install Node.js (prebuilt or from NodeSource)
 ARG NODE_MAJOR=24
-RUN curl -fsSL https://deb.nodesource.com/setup_${NODE_MAJOR}.x | bash - \
-    && apt-get install -y nodejs \
-    && rm -rf /var/lib/apt/lists/*
+RUN if [ "$USE_PREBUILT" = "true" ] && [ -f /tmp/prebuilt/nodejs/node-install.tar.gz ]; then \
+        echo "Using prebuilt Node.js"; \
+        cd /opt; \
+        tar -xzf /tmp/prebuilt/nodejs/node-install.tar.gz; \
+        echo "Prebuilt Node.js extracted successfully"; \
+        /opt/node-install/bin/node --version; \
+        ln -sf /opt/node-install/bin/node /usr/local/bin/node; \
+        ln -sf /opt/node-install/bin/npm /usr/local/bin/npm; \
+        ln -sf /opt/node-install/bin/npx /usr/local/bin/npx; \
+    else \
+        echo "Installing Node.js from NodeSource"; \
+        curl -fsSL https://deb.nodesource.com/setup_${NODE_MAJOR}.x | bash -; \
+        apt-get install -y nodejs; \
+        rm -rf /var/lib/apt/lists/*; \
+    fi
 
 # Install PCCS by extracting .deb to temp directory (avoids systemd postinst issues)
 RUN curl -fsSLo /etc/apt/keyrings/intel-sgx-deb.asc https://download.01.org/intel-sgx/sgx_repo/ubuntu/intel-sgx-deb.key \
@@ -189,8 +219,8 @@ COPY scripts/entrypoint.sh /usr/local/bin/entrypoint.sh
 RUN chmod +x /usr/local/bin/entrypoint.sh
 
 # Set environment variables
-ENV PATH="/usr/local/bin:${PATH}"
-ENV LD_LIBRARY_PATH="/usr/local/lib"
+ENV PATH="/opt/node-install/bin:/opt/openssl-install/bin:/usr/local/bin:${PATH}"
+ENV LD_LIBRARY_PATH="/opt/openssl-install/lib:/usr/local/lib"
 ENV GRAMINE_DIRECT_MODE=0
 ENV GRAMINE_SGX_MODE=1
 

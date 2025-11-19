@@ -43,6 +43,13 @@ dist/
 *.so
 *.a
 
+# Prebuilt binaries (stored in GitHub Releases, not in git)
+prebuilt/**/*.tar.gz
+prebuilt/**/*.tar.gz.sha256
+# But track VERSION files and directory structure
+!prebuilt/**/VERSION
+!prebuilt/**/.gitkeep
+
 # Temporary files
 tmp/
 temp/

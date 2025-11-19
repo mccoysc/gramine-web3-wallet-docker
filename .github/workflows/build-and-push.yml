@@ -7,41 +7,581 @@ on:
       - master
     tags:
       - 'v*'
-    paths:
-      - 'Dockerfile'
-      - '.github/workflows/**'
-      - 'scripts/**'
-      - 'docker-compose.yml'
   pull_request:
     branches:
       - main
       - master
-    paths:
-      - 'Dockerfile'
-      - '.github/workflows/**'
-      - 'scripts/**'
-      - 'docker-compose.yml'
   workflow_dispatch:
     inputs:
-      gramine_ref:
-        description: 'Gramine repository ref (branch/tag/commit)'
+      force_rebuild:
+        description: 'Force rebuild all components'
         required: false
-        default: 'master'
+        type: boolean
+        default: false
+  schedule:
+    # Run every 6 hours to check for updates
+    - cron: '0 */6 * * *'
 
 env:
   REGISTRY: ghcr.io
   IMAGE_NAME: ${{ github.repository }}
 
 jobs:
-  build-and-push:
+  # Job 1: Check versions of all components
+  check-versions:
     runs-on: ubuntu-latest
     permissions:
       contents: read
-      packages: write
-      
+    outputs:
+      needs_gramine: ${{ steps.check.outputs.needs_gramine }}
+      needs_openssl: ${{ steps.check.outputs.needs_openssl }}
+      needs_node: ${{ steps.check.outputs.needs_node }}
+      needs_image: ${{ steps.check.outputs.needs_image }}
+      gramine_sha: ${{ steps.check.outputs.gramine_sha }}
+      gramine_sha_short: ${{ steps.check.outputs.gramine_sha_short }}
+      openssl_version: ${{ steps.check.outputs.openssl_version }}
+      node_version: ${{ steps.check.outputs.node_version }}
+    
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Check component versions
+        id: check
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const fs = require('fs');
+            
+            // Helper to read version file
+            function readVersionFile(filePath) {
+              try {
+                if (fs.existsSync(filePath)) {
+                  return fs.readFileSync(filePath, 'utf8').trim();
+                }
+              } catch (e) {
+                console.log(`Could not read ${filePath}: ${e.message}`);
+              }
+              return '';
+            }
+            
+            // Helper to get latest stable tag (excluding rc/beta/alpha/preview)
+            async function getLatestStableTag(owner, repo, excludePattern = /-(rc|beta|alpha|preview|test)/i) {
+              const { data: tags } = await github.rest.repos.listTags({
+                owner,
+                repo,
+                per_page: 100
+              });
+              
+              const stableTags = tags.filter(t => !excludePattern.test(t.name));
+              if (stableTags.length > 0) {
+                return stableTags[0].name;
+              }
+              
+              return null;
+            }
+            
+            const forceRebuild = '${{ github.event.inputs.force_rebuild }}' === 'true';
+            
+            // 1. Check Gramine version
+            console.log('Checking Gramine version...');
+            const { data: gramineRepo } = await github.rest.repos.get({
+              owner: 'mccoysc',
+              repo: 'gramine'
+            });
+            const gramineBranch = gramineRepo.default_branch;
+            
+            const { data: gramineCommit } = await github.rest.repos.getCommit({
+              owner: 'mccoysc',
+              repo: 'gramine',
+              ref: gramineBranch
+            });
+            const latestGramineSha = gramineCommit.sha;
+            const latestGramineShaShort = latestGramineSha.substring(0, 8);
+            
+            const currentGramineSha = readVersionFile('prebuilt/gramine/VERSION') || 
+                                      readVersionFile('.gramine-version') || '';
+            
+            const needsGramine = forceRebuild || (latestGramineSha !== currentGramineSha);
+            console.log(`Gramine: current=${currentGramineSha.substring(0,8)}, latest=${latestGramineShaShort}, needs_build=${needsGramine}`);
+            
+            // 2. Check OpenSSL version
+            console.log('Checking OpenSSL version...');
+            const latestOpenSSL = await getLatestStableTag('openssl', 'openssl');
+            const currentOpenSSL = readVersionFile('prebuilt/openssl/VERSION');
+            
+            const needsOpenSSL = forceRebuild || (latestOpenSSL !== currentOpenSSL);
+            console.log(`OpenSSL: current=${currentOpenSSL || 'none'}, latest=${latestOpenSSL}, needs_build=${needsOpenSSL}`);
+            
+            // 3. Check Node.js version
+            console.log('Checking Node.js version...');
+            const latestNode = await getLatestStableTag('nodejs', 'node', /-(rc|beta|alpha|preview|test|nightly)/i);
+            const currentNode = readVersionFile('prebuilt/nodejs/VERSION');
+            
+            const needsNode = forceRebuild || (latestNode !== currentNode);
+            console.log(`Node.js: current=${currentNode || 'none'}, latest=${latestNode}, needs_build=${needsNode}`);
+            
+            // 4. Determine if image needs rebuild
+            const needsImage = needsGramine || needsOpenSSL || needsNode;
+            console.log(`Docker image needs rebuild: ${needsImage}`);
+            
+            // Set outputs
+            core.setOutput('needs_gramine', needsGramine.toString());
+            core.setOutput('needs_openssl', needsOpenSSL.toString());
+            core.setOutput('needs_node', needsNode.toString());
+            core.setOutput('needs_image', needsImage.toString());
+            core.setOutput('gramine_sha', latestGramineSha);
+            core.setOutput('gramine_sha_short', latestGramineShaShort);
+            core.setOutput('openssl_version', latestOpenSSL || '');
+            core.setOutput('node_version', latestNode || '');
+            
+            // Create summary
+            core.summary
+              .addHeading('Version Check Results')
+              .addTable([
+                [{data: 'Component', header: true}, {data: 'Current', header: true}, {data: 'Latest', header: true}, {data: 'Needs Build', header: true}],
+                ['Gramine', currentGramineSha.substring(0,8) || 'none', latestGramineShaShort, needsGramine ? '✅' : '⏭️'],
+                ['OpenSSL', currentOpenSSL || 'none', latestOpenSSL || 'unknown', needsOpenSSL ? '✅' : '⏭️'],
+                ['Node.js', currentNode || 'none', latestNode || 'unknown', needsNode ? '✅' : '⏭️'],
+                ['Docker Image', '-', '-', needsImage ? '✅' : '⏭️']
+              ])
+              .write();
+
+  # Job 2: Build and upload OpenSSL to GitHub Releases
+  build-openssl:
+    runs-on: ubuntu-latest
+    needs: check-versions
+    if: needs.check-versions.outputs.needs_openssl == 'true'
+    permissions:
+      contents: write
+    container:
+      image: ubuntu:22.04
+    
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Install build dependencies
+        run: |
+          apt-get update
+          DEBIAN_FRONTEND=noninteractive apt-get install -y \
+            build-essential \
+            wget \
+            ca-certificates \
+            perl \
+            zlib1g-dev
+      
+      - name: Download and build OpenSSL
+        run: |
+          VERSION="${{ needs.check-versions.outputs.openssl_version }}"
+          echo "Building OpenSSL ${VERSION}"
+          
+          cd /tmp
+          wget https://github.com/openssl/openssl/archive/refs/tags/${VERSION}.tar.gz
+          tar xzf ${VERSION}.tar.gz
+          cd openssl-${VERSION#openssl-}
+          
+          ./config --prefix=/opt/openssl-install \
+            --openssldir=/opt/openssl-install/ssl \
+            shared \
+            zlib
+          
+          make -j$(nproc)
+          make install_sw install_ssldirs
+          
+          echo "OpenSSL built successfully"
+          /opt/openssl-install/bin/openssl version
+
+      - name: Create tarball
+        run: |
+          cd /opt
+          tar -czf openssl-install-${{ needs.check-versions.outputs.openssl_version }}.tar.gz openssl-install/
+          ls -lh openssl-install-*.tar.gz
+          sha256sum openssl-install-*.tar.gz > openssl-install-${{ needs.check-versions.outputs.openssl_version }}.tar.gz.sha256
+
+      - name: Upload to GitHub Releases
+        uses: softprops/action-gh-release@v1
+        with:
+          tag_name: prebuilt-${{ needs.check-versions.outputs.openssl_version }}
+          name: OpenSSL ${{ needs.check-versions.outputs.openssl_version }}
+          files: |
+            /opt/openssl-install-${{ needs.check-versions.outputs.openssl_version }}.tar.gz
+            /opt/openssl-install-${{ needs.check-versions.outputs.openssl_version }}.tar.gz.sha256
+          draft: false
+          prerelease: false
+
+      - name: Upload artifact for this workflow run
+        uses: actions/upload-artifact@v4
+        with:
+          name: openssl-build
+          path: /opt/openssl-install-${{ needs.check-versions.outputs.openssl_version }}.tar.gz
+          retention-days: 1
+
+  # Job 3: Build and upload Gramine to GitHub Releases
+  build-gramine:
+    runs-on: ubuntu-latest
+    needs: check-versions
+    if: needs.check-versions.outputs.needs_gramine == 'true'
+    permissions:
+      contents: write
+    container:
+      image: ubuntu:22.04
+    
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Install build dependencies
+        run: |
+          apt-get update
+          DEBIAN_FRONTEND=noninteractive apt-get install -y \
+            build-essential \
+            autoconf \
+            bison \
+            gawk \
+            meson \
+            nasm \
+            pkg-config \
+            python3 \
+            python3-click \
+            python3-jinja2 \
+            python3-pyelftools \
+            python3-tomli \
+            python3-tomli-w \
+            python3-voluptuous \
+            wget \
+            curl \
+            git \
+            ca-certificates \
+            gnupg \
+            cmake \
+            libprotobuf-c-dev \
+            protobuf-c-compiler \
+            protobuf-compiler \
+            python3-cryptography \
+            python3-pip \
+            python3-protobuf \
+            libcurl4-openssl-dev
+
+      - name: Install Intel SGX development dependencies
+        run: |
+          curl -fsSLo /etc/apt/keyrings/intel-sgx-deb.asc https://download.01.org/intel-sgx/sgx_repo/ubuntu/intel-sgx-deb.key
+          echo "deb [arch=amd64 signed-by=/etc/apt/keyrings/intel-sgx-deb.asc] https://download.01.org/intel-sgx/sgx_repo/ubuntu jammy main" > /etc/apt/sources.list.d/intel-sgx.list
+          apt-get update
+          DEBIAN_FRONTEND=noninteractive apt-get install -y \
+            libsgx-dcap-quote-verify-dev \
+            libsgx-urts \
+            libsgx-enclave-common-dev
+
+      - name: Clone and build Gramine
+        run: |
+          SHA="${{ needs.check-versions.outputs.gramine_sha }}"
+          echo "Building Gramine ${SHA}"
+          
+          cd /opt
+          git clone https://github.com/mccoysc/gramine.git gramine
+          cd gramine
+          git checkout "$SHA"
+          
+          meson setup build/ \
+            --buildtype=release \
+            -Ddirect=enabled \
+            -Dsgx=enabled \
+            -Ddcap=enabled \
+            -Dtests=disabled
+          
+          ninja -C build/
+          DESTDIR=/opt/gramine-install ninja -C build/ install
+          
+          echo "Gramine built successfully"
+
+      - name: Create tarball
+        run: |
+          cd /opt
+          tar -czf gramine-install-${{ needs.check-versions.outputs.gramine_sha_short }}.tar.gz gramine-install/
+          ls -lh gramine-install-*.tar.gz
+          sha256sum gramine-install-*.tar.gz > gramine-install-${{ needs.check-versions.outputs.gramine_sha_short }}.tar.gz.sha256
+
+      - name: Upload to GitHub Releases
+        uses: softprops/action-gh-release@v1
+        with:
+          tag_name: prebuilt-gramine-${{ needs.check-versions.outputs.gramine_sha_short }}
+          name: Gramine ${{ needs.check-versions.outputs.gramine_sha_short }}
+          files: |
+            /opt/gramine-install-${{ needs.check-versions.outputs.gramine_sha_short }}.tar.gz
+            /opt/gramine-install-${{ needs.check-versions.outputs.gramine_sha_short }}.tar.gz.sha256
+          draft: false
+          prerelease: false
+
+      - name: Upload artifact for this workflow run
+        uses: actions/upload-artifact@v4
+        with:
+          name: gramine-build
+          path: /opt/gramine-install-${{ needs.check-versions.outputs.gramine_sha_short }}.tar.gz
+          retention-days: 1
+
+  # Job 4: Build and upload Node.js to GitHub Releases
+  build-node:
+    runs-on: ubuntu-latest
+    needs: [check-versions, build-openssl]
+    if: |
+      always() &&
+      needs.check-versions.outputs.needs_node == 'true' &&
+      (needs.build-openssl.result == 'success' || needs.build-openssl.result == 'skipped')
+    permissions:
+      contents: write
+    container:
+      image: ubuntu:22.04
+    
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Install build dependencies
+        run: |
+          apt-get update
+          DEBIAN_FRONTEND=noninteractive apt-get install -y \
+            build-essential \
+            wget \
+            ca-certificates \
+            git \
+            python3 \
+            python3-pip \
+            curl \
+            libssl-dev \
+            zlib1g-dev
+
+      - name: Download OpenSSL from artifact if built in this run
+        if: needs.build-openssl.result == 'success'
+        uses: actions/download-artifact@v4
+        with:
+          name: openssl-build
+          path: /tmp
+
+      - name: Download OpenSSL from GitHub Releases if not built in this run
+        if: needs.build-openssl.result == 'skipped'
+        run: |
+          VERSION="${{ needs.check-versions.outputs.openssl_version }}"
+          echo "Downloading OpenSSL ${VERSION} from GitHub Releases"
+          
+          curl -L \
+            -H "Accept: application/octet-stream" \
+            -H "Authorization: Bearer ${{ github.token }}" \
+            -o /tmp/openssl-install-${VERSION}.tar.gz \
+            "https://api.github.com/repos/${{ github.repository }}/releases/tags/prebuilt-${VERSION}/assets/openssl-install-${VERSION}.tar.gz" || \
+          curl -L \
+            -o /tmp/openssl-install-${VERSION}.tar.gz \
+            "https://github.com/${{ github.repository }}/releases/download/prebuilt-${VERSION}/openssl-install-${VERSION}.tar.gz"
+
+      - name: Extract OpenSSL
+        run: |
+          cd /opt
+          tar -xzf /tmp/openssl-install-*.tar.gz
+          echo "OpenSSL extracted"
+          /opt/openssl-install/bin/openssl version || echo "OpenSSL binary check failed"
+
+      - name: Download and build Node.js
+        run: |
+          VERSION="${{ needs.check-versions.outputs.node_version }}"
+          echo "Building Node.js ${VERSION}"
+          
+          cd /tmp
+          git clone --depth 1 --branch ${VERSION} https://github.com/nodejs/node.git
+          cd node
+          
+          # Configure with dynamic OpenSSL linking
+          if [ -d /opt/openssl-install ]; then
+            ./configure --prefix=/opt/node-install \
+              --shared-openssl \
+              --shared-openssl-includes=/opt/openssl-install/include \
+              --shared-openssl-libpath=/opt/openssl-install/lib
+          else
+            ./configure --prefix=/opt/node-install \
+              --shared-openssl
+          fi
+          
+          make -j$(nproc)
+          make install
+          
+          echo "Node.js built successfully"
+          /opt/node-install/bin/node --version
+
+      - name: Create tarball
+        run: |
+          cd /opt
+          tar -czf node-install-${{ needs.check-versions.outputs.node_version }}.tar.gz node-install/
+          ls -lh node-install-*.tar.gz
+          sha256sum node-install-*.tar.gz > node-install-${{ needs.check-versions.outputs.node_version }}.tar.gz.sha256
+
+      - name: Upload to GitHub Releases
+        uses: softprops/action-gh-release@v1
+        with:
+          tag_name: prebuilt-${{ needs.check-versions.outputs.node_version }}
+          name: Node.js ${{ needs.check-versions.outputs.node_version }}
+          files: |
+            /opt/node-install-${{ needs.check-versions.outputs.node_version }}.tar.gz
+            /opt/node-install-${{ needs.check-versions.outputs.node_version }}.tar.gz.sha256
+          draft: false
+          prerelease: false
+
+      - name: Upload artifact for this workflow run
+        uses: actions/upload-artifact@v4
+        with:
+          name: node-build
+          path: /opt/node-install-${{ needs.check-versions.outputs.node_version }}.tar.gz
+          retention-days: 1
+
+  # Job 5: Update VERSION files in repository
+  update-versions:
+    runs-on: ubuntu-latest
+    needs: [check-versions, build-gramine, build-openssl, build-node]
+    if: |
+      always() &&
+      github.event_name != 'pull_request' &&
+      (github.ref == 'refs/heads/main' || github.ref == 'refs/heads/master') &&
+      (needs.build-gramine.result == 'success' || needs.build-openssl.result == 'success' || needs.build-node.result == 'success')
+    permissions:
+      contents: write
+    concurrency:
+      group: update-versions-${{ github.ref }}
+      cancel-in-progress: false
+    
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Update VERSION files
+        uses: actions/github-script@v7
+        env:
+          GRAMINE_SHA: ${{ needs.check-versions.outputs.gramine_sha }}
+          OPENSSL_VERSION: ${{ needs.check-versions.outputs.openssl_version }}
+          NODE_VERSION: ${{ needs.check-versions.outputs.node_version }}
+          GRAMINE_BUILT: ${{ needs.build-gramine.result == 'success' }}
+          OPENSSL_BUILT: ${{ needs.build-openssl.result == 'success' }}
+          NODE_BUILT: ${{ needs.build-node.result == 'success' }}
+        with:
+          script: |
+            const owner = context.repo.owner;
+            const repo = context.repo.repo;
+            const branch = context.ref.replace('refs/heads/', '');
+            
+            console.log('Updating VERSION files...');
+            
+            // Helper to update file via GitHub API
+            async function updateFile(filePath, content, message) {
+              const contentB64 = Buffer.from(content).toString('base64');
+              
+              let fileSha;
+              try {
+                const { data } = await github.rest.repos.getContent({
+                  owner,
+                  repo,
+                  path: filePath,
+                  ref: branch
+                });
+                if (!Array.isArray(data)) {
+                  fileSha = data.sha;
+                }
+              } catch (e) {
+                if (e.status !== 404) throw e;
+              }
+              
+              await github.rest.repos.createOrUpdateFileContents({
+                owner,
+                repo,
+                path: filePath,
+                message,
+                content: contentB64,
+                sha: fileSha,
+                branch
+              });
+              
+              console.log(`Updated ${filePath}`);
+            }
+            
+            // Update version files for successfully built components
+            if (process.env.GRAMINE_BUILT === 'true') {
+              await updateFile(
+                'prebuilt/gramine/VERSION',
+                process.env.GRAMINE_SHA + '\n',
+                `Update Gramine prebuilt to ${process.env.GRAMINE_SHA.substring(0,8)}`
+              );
+              await updateFile(
+                '.gramine-version',
+                process.env.GRAMINE_SHA + '\n',
+                `Update Gramine version to ${process.env.GRAMINE_SHA.substring(0,8)}`
+              );
+            }
+            
+            if (process.env.OPENSSL_BUILT === 'true') {
+              await updateFile(
+                'prebuilt/openssl/VERSION',
+                process.env.OPENSSL_VERSION + '\n',
+                `Update OpenSSL prebuilt to ${process.env.OPENSSL_VERSION}`
+              );
+            }
+            
+            if (process.env.NODE_BUILT === 'true') {
+              await updateFile(
+                'prebuilt/nodejs/VERSION',
+                process.env.NODE_VERSION + '\n',
+                `Update Node.js prebuilt to ${process.env.NODE_VERSION}`
+              );
+            }
+            
+            console.log('VERSION files updated successfully');
+
+  # Job 6: Build and push Docker image
+  build-image:
+    runs-on: ubuntu-latest
+    needs: [check-versions, build-gramine, build-openssl, build-node]
+    if: |
+      always() &&
+      needs.check-versions.outputs.needs_image == 'true' &&
+      (needs.build-gramine.result == 'success' || needs.build-gramine.result == 'skipped') &&
+      (needs.build-openssl.result == 'success' || needs.build-openssl.result == 'skipped') &&
+      (needs.build-node.result == 'success' || needs.build-node.result == 'skipped')
+    permissions:
+      contents: read
+      packages: write
+    
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Download prebuilt binaries from GitHub Releases
+        run: |
+          mkdir -p prebuilt/gramine prebuilt/openssl prebuilt/nodejs
+          
+          # Download Gramine
+          GRAMINE_SHA_SHORT="${{ needs.check-versions.outputs.gramine_sha_short }}"
+          echo "Downloading Gramine ${GRAMINE_SHA_SHORT}"
+          curl -L \
+            -o prebuilt/gramine/gramine-install.tar.gz \
+            "https://github.com/${{ github.repository }}/releases/download/prebuilt-gramine-${GRAMINE_SHA_SHORT}/gramine-install-${GRAMINE_SHA_SHORT}.tar.gz" || \
+          echo "Gramine download failed, will compile from source"
+          
+          # Download OpenSSL
+          OPENSSL_VERSION="${{ needs.check-versions.outputs.openssl_version }}"
+          echo "Downloading OpenSSL ${OPENSSL_VERSION}"
+          curl -L \
+            -o prebuilt/openssl/openssl-install.tar.gz \
+            "https://github.com/${{ github.repository }}/releases/download/prebuilt-${OPENSSL_VERSION}/openssl-install-${OPENSSL_VERSION}.tar.gz" || \
+          echo "OpenSSL download failed, will use system OpenSSL"
+          
+          # Download Node.js
+          NODE_VERSION="${{ needs.check-versions.outputs.node_version }}"
+          echo "Downloading Node.js ${NODE_VERSION}"
+          curl -L \
+            -o prebuilt/nodejs/node-install.tar.gz \
+            "https://github.com/${{ github.repository }}/releases/download/prebuilt-${NODE_VERSION}/node-install-${NODE_VERSION}.tar.gz" || \
+          echo "Node.js download failed, will install from NodeSource"
+          
+          ls -lR prebuilt/
 
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3
@@ -79,10 +619,10 @@ jobs:
           cache-from: type=gha
           cache-to: type=gha,mode=max
           build-args: |
-            GRAMINE_REF=${{ github.event.inputs.gramine_ref || 'master' }}
+            GRAMINE_REF=${{ needs.check-versions.outputs.gramine_sha }}
+            USE_PREBUILT=true
 
       - name: Generate build summary
-        if: github.event_name != 'pull_request'
         run: |
           echo "## Docker Image Build Summary" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
@@ -93,6 +633,11 @@ jobs:
           echo '```' >> $GITHUB_STEP_SUMMARY
           echo "${{ steps.meta.outputs.tags }}" >> $GITHUB_STEP_SUMMARY
           echo '```' >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "### Component Versions" >> $GITHUB_STEP_SUMMARY
+          echo "- **Gramine**: ${{ needs.check-versions.outputs.gramine_sha }}" >> $GITHUB_STEP_SUMMARY
+          echo "- **OpenSSL**: ${{ needs.check-versions.outputs.openssl_version }}" >> $GITHUB_STEP_SUMMARY
+          echo "- **Node.js**: ${{ needs.check-versions.outputs.node_version }}" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
           echo "### Pull Command" >> $GITHUB_STEP_SUMMARY
           echo '```bash' >> $GITHUB_STEP_SUMMARY
