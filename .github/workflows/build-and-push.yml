@@ -1273,18 +1273,18 @@ jobs:
               
               # Create SSL certificates
               cat > ssl/ca_config.conf <<'EOF'
-[req]
-distinguished_name = req_distinguished_name
-prompt = no
-
-[req_distinguished_name]
-C = US
-ST = Test
-L = Test
-O = Test
-OU = Test
-CN = localhost
-EOF
+              [req]
+              distinguished_name = req_distinguished_name
+              prompt = no
+              
+              [req_distinguished_name]
+              C = US
+              ST = Test
+              L = Test
+              O = Test
+              OU = Test
+              CN = localhost
+              EOF
               
               openssl genrsa -out ssl/ca.key 2048
               openssl req -x509 -new -nodes -key ssl/ca.key -sha256 -days 1024 -out ssl/ca.crt -config ssl/ca_config.conf
@@ -1295,50 +1295,50 @@ EOF
               echo ""
               echo "=== Creating RA-TLS server manifest with EDMM and DCAP ==="
               cat > server.manifest.template <<'EOF'
-libos.entrypoint = "/usr/bin/python3"
-loader.entrypoint = "file:{{ gramine.libos }}"
-loader.env.LD_LIBRARY_PATH = "/lib:{{ arch_libdir }}:/usr{{ arch_libdir }}:/usr/local/lib"
-loader.insecure__use_cmdline_argv = true
-
-sys.enable_sigterm_injection = true
-
-fs.mounts = [
-  { path = "/lib", uri = "file:{{ gramine.runtimedir() }}" },
-  { path = "{{ arch_libdir }}", uri = "file:{{ arch_libdir }}" },
-  { path = "/usr{{ arch_libdir }}", uri = "file:/usr{{ arch_libdir }}" },
-  { path = "/usr/local/lib", uri = "file:/usr/local/lib" },
-  { path = "/usr/bin/python3", uri = "file:/usr/bin/python3" },
-  { path = "/etc", uri = "file:/etc" },
-  { path = "/tmp", uri = "file:/tmp" },
-]
-
-sgx.debug = true
-sgx.edmm_enable = true
-sgx.remote_attestation = "dcap"
-sgx.enclave_size = "512M"
-sgx.max_threads = 4
-
-sgx.trusted_files = [
-  "file:{{ gramine.libos }}",
-  "file:{{ gramine.runtimedir() }}/",
-  "file:{{ arch_libdir }}/",
-  "file:/usr{{ arch_libdir }}/",
-  "file:/usr/local/lib/",
-  "file:/usr/bin/python3",
-]
-
-sgx.allowed_files = [
-  "file:/etc/nsswitch.conf",
-  "file:/etc/ethers",
-  "file:/etc/hosts",
-  "file:/etc/group",
-  "file:/etc/passwd",
-  "file:/etc/gai.conf",
-  "file:/etc/ssl/certs/",
-  "file:/etc/sgx_default_qcnl.conf",
-  "file:/tmp/",
-]
-EOF
+              libos.entrypoint = "/usr/bin/python3"
+              loader.entrypoint = "file:{{ gramine.libos }}"
+              loader.env.LD_LIBRARY_PATH = "/lib:{{ arch_libdir }}:/usr{{ arch_libdir }}:/usr/local/lib"
+              loader.insecure__use_cmdline_argv = true
+              
+              sys.enable_sigterm_injection = true
+              
+              fs.mounts = [
+                { path = "/lib", uri = "file:{{ gramine.runtimedir() }}" },
+                { path = "{{ arch_libdir }}", uri = "file:{{ arch_libdir }}" },
+                { path = "/usr{{ arch_libdir }}", uri = "file:/usr{{ arch_libdir }}" },
+                { path = "/usr/local/lib", uri = "file:/usr/local/lib" },
+                { path = "/usr/bin/python3", uri = "file:/usr/bin/python3" },
+                { path = "/etc", uri = "file:/etc" },
+                { path = "/tmp", uri = "file:/tmp" },
+              ]
+              
+              sgx.debug = true
+              sgx.edmm_enable = true
+              sgx.remote_attestation = "dcap"
+              sgx.enclave_size = "512M"
+              sgx.max_threads = 4
+              
+              sgx.trusted_files = [
+                "file:{{ gramine.libos }}",
+                "file:{{ gramine.runtimedir() }}/",
+                "file:{{ arch_libdir }}/",
+                "file:/usr{{ arch_libdir }}/",
+                "file:/usr/local/lib/",
+                "file:/usr/bin/python3",
+              ]
+              
+              sgx.allowed_files = [
+                "file:/etc/nsswitch.conf",
+                "file:/etc/ethers",
+                "file:/etc/hosts",
+                "file:/etc/group",
+                "file:/etc/passwd",
+                "file:/etc/gai.conf",
+                "file:/etc/ssl/certs/",
+                "file:/etc/sgx_default_qcnl.conf",
+                "file:/tmp/",
+              ]
+              EOF
               
               echo ""
               echo "=== Generating and signing manifest ==="
@@ -1363,11 +1363,11 @@ EOF
               echo ""
               echo "=== Testing simple SGX enclave execution ==="
               cat > test.py <<'EOF'
-import sys
-print("Hello from SGX enclave with EDMM and DCAP enabled!")
-print("Python version:", sys.version)
-sys.exit(0)
-EOF
+              import sys
+              print("Hello from SGX enclave with EDMM and DCAP enabled!")
+              print("Python version:", sys.version)
+              sys.exit(0)
+              EOF
               
               export RA_TLS_ALLOW_DEBUG_ENCLAVE_INSECURE=1
               export RA_TLS_ALLOW_OUTDATED_TCB_INSECURE=1
