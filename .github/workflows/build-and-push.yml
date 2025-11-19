@@ -115,7 +115,41 @@ jobs:
               return /-(rc|beta|alpha|nightly)/i.test(name);
             }
             
+            async function getLatestNodeLTS() {
+              // Fetch Node.js dist index to find latest LTS version
+              try {
+                const response = await fetch('https://nodejs.org/dist/index.json');
+                const releases = await response.json();
+                
+                // Filter for LTS releases (have lts field that's not false)
+                // and exclude pre-releases
+                const ltsReleases = releases
+                  .filter(r => r.lts && !isNodePreRelease(r.version))
+                  .map(r => parseNodeTag(r.version))
+                  .filter(Boolean)
+                  .sort((a, b) => {
+                    if (a.major !== b.major) return b.major - a.major;
+                    if (a.minor !== b.minor) return b.minor - a.minor;
+                    return b.patch - a.patch;
+                  });
+                
+                return ltsReleases.length ? ltsReleases[0].name : null;
+              } catch (error) {
+                console.log('Failed to fetch from nodejs.org/dist/index.json, falling back to GitHub tags');
+                return null;
+              }
+            }
+            
             async function getLatestNode(github) {
+              // Try to get latest LTS from nodejs.org first
+              const ltsVersion = await getLatestNodeLTS();
+              if (ltsVersion) {
+                console.log(`Found latest LTS Node.js version: ${ltsVersion}`);
+                return ltsVersion;
+              }
+              
+              // Fallback to GitHub tags, filtering for v22.x (current LTS major)
+              console.log('Falling back to GitHub tags for Node.js version detection');
               const tags = await github.paginate(github.rest.repos.listTags, {
                 owner: 'nodejs',
                 repo: 'node',
@@ -125,6 +159,7 @@ jobs:
                 .filter(n => !isNodePreRelease(n))
                 .map(parseNodeTag)
                 .filter(Boolean)
+                .filter(v => v.major === 22) // Filter for v22.x LTS
                 .sort((a, b) => {
                   if (a.major !== b.major) return b.major - a.major;
                   if (a.minor !== b.minor) return b.minor - a.minor;
