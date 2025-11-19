@@ -8,7 +8,7 @@ This repository is dedicated to building and publishing Docker images for Web3 w
 
 - ✅ Built from [mccoysc/gramine](https://github.com/mccoysc/gramine) with DCAP mode enabled
 - ✅ Intel SGX Trusted Execution Environment support
-- ✅ Pre-installed Node.js (v22.x LTS), OpenSSL (3.6.0), and common Web3 development tools
+- ✅ Pre-installed Node.js (latest LTS ≤v22.x, currently v22.21.1), OpenSSL (latest stable, currently 3.6.0), and common Web3 development tools
 - ✅ Intelligent build system with GitHub Releases caching to avoid unnecessary recompilation
 - ✅ Automatic version detection for Gramine, OpenSSL, and Node.js
 - ✅ Multi-job workflow architecture for efficient resource utilization
@@ -167,13 +167,13 @@ gramine-web3-wallet-docker/
 │   └── pccs-default.json          # PCCS default configuration
 ├── scripts/
 │   └── entrypoint.sh              # Container startup script
-├── prebuilt/                       # Prebuilt binaries metadata
+├── prebuilt/                       # Prebuilt binaries metadata (created by workflow)
 │   ├── gramine/
-│   │   └── VERSION                # Current Gramine SHA
+│   │   └── VERSION                # Current Gramine SHA (maintained by update-versions job)
 │   ├── openssl/
-│   │   └── VERSION                # Current OpenSSL version
+│   │   └── VERSION                # Current OpenSSL version (maintained by update-versions job)
 │   └── nodejs/
-│       └── VERSION                # Current Node.js version
+│       └── VERSION                # Current Node.js version (maintained by update-versions job)
 ├── Dockerfile                      # Docker image definition
 ├── docker-compose.yml             # Docker Compose configuration
 ├── .gramine-version               # Record current Gramine version (legacy)
@@ -238,21 +238,23 @@ The image includes the following pre-installed tools:
 - **Gramine LibOS**: Built from mccoysc/gramine with DCAP mode enabled
   - Latest version automatically detected and compiled
   - Installed to `/opt/gramine-install`
-- **OpenSSL**: v3.6.0 (latest stable)
-  - Compiled from source with optimizations
-  - Installed to `/opt/openssl-install`
+- **OpenSSL**: Latest stable (currently 3.6.0)
+  - Prebuilt: Compiled from source with optimizations
+  - Fallback: Uses system OpenSSL from Ubuntu 22.04
+  - Installed to `/opt/openssl-install` (prebuilt path)
   - Library path: `/opt/openssl-install/lib64` (x86_64)
-- **Node.js**: v22.x LTS (Jod)
-  - Compiled with custom OpenSSL 3.6.0
+- **Node.js**: Latest LTS capped at v22.x for GCC 11 compatibility (currently v22.21.1)
+  - Prebuilt: Compiled with custom OpenSSL 3.6.0
+  - Fallback: Installed from NodeSource repository (v22.x)
   - Compatible with Ubuntu 22.04 GCC 11
-  - Installed to `/opt/node-install`
-  - Note: v24+ LTS requires GCC 13+ and is not used
+  - Installed to `/opt/node-install` (prebuilt path)
+  - Note: v24+ LTS requires GCC 13+ and is excluded by compatibility cap
 - **Python**: 3.10.x
 - **SGX Services**:
   - aesmd (SGX Architectural Enclave Service Manager)
   - PCCS (Provisioning Certificate Caching Service)
   - QPL (Quote Provider Library)
-- **Web3 Tools**:
+- **Web3 Tools** (installed globally via npm, controlled by `INSTALL_WEB3_TOOLS=true` build arg):
   - web3.js
   - ethers.js
   - Hardhat
@@ -325,9 +327,10 @@ If GitHub Actions build fails:
 5. For compilation failures, check GCC version compatibility
 
 Common issues:
-- **OpenSSL download fails**: Check if Release `prebuilt-openssl-{VERSION}` exists with asset `openssl-install-openssl-{VERSION}.tar.gz`
+- **OpenSSL download fails**: Check if Release `prebuilt-openssl-{VERSION}` exists with asset `openssl-install-openssl-{VERSION}.tar.gz` (e.g., `prebuilt-openssl-3.6.0` with `openssl-install-openssl-3.6.0.tar.gz`)
 - **Node.js compilation fails**: Verify OpenSSL was built successfully and is available
 - **Gramine compilation fails**: Check if mccoysc/gramine repository is accessible
+- **VERSION files missing**: These are created by the update-versions job after the first successful run on main branch
 
 ### Image Pull Failure
 

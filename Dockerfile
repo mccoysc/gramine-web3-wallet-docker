@@ -156,7 +156,7 @@ RUN if [ "$USE_PREBUILT" = "true" ] && [ -f /tmp/prebuilt/openssl/openssl-instal
     fi
 
 # Install Node.js (prebuilt or from NodeSource)
-ARG NODE_MAJOR=24
+ARG NODE_MAJOR=22
 RUN if [ "$USE_PREBUILT" = "true" ] && [ -f /tmp/prebuilt/nodejs/node-install.tar.gz ]; then \
         echo "Using prebuilt Node.js"; \
         cd /opt; \

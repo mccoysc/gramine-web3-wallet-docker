@@ -8,7 +8,7 @@
 
 - ✅ 基于 [mccoysc/gramine](https://github.com/mccoysc/gramine) 构建，启用 DCAP 模式
 - ✅ 支持 Intel SGX 可信执行环境
-- ✅ 预装 Node.js (v22.x LTS)、OpenSSL (3.6.0) 和常用 Web3 开发工具
+- ✅ 预装 Node.js (最新 LTS ≤v22.x，当前 v22.21.1)、OpenSSL (最新稳定版，当前 3.6.0) 和常用 Web3 开发工具
 - ✅ 智能构建系统，通过 GitHub Releases 缓存避免不必要的重新编译
 - ✅ 自动检测 Gramine、OpenSSL 和 Node.js 的最新版本
 - ✅ 多任务工作流架构，高效利用资源
@@ -167,13 +167,13 @@ gramine-web3-wallet-docker/
 │   └── pccs-default.json          # PCCS 默认配置
 ├── scripts/
 │   └── entrypoint.sh              # 容器启动脚本
-├── prebuilt/                       # 预编译二进制文件元数据
+├── prebuilt/                       # 预编译二进制文件元数据（由工作流创建）
 │   ├── gramine/
-│   │   └── VERSION                # 当前 Gramine SHA
+│   │   └── VERSION                # 当前 Gramine SHA（由 update-versions 任务维护）
 │   ├── openssl/
-│   │   └── VERSION                # 当前 OpenSSL 版本
+│   │   └── VERSION                # 当前 OpenSSL 版本（由 update-versions 任务维护）
 │   └── nodejs/
-│       └── VERSION                # 当前 Node.js 版本
+│       └── VERSION                # 当前 Node.js 版本（由 update-versions 任务维护）
 ├── Dockerfile                      # Docker 镜像定义
 ├── docker-compose.yml             # Docker Compose 配置
 ├── .gramine-version               # 记录当前使用的 Gramine 版本（旧版）
@@ -238,21 +238,23 @@ PCCS_API_KEY=your-api-key-here
 - **Gramine LibOS**: 从 mccoysc/gramine 构建，启用 DCAP 模式
   - 自动检测并编译最新版本
   - 安装路径：`/opt/gramine-install`
-- **OpenSSL**: v3.6.0（最新稳定版）
-  - 从源码编译，带优化
-  - 安装路径：`/opt/openssl-install`
+- **OpenSSL**: 最新稳定版（当前 3.6.0）
+  - 预编译：从源码编译，带优化
+  - 回退：使用 Ubuntu 22.04 系统 OpenSSL
+  - 安装路径：`/opt/openssl-install`（预编译路径）
   - 库路径：`/opt/openssl-install/lib64`（x86_64）
-- **Node.js**: v22.x LTS (Jod)
-  - 使用自定义 OpenSSL 3.6.0 编译
+- **Node.js**: 最新 LTS，限制为 v22.x 以兼容 GCC 11（当前 v22.21.1）
+  - 预编译：使用自定义 OpenSSL 3.6.0 编译
+  - 回退：从 NodeSource 仓库安装（v22.x）
   - 兼容 Ubuntu 22.04 GCC 11
-  - 安装路径：`/opt/node-install`
-  - 注意：v24+ LTS 需要 GCC 13+，因此不使用
+  - 安装路径：`/opt/node-install`（预编译路径）
+  - 注意：v24+ LTS 需要 GCC 13+，因此被兼容性限制排除
 - **Python**: 3.10.x
 - **SGX 服务**:
   - aesmd (SGX Architectural Enclave Service Manager)
   - PCCS (Provisioning Certificate Caching Service)
   - QPL (Quote Provider Library)
-- **Web3 工具**:
+- **Web3 工具**（通过 npm 全局安装，由 `INSTALL_WEB3_TOOLS=true` 构建参数控制）:
   - web3.js
   - ethers.js
   - Hardhat
@@ -325,9 +327,10 @@ GitHub Actions 会自动生成以下标签：
 5. 对于编译失败，检查 GCC 版本兼容性
 
 常见问题：
-- **OpenSSL 下载失败**: 检查 Release `prebuilt-openssl-{VERSION}` 是否存在，资源名称为 `openssl-install-openssl-{VERSION}.tar.gz`
+- **OpenSSL 下载失败**: 检查 Release `prebuilt-openssl-{VERSION}` 是否存在，资源名称为 `openssl-install-openssl-{VERSION}.tar.gz`（例如：`prebuilt-openssl-3.6.0` 和 `openssl-install-openssl-3.6.0.tar.gz`）
 - **Node.js 编译失败**: 确认 OpenSSL 已成功构建并可用
 - **Gramine 编译失败**: 检查 mccoysc/gramine 仓库是否可访问
+- **VERSION 文件缺失**: 这些文件由 update-versions 任务在首次成功运行 main 分支后创建
 
 ### 镜像拉取失败
 
