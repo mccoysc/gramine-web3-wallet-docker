@@ -1272,7 +1272,7 @@ jobs:
               cd ratls-test
               
               # Create SSL certificates
-              cat > ssl/ca_config.conf <<EOF
+              cat > ssl/ca_config.conf <<'EOF'
 [req]
 distinguished_name = req_distinguished_name
 prompt = no
@@ -1294,7 +1294,7 @@ EOF
               
               echo ""
               echo "=== Creating RA-TLS server manifest with EDMM and DCAP ==="
-              cat > server.manifest.template <<EOF
+              cat > server.manifest.template <<'EOF'
 libos.entrypoint = "/usr/bin/python3"
 loader.entrypoint = "file:{{ gramine.libos }}"
 loader.env.LD_LIBRARY_PATH = "/lib:{{ arch_libdir }}:/usr{{ arch_libdir }}:/usr/local/lib"
@@ -1362,7 +1362,7 @@ EOF
               
               echo ""
               echo "=== Testing simple SGX enclave execution ==="
-              cat > test.py <<EOF
+              cat > test.py <<'EOF'
 import sys
 print("Hello from SGX enclave with EDMM and DCAP enabled!")
 print("Python version:", sys.version)
