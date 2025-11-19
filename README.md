@@ -6,10 +6,13 @@ This repository is dedicated to building and publishing Docker images for Web3 w
 
 ## Features
 
-- ✅ Built from [mccoysc/gramine](https://github.com/mccoysc/gramine)
+- ✅ Built from [mccoysc/gramine](https://github.com/mccoysc/gramine) with DCAP mode enabled
 - ✅ Intel SGX Trusted Execution Environment support
-- ✅ Pre-installed Node.js and common Web3 development tools
-- ✅ Automatic monitoring of Gramine repository updates and rebuild triggers
+- ✅ Pre-installed Node.js (latest LTS ≤v22.x, currently v22.21.1), OpenSSL (latest stable, currently 3.6.0), and common Web3 development tools
+- ✅ Intelligent build system with GitHub Releases caching to avoid unnecessary recompilation
+- ✅ Automatic version detection for Gramine, OpenSSL, and Node.js
+- ✅ Multi-job workflow architecture for efficient resource utilization
+- ✅ Automatic Dockerfile change detection to trigger image rebuilds
 - ✅ Automatic build and push to GitHub Container Registry
 - ✅ Multiple tagging strategies (latest, version, SHA, etc.)
 
@@ -17,17 +20,64 @@ This repository is dedicated to building and publishing Docker images for Web3 w
 
 ### Automated Workflows
 
-1. **Build and Push Image** (`.github/workflows/build-and-push.yml`)
-   - Triggers:
-     - Push to main/master branch
-     - Create version tags (v*)
-     - Manual trigger
-   - Actions:
-     - Build Docker image
-     - Push to GitHub Container Registry
-     - Generate multiple tags (latest, version, SHA, etc.)
+The repository uses an intelligent multi-job workflow system that optimizes build times and resource usage through GitHub Releases caching.
 
-2. **Monitor Gramine Repository** (`.github/workflows/monitor-gramine.yml`)
+#### Main Workflow: Build and Push (`.github/workflows/build-and-push.yml`)
+
+This workflow implements a sophisticated build pipeline with the following jobs:
+
+**1. Version Detection (`check-versions`)**
+   - Automatically detects latest versions:
+     - **Gramine**: Latest commit SHA from mccoysc/gramine repository
+     - **OpenSSL**: Latest stable release (semantic version parsing, excludes pre-releases)
+     - **Node.js**: Latest LTS version compatible with GCC 11 (v22.x, excludes v24+ which requires GCC 13+)
+   - Checks GitHub Releases for existing prebuilt binaries
+   - Detects Dockerfile and related file changes (Dockerfile, scripts/, config/, workflow files)
+   - Determines which components need rebuilding based on:
+     - Version changes
+     - Missing prebuilt binaries in GitHub Releases
+     - Dockerfile modifications
+   - Runs on: push, pull_request, workflow_dispatch, schedule (every 6 hours)
+
+**2. Component Compilation Jobs**
+
+Each component builds in an independent GitHub Actions environment to avoid resource exhaustion:
+
+- **`build-gramine`**: Compiles Gramine with DCAP support
+  - Only runs if Gramine version changed AND prebuilt doesn't exist in Releases
+  - Uploads compiled binary to GitHub Releases (tag: `prebuilt-gramine-{SHA8}`)
+  - Artifact size: ~10MB
+
+- **`build-openssl`**: Compiles OpenSSL from source
+  - Only runs if OpenSSL version changed AND prebuilt doesn't exist in Releases
+  - Uploads compiled binary to GitHub Releases (tag: `prebuilt-openssl-{VERSION}`)
+  - Artifact size: ~8MB
+  - Runs in parallel with `build-gramine`
+
+- **`build-node`**: Compiles Node.js with custom OpenSSL
+  - Only runs if Node.js version changed AND prebuilt doesn't exist in Releases
+  - Depends on `build-openssl` (uses prebuilt OpenSSL for linking)
+  - Uploads compiled binary to GitHub Releases (tag: `prebuilt-{NODE_VERSION}`)
+  - Artifact size: ~45MB
+
+**3. Docker Image Build (`build-image`)**
+   - Triggers when:
+     - Dockerfile or related files changed, OR
+     - Any dependency (Gramine/OpenSSL/Node.js) was rebuilt
+   - Downloads prebuilt binaries from GitHub Releases
+   - Falls back to source compilation if prebuilt unavailable
+   - Pushes to GitHub Container Registry with multiple tags
+   - Only runs after all dependency jobs complete (success or skipped)
+
+**4. Version Update (`update-versions`)**
+   - Updates VERSION files in prebuilt/ directory
+   - Commits changes to repository
+   - Only runs on push to main/master (not on PRs)
+
+#### Legacy Workflow: Monitor Gramine (`.github/workflows/monitor-gramine.yml`)
+
+**Note**: This workflow is now deprecated in favor of the integrated version detection in `build-and-push.yml`.
+
    - Triggers:
      - Automatic check every 6 hours
      - Manual trigger
@@ -35,6 +85,15 @@ This repository is dedicated to building and publishing Docker images for Web3 w
      - Check for updates in mccoysc/gramine repository
      - Automatically trigger image rebuild if updates found
      - Update `.gramine-version` file to record version
+
+### Key Optimizations
+
+1. **GitHub Releases Caching**: Prebuilt binaries are stored in GitHub Releases, avoiding unnecessary recompilation across workflow runs
+2. **Intelligent Skip Logic**: Components are only rebuilt when versions change AND prebuilts don't exist
+3. **Independent Environments**: Each compilation job runs in its own GitHub Actions runner to prevent resource exhaustion
+4. **Parallel Execution**: OpenSSL and Gramine compile in parallel; Node.js waits for OpenSSL
+5. **Dockerfile Change Detection**: Image rebuilds automatically when Dockerfile changes, even if dependencies haven't changed
+6. **GCC Compatibility**: Node.js version is capped at v22.x for compatibility with Ubuntu 22.04's GCC 11
 
 ## Usage
 
@@ -102,15 +161,22 @@ docker run -it gramine-web3-wallet:local
 gramine-web3-wallet-docker/
 ├── .github/
 │   └── workflows/
-│       ├── build-and-push.yml      # Build and push image workflow
-│       └── monitor-gramine.yml     # Monitor Gramine repository workflow
+│       ├── build-and-push.yml      # Main build workflow with intelligent caching
+│       └── monitor-gramine.yml     # Legacy monitor workflow (deprecated)
 ├── config/
 │   └── pccs-default.json          # PCCS default configuration
 ├── scripts/
 │   └── entrypoint.sh              # Container startup script
+├── prebuilt/                       # Prebuilt binaries metadata (created by workflow)
+│   ├── gramine/
+│   │   └── VERSION                # Current Gramine SHA (maintained by update-versions job)
+│   ├── openssl/
+│   │   └── VERSION                # Current OpenSSL version (maintained by update-versions job)
+│   └── nodejs/
+│       └── VERSION                # Current Node.js version (maintained by update-versions job)
 ├── Dockerfile                      # Docker image definition
 ├── docker-compose.yml             # Docker Compose configuration
-├── .gramine-version               # Record current Gramine version
+├── .gramine-version               # Record current Gramine version (legacy)
 └── README.md                      # This document
 ```
 
@@ -169,14 +235,26 @@ PCCS_API_KEY=your-api-key-here
 
 The image includes the following pre-installed tools:
 
-- **Gramine LibOS**: Built from mccoysc/gramine (DCAP mode supported)
-- **Node.js**: v24.x
+- **Gramine LibOS**: Built from mccoysc/gramine with DCAP mode enabled
+  - Latest version automatically detected and compiled
+  - Installed to `/opt/gramine-install`
+- **OpenSSL**: Latest stable (currently 3.6.0)
+  - Prebuilt: Compiled from source with optimizations
+  - Fallback: Uses system OpenSSL from Ubuntu 22.04
+  - Installed to `/opt/openssl-install` (prebuilt path)
+  - Library path: `/opt/openssl-install/lib64` (x86_64)
+- **Node.js**: Latest LTS capped at v22.x for GCC 11 compatibility (currently v22.21.1)
+  - Prebuilt: Compiled with custom OpenSSL 3.6.0
+  - Fallback: Installed from NodeSource repository (v22.x)
+  - Compatible with Ubuntu 22.04 GCC 11
+  - Installed to `/opt/node-install` (prebuilt path)
+  - Note: v24+ LTS requires GCC 13+ and is excluded by compatibility cap
 - **Python**: 3.10.x
 - **SGX Services**:
   - aesmd (SGX Architectural Enclave Service Manager)
   - PCCS (Provisioning Certificate Caching Service)
   - QPL (Quote Provider Library)
-- **Web3 Tools**:
+- **Web3 Tools** (installed globally via npm, controlled by `INSTALL_WEB3_TOOLS=true` build arg):
   - web3.js
   - ethers.js
   - Hardhat
@@ -200,13 +278,15 @@ The image includes the following pre-installed tools:
 
 ### Force Rebuild
 
-If you need to force rebuild the image (even if Gramine repository has no updates):
+If you need to force rebuild all components (even if versions haven't changed):
 
 1. Go to repository Actions page
-2. Select "Monitor Gramine Repository" workflow
+2. Select "Build and Push Docker Image" workflow
 3. Click "Run workflow"
-4. Check "Force rebuild" option
+4. Check "Force rebuild all components" option
 5. Run workflow
+
+This will recompile Gramine, OpenSSL, and Node.js from source and rebuild the Docker image, regardless of whether prebuilt binaries exist in GitHub Releases.
 
 ## Image Tagging Strategy
 
@@ -240,9 +320,17 @@ If you see "SGX device not found" warning:
 
 If GitHub Actions build fails:
 
-1. Check Actions logs
+1. Check Actions logs for specific job failures
 2. Verify Dockerfile syntax
 3. Confirm dependencies are accessible
+4. Check if GitHub Releases download failed (network issues)
+5. For compilation failures, check GCC version compatibility
+
+Common issues:
+- **OpenSSL download fails**: Check if Release `prebuilt-openssl-{VERSION}` exists with asset `openssl-install-openssl-{VERSION}.tar.gz` (e.g., `prebuilt-openssl-3.6.0` with `openssl-install-openssl-3.6.0.tar.gz`)
+- **Node.js compilation fails**: Verify OpenSSL was built successfully and is available
+- **Gramine compilation fails**: Check if mccoysc/gramine repository is accessible
+- **VERSION files missing**: These are created by the update-versions job after the first successful run on main branch
 
 ### Image Pull Failure
 
@@ -253,6 +341,14 @@ If unable to pull image:
    echo $GITHUB_TOKEN | docker login ghcr.io -u USERNAME --password-stdin
    ```
 2. Confirm image repository permissions are set correctly
+
+### OpenSSL Library Not Found
+
+If you see "OpenSSL version not found" errors in the container:
+
+1. Verify `LD_LIBRARY_PATH` includes `/opt/openssl-install/lib64`
+2. Check if OpenSSL was properly extracted: `ls -la /opt/openssl-install`
+3. Test OpenSSL manually: `LD_LIBRARY_PATH=/opt/openssl-install/lib64 /opt/openssl-install/bin/openssl version`
 
 ## Contributing
 
