@@ -6,10 +6,13 @@
 
 ## 功能特性
 
-- ✅ 基于 [mccoysc/gramine](https://github.com/mccoysc/gramine) 构建
+- ✅ 基于 [mccoysc/gramine](https://github.com/mccoysc/gramine) 构建，启用 DCAP 模式
 - ✅ 支持 Intel SGX 可信执行环境
-- ✅ 预装 Node.js 和常用 Web3 开发工具
-- ✅ 自动监控 Gramine 仓库更新并触发重新构建
+- ✅ 预装 Node.js (v22.x LTS)、OpenSSL (3.6.0) 和常用 Web3 开发工具
+- ✅ 智能构建系统，通过 GitHub Releases 缓存避免不必要的重新编译
+- ✅ 自动检测 Gramine、OpenSSL 和 Node.js 的最新版本
+- ✅ 多任务工作流架构，高效利用资源
+- ✅ 自动检测 Dockerfile 变化并触发镜像重新构建
 - ✅ 自动构建并推送镜像到 GitHub Container Registry
 - ✅ 支持多种标签策略（latest, 版本号, SHA 等）
 
@@ -17,17 +20,64 @@
 
 ### 自动化工作流
 
-1. **构建和推送镜像** (`.github/workflows/build-and-push.yml`)
-   - 触发条件：
-     - 推送到 main/master 分支
-     - 创建版本标签（v*）
-     - 手动触发
-   - 自动操作：
-     - 构建 Docker 镜像
-     - 推送到 GitHub Container Registry
-     - 生成多个标签（latest, 版本号, SHA 等）
+本仓库使用智能多任务工作流系统，通过 GitHub Releases 缓存优化构建时间和资源使用。
 
-2. **监控 Gramine 仓库** (`.github/workflows/monitor-gramine.yml`)
+#### 主工作流：构建和推送 (`.github/workflows/build-and-push.yml`)
+
+该工作流实现了复杂的构建流水线，包含以下任务：
+
+**1. 版本检测 (`check-versions`)**
+   - 自动检测最新版本：
+     - **Gramine**: mccoysc/gramine 仓库的最新提交 SHA
+     - **OpenSSL**: 最新稳定版本（语义版本解析，排除预发布版本）
+     - **Node.js**: 与 GCC 11 兼容的最新 LTS 版本（v22.x，排除需要 GCC 13+ 的 v24+）
+   - 检查 GitHub Releases 中是否存在预编译二进制文件
+   - 检测 Dockerfile 和相关文件的变化（Dockerfile、scripts/、config/、工作流文件）
+   - 根据以下条件判断哪些组件需要重新构建：
+     - 版本变化
+     - GitHub Releases 中缺少预编译二进制文件
+     - Dockerfile 修改
+   - 触发条件：push、pull_request、workflow_dispatch、schedule（每 6 小时）
+
+**2. 组件编译任务**
+
+每个组件在独立的 GitHub Actions 环境中构建，避免资源耗尽：
+
+- **`build-gramine`**: 编译支持 DCAP 的 Gramine
+  - 仅在 Gramine 版本变化且 Releases 中不存在预编译版本时运行
+  - 上传编译后的二进制文件到 GitHub Releases（标签：`prebuilt-gramine-{SHA8}`）
+  - 文件大小：约 10MB
+
+- **`build-openssl`**: 从源码编译 OpenSSL
+  - 仅在 OpenSSL 版本变化且 Releases 中不存在预编译版本时运行
+  - 上传编译后的二进制文件到 GitHub Releases（标签：`prebuilt-openssl-{VERSION}`）
+  - 文件大小：约 8MB
+  - 与 `build-gramine` 并行运行
+
+- **`build-node`**: 编译使用自定义 OpenSSL 的 Node.js
+  - 仅在 Node.js 版本变化且 Releases 中不存在预编译版本时运行
+  - 依赖 `build-openssl`（使用预编译的 OpenSSL 进行链接）
+  - 上传编译后的二进制文件到 GitHub Releases（标签：`prebuilt-{NODE_VERSION}`）
+  - 文件大小：约 45MB
+
+**3. Docker 镜像构建 (`build-image`)**
+   - 触发条件：
+     - Dockerfile 或相关文件变化，或
+     - 任何依赖项（Gramine/OpenSSL/Node.js）被重新构建
+   - 从 GitHub Releases 下载预编译二进制文件
+   - 如果预编译文件不可用，则回退到源码编译
+   - 推送到 GitHub Container Registry，生成多个标签
+   - 仅在所有依赖任务完成（成功或跳过）后运行
+
+**4. 版本更新 (`update-versions`)**
+   - 更新 prebuilt/ 目录中的 VERSION 文件
+   - 提交变更到仓库
+   - 仅在推送到 main/master 时运行（PR 中不运行）
+
+#### 旧版工作流：监控 Gramine (`.github/workflows/monitor-gramine.yml`)
+
+**注意**: 该工作流已被弃用，功能已集成到 `build-and-push.yml` 的版本检测中。
+
    - 触发条件：
      - 每 6 小时自动检查一次
      - 手动触发
@@ -35,6 +85,15 @@
      - 检查 mccoysc/gramine 仓库是否有更新
      - 如果有更新，自动触发镜像重新构建
      - 更新 `.gramine-version` 文件记录版本
+
+### 关键优化
+
+1. **GitHub Releases 缓存**: 预编译二进制文件存储在 GitHub Releases 中，避免跨工作流运行的不必要重新编译
+2. **智能跳过逻辑**: 仅在版本变化且预编译文件不存在时才重新构建组件
+3. **独立环境**: 每个编译任务在独立的 GitHub Actions 运行器中运行，防止资源耗尽
+4. **并行执行**: OpenSSL 和 Gramine 并行编译；Node.js 等待 OpenSSL 完成
+5. **Dockerfile 变化检测**: 即使依赖项未变化，Dockerfile 变化也会自动触发镜像重新构建
+6. **GCC 兼容性**: Node.js 版本限制为 v22.x，以兼容 Ubuntu 22.04 的 GCC 11
 
 ## 使用方法
 
@@ -102,14 +161,22 @@ docker run -it gramine-web3-wallet:local
 gramine-web3-wallet-docker/
 ├── .github/
 │   └── workflows/
-│       ├── build-and-push.yml      # 构建和推送镜像的工作流
-│       └── monitor-gramine.yml     # 监控 Gramine 仓库的工作流
-├── docker/                         # Docker 相关配置
+│       ├── build-and-push.yml      # 主构建工作流，带智能缓存
+│       └── monitor-gramine.yml     # 旧版监控工作流（已弃用）
+├── config/
+│   └── pccs-default.json          # PCCS 默认配置
 ├── scripts/
 │   └── entrypoint.sh              # 容器启动脚本
+├── prebuilt/                       # 预编译二进制文件元数据
+│   ├── gramine/
+│   │   └── VERSION                # 当前 Gramine SHA
+│   ├── openssl/
+│   │   └── VERSION                # 当前 OpenSSL 版本
+│   └── nodejs/
+│       └── VERSION                # 当前 Node.js 版本
 ├── Dockerfile                      # Docker 镜像定义
 ├── docker-compose.yml             # Docker Compose 配置
-├── .gramine-version               # 记录当前使用的 Gramine 版本
+├── .gramine-version               # 记录当前使用的 Gramine 版本（旧版）
 └── README.md                      # 本文档
 ```
 
@@ -168,8 +235,18 @@ PCCS_API_KEY=your-api-key-here
 
 镜像中预装了以下工具：
 
-- **Gramine LibOS**: 从 mccoysc/gramine 构建（支持 DCAP 模式）
-- **Node.js**: v24.x
+- **Gramine LibOS**: 从 mccoysc/gramine 构建，启用 DCAP 模式
+  - 自动检测并编译最新版本
+  - 安装路径：`/opt/gramine-install`
+- **OpenSSL**: v3.6.0（最新稳定版）
+  - 从源码编译，带优化
+  - 安装路径：`/opt/openssl-install`
+  - 库路径：`/opt/openssl-install/lib64`（x86_64）
+- **Node.js**: v22.x LTS (Jod)
+  - 使用自定义 OpenSSL 3.6.0 编译
+  - 兼容 Ubuntu 22.04 GCC 11
+  - 安装路径：`/opt/node-install`
+  - 注意：v24+ LTS 需要 GCC 13+，因此不使用
 - **Python**: 3.10.x
 - **SGX 服务**:
   - aesmd (SGX Architectural Enclave Service Manager)
@@ -199,13 +276,15 @@ PCCS_API_KEY=your-api-key-here
 
 ### 强制重新构建
 
-如果需要强制重新构建镜像（即使 Gramine 仓库没有更新）：
+如果需要强制重新构建所有组件（即使版本没有变化）：
 
 1. 进入仓库的 Actions 页面
-2. 选择 "Monitor Gramine Repository" 工作流
+2. 选择 "Build and Push Docker Image" 工作流
 3. 点击 "Run workflow"
-4. 勾选 "Force rebuild" 选项
+4. 勾选 "Force rebuild all components" 选项
 5. 运行工作流
+
+这将从源码重新编译 Gramine、OpenSSL 和 Node.js，并重新构建 Docker 镜像，无论 GitHub Releases 中是否存在预编译二进制文件。
 
 ## 镜像标签策略
 
@@ -239,9 +318,16 @@ GitHub Actions 会自动生成以下标签：
 
 如果 GitHub Actions 构建失败：
 
-1. 查看 Actions 日志
+1. 查看 Actions 日志，找出具体失败的任务
 2. 检查 Dockerfile 语法
 3. 确认依赖项可访问
+4. 检查 GitHub Releases 下载是否失败（网络问题）
+5. 对于编译失败，检查 GCC 版本兼容性
+
+常见问题：
+- **OpenSSL 下载失败**: 检查 Release `prebuilt-openssl-{VERSION}` 是否存在，资源名称为 `openssl-install-openssl-{VERSION}.tar.gz`
+- **Node.js 编译失败**: 确认 OpenSSL 已成功构建并可用
+- **Gramine 编译失败**: 检查 mccoysc/gramine 仓库是否可访问
 
 ### 镜像拉取失败
 
@@ -252,6 +338,14 @@ GitHub Actions 会自动生成以下标签：
    echo $GITHUB_TOKEN | docker login ghcr.io -u USERNAME --password-stdin
    ```
 2. 确认镜像仓库权限设置正确
+
+### OpenSSL 库未找到
+
+如果在容器中看到 "OpenSSL version not found" 错误：
+
+1. 确认 `LD_LIBRARY_PATH` 包含 `/opt/openssl-install/lib64`
+2. 检查 OpenSSL 是否正确解压：`ls -la /opt/openssl-install`
+3. 手动测试 OpenSSL：`LD_LIBRARY_PATH=/opt/openssl-install/lib64 /opt/openssl-install/bin/openssl version`
 
 ## 贡献指南
 
