@@ -243,7 +243,10 @@ jobs:
           make install_sw install_ssldirs
           
           echo "OpenSSL built successfully"
-          /opt/openssl-install/bin/openssl version
+          echo "Verifying OpenSSL installation..."
+          LD_LIBRARY_PATH=/opt/openssl-install/lib64:/opt/openssl-install/lib /opt/openssl-install/bin/openssl version
+          echo "Checking library dependencies..."
+          ldd /opt/openssl-install/bin/openssl
 
       - name: Create tarball
         run: |
