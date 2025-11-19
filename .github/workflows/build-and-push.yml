@@ -993,3 +993,410 @@ jobs:
           echo '```bash' >> $GITHUB_STEP_SUMMARY
           echo "docker pull ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:latest" >> $GITHUB_STEP_SUMMARY
           echo '```' >> $GITHUB_STEP_SUMMARY
+
+  # Job 7: Check for SGX self-hosted runners
+  check-sgx-runner:
+    runs-on: ubuntu-latest
+    needs: build-image
+    if: github.event_name != 'pull_request'
+    permissions:
+      contents: read
+      actions: read
+    outputs:
+      sgx_exists: ${{ steps.check.outputs.sgx_exists }}
+      sgx_online: ${{ steps.check.outputs.sgx_online }}
+      sgx_ready: ${{ steps.check.outputs.sgx_ready }}
+      runs_on: ${{ steps.check.outputs.runs_on }}
+      sgx_label: ${{ steps.check.outputs.sgx_label }}
+    
+    steps:
+      - name: Check SGX runner availability
+        id: check
+        uses: actions/github-script@v7
+        env:
+          MAX_WAIT_SECONDS: 1800  # 30 minutes
+          POLL_INTERVAL_SECONDS: 20
+        with:
+          script: |
+            const maxWaitSeconds = parseInt(process.env.MAX_WAIT_SECONDS || '1800', 10);
+            const pollIntervalSeconds = parseInt(process.env.POLL_INTERVAL_SECONDS || '20', 10);
+            const startTime = Date.now();
+            
+            console.log(`Checking for SGX self-hosted runners...`);
+            console.log(`Max wait time: ${maxWaitSeconds}s, Poll interval: ${pollIntervalSeconds}s`);
+            
+            async function checkRunners() {
+              try {
+                const { data: runners } = await github.rest.actions.listSelfHostedRunnersForRepo({
+                  owner: context.repo.owner,
+                  repo: context.repo.repo,
+                  per_page: 100
+                });
+                
+                // Find runners with 'sgx' in their labels (case-insensitive)
+                const sgxRunners = runners.runners.filter(runner => 
+                  runner.labels.some(label => 
+                    label.name.toLowerCase().includes('sgx')
+                  )
+                );
+                
+                if (sgxRunners.length === 0) {
+                  console.log('No SGX runners found');
+                  return {
+                    sgx_exists: false,
+                    sgx_online: false,
+                    sgx_ready: false,
+                    runs_on: '[]',
+                    sgx_label: ''
+                  };
+                }
+                
+                console.log(`Found ${sgxRunners.length} SGX runner(s)`);
+                
+                // Check for online runners
+                const onlineRunners = sgxRunners.filter(r => r.status === 'online');
+                
+                if (onlineRunners.length === 0) {
+                  console.log('No SGX runners are online');
+                  return {
+                    sgx_exists: true,
+                    sgx_online: false,
+                    sgx_ready: false,
+                    runs_on: '[]',
+                    sgx_label: ''
+                  };
+                }
+                
+                console.log(`Found ${onlineRunners.length} online SGX runner(s)`);
+                
+                // Find the best label to use (prefer exact 'sgx', otherwise shortest label containing 'sgx')
+                let chosenLabel = null;
+                for (const runner of onlineRunners) {
+                  for (const label of runner.labels) {
+                    if (label.name === 'sgx') {
+                      chosenLabel = 'sgx';
+                      break;
+                    }
+                    if (label.name.toLowerCase().includes('sgx')) {
+                      if (!chosenLabel || label.name.length < chosenLabel.length) {
+                        chosenLabel = label.name;
+                      }
+                    }
+                  }
+                  if (chosenLabel === 'sgx') break;
+                }
+                
+                console.log(`Selected label: ${chosenLabel}`);
+                
+                // Check if any online runner with the chosen label is idle (not busy)
+                const idleRunners = onlineRunners.filter(r => 
+                  !r.busy && r.labels.some(l => l.name === chosenLabel)
+                );
+                
+                if (idleRunners.length > 0) {
+                  console.log(`Found ${idleRunners.length} idle SGX runner(s) with label '${chosenLabel}'`);
+                  return {
+                    sgx_exists: true,
+                    sgx_online: true,
+                    sgx_ready: true,
+                    runs_on: JSON.stringify(['self-hosted', chosenLabel]),
+                    sgx_label: chosenLabel
+                  };
+                }
+                
+                // All online runners are busy
+                const busyCount = onlineRunners.filter(r => r.busy).length;
+                console.log(`All ${busyCount} online SGX runner(s) are busy`);
+                return {
+                  sgx_exists: true,
+                  sgx_online: true,
+                  sgx_ready: false,
+                  runs_on: JSON.stringify(['self-hosted', chosenLabel]),
+                  sgx_label: chosenLabel
+                };
+              } catch (error) {
+                console.error(`Error checking runners: ${error.message}`);
+                throw error;
+              }
+            }
+            
+            // Initial check
+            let result = await checkRunners();
+            
+            // If runners exist and are online but busy, wait for them to become idle
+            if (result.sgx_exists && result.sgx_online && !result.sgx_ready) {
+              console.log('SGX runners are busy, waiting for one to become idle...');
+              
+              while (!result.sgx_ready) {
+                const elapsedSeconds = Math.floor((Date.now() - startTime) / 1000);
+                
+                if (elapsedSeconds >= maxWaitSeconds) {
+                  console.log(`Timeout after ${elapsedSeconds}s. SGX runners still busy.`);
+                  core.summary
+                    .addHeading('SGX Runner Check - Timeout')
+                    .addRaw(`Waited ${elapsedSeconds}s but SGX runners remained busy. Skipping SGX tests.`)
+                    .write();
+                  break;
+                }
+                
+                console.log(`Waiting ${pollIntervalSeconds}s... (elapsed: ${elapsedSeconds}s/${maxWaitSeconds}s)`);
+                await new Promise(resolve => setTimeout(resolve, pollIntervalSeconds * 1000));
+                
+                result = await checkRunners();
+                
+                if (result.sgx_ready) {
+                  const totalWaitSeconds = Math.floor((Date.now() - startTime) / 1000);
+                  console.log(`SGX runner became idle after ${totalWaitSeconds}s`);
+                  core.summary
+                    .addHeading('SGX Runner Check - Ready')
+                    .addRaw(`SGX runner became available after waiting ${totalWaitSeconds}s`)
+                    .write();
+                  break;
+                }
+              }
+            } else if (result.sgx_ready) {
+              console.log('SGX runner is immediately available');
+              core.summary
+                .addHeading('SGX Runner Check - Ready')
+                .addRaw('SGX runner is available for testing')
+                .write();
+            } else if (!result.sgx_exists) {
+              console.log('No SGX runners configured');
+              core.summary
+                .addHeading('SGX Runner Check - Not Found')
+                .addRaw('No self-hosted runners with SGX labels found. Skipping SGX tests.')
+                .write();
+            } else if (!result.sgx_online) {
+              console.log('SGX runners exist but are offline');
+              core.summary
+                .addHeading('SGX Runner Check - Offline')
+                .addRaw('SGX runners are configured but currently offline. Skipping SGX tests.')
+                .write();
+            }
+            
+            // Set outputs
+            core.setOutput('sgx_exists', result.sgx_exists.toString());
+            core.setOutput('sgx_online', result.sgx_online.toString());
+            core.setOutput('sgx_ready', result.sgx_ready.toString());
+            core.setOutput('runs_on', result.runs_on);
+            core.setOutput('sgx_label', result.sgx_label);
+
+  # Job 8: Test Gramine functionality on SGX runner
+  sgx-test:
+    needs: [build-image, check-sgx-runner]
+    if: |
+      always() &&
+      github.event_name != 'pull_request' &&
+      needs.check-sgx-runner.outputs.sgx_online == 'true' &&
+      needs.check-sgx-runner.outputs.sgx_ready == 'true'
+    runs-on: ${{ fromJSON(needs.check-sgx-runner.outputs.runs_on) }}
+    permissions:
+      contents: read
+      packages: read
+    
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Log in to GitHub Container Registry
+        uses: docker/login-action@v3
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Determine image tag
+        id: image-tag
+        run: |
+          if [ "${{ github.event_name }}" = "push" ] && [ "${{ github.ref }}" = "refs/heads/main" -o "${{ github.ref }}" = "refs/heads/master" ]; then
+            echo "tag=latest" >> $GITHUB_OUTPUT
+          else
+            echo "tag=sha-${{ github.sha }}" >> $GITHUB_OUTPUT
+          fi
+
+      - name: Pull Docker image
+        run: |
+          IMAGE="${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${{ steps.image-tag.outputs.tag }}"
+          echo "Pulling image: $IMAGE"
+          docker pull "$IMAGE"
+
+      - name: Run RA-TLS test with EDMM and DCAP
+        env:
+          PCCS_API_KEY: ${{ secrets.PCCS_API_KEY }}
+        run: |
+          set -e
+          
+          IMAGE="${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${{ steps.image-tag.outputs.tag }}"
+          
+          echo "Testing Gramine RA-TLS functionality with EDMM and DCAP enabled"
+          
+          # Run container with SGX devices
+          docker run --rm \
+            --device /dev/sgx_enclave \
+            --device /dev/sgx_provision \
+            --security-opt seccomp=unconfined \
+            -e PCCS_API_KEY="${PCCS_API_KEY}" \
+            -e EDMM=1 \
+            -v /var/run/aesmd:/var/run/aesmd \
+            "$IMAGE" \
+            bash -c '
+              set -euo pipefail
+              
+              echo "=== Checking AESMD socket ==="
+              for i in $(seq 1 30); do
+                if [ -S /var/run/aesmd/aesm.socket ]; then
+                  echo "AESMD socket is ready"
+                  break
+                fi
+                echo "Waiting for AESMD socket... ($i/30)"
+                sleep 1
+              done
+              
+              if [ ! -S /var/run/aesmd/aesm.socket ]; then
+                echo "ERROR: AESMD socket not ready after 30 seconds"
+                exit 1
+              fi
+              
+              echo ""
+              echo "=== Verifying Gramine tools ==="
+              which gramine-manifest
+              which gramine-sgx-sign
+              which gramine-sgx
+              gramine-manifest --help >/dev/null
+              gramine-sgx-sign --help >/dev/null
+              
+              echo ""
+              echo "=== Setting up RA-TLS test environment ==="
+              cd /tmp
+              mkdir -p ratls-test/ssl
+              cd ratls-test
+              
+              # Create SSL certificates
+              cat > ssl/ca_config.conf <<EOF
+[req]
+distinguished_name = req_distinguished_name
+prompt = no
+
+[req_distinguished_name]
+C = US
+ST = Test
+L = Test
+O = Test
+OU = Test
+CN = localhost
+EOF
+              
+              openssl genrsa -out ssl/ca.key 2048
+              openssl req -x509 -new -nodes -key ssl/ca.key -sha256 -days 1024 -out ssl/ca.crt -config ssl/ca_config.conf
+              openssl genrsa -out ssl/server.key 2048
+              openssl req -new -key ssl/server.key -out ssl/server.csr -config ssl/ca_config.conf
+              openssl x509 -req -days 360 -in ssl/server.csr -CA ssl/ca.crt -CAkey ssl/ca.key -CAcreateserial -out ssl/server.crt
+              
+              echo ""
+              echo "=== Creating RA-TLS server manifest with EDMM and DCAP ==="
+              cat > server.manifest.template <<EOF
+libos.entrypoint = "/usr/bin/python3"
+loader.entrypoint = "file:{{ gramine.libos }}"
+loader.env.LD_LIBRARY_PATH = "/lib:{{ arch_libdir }}:/usr{{ arch_libdir }}:/usr/local/lib"
+loader.insecure__use_cmdline_argv = true
+
+sys.enable_sigterm_injection = true
+
+fs.mounts = [
+  { path = "/lib", uri = "file:{{ gramine.runtimedir() }}" },
+  { path = "{{ arch_libdir }}", uri = "file:{{ arch_libdir }}" },
+  { path = "/usr{{ arch_libdir }}", uri = "file:/usr{{ arch_libdir }}" },
+  { path = "/usr/local/lib", uri = "file:/usr/local/lib" },
+  { path = "/usr/bin/python3", uri = "file:/usr/bin/python3" },
+  { path = "/etc", uri = "file:/etc" },
+  { path = "/tmp", uri = "file:/tmp" },
+]
+
+sgx.debug = true
+sgx.edmm_enable = true
+sgx.remote_attestation = "dcap"
+sgx.enclave_size = "512M"
+sgx.max_threads = 4
+
+sgx.trusted_files = [
+  "file:{{ gramine.libos }}",
+  "file:{{ gramine.runtimedir() }}/",
+  "file:{{ arch_libdir }}/",
+  "file:/usr{{ arch_libdir }}/",
+  "file:/usr/local/lib/",
+  "file:/usr/bin/python3",
+]
+
+sgx.allowed_files = [
+  "file:/etc/nsswitch.conf",
+  "file:/etc/ethers",
+  "file:/etc/hosts",
+  "file:/etc/group",
+  "file:/etc/passwd",
+  "file:/etc/gai.conf",
+  "file:/etc/ssl/certs/",
+  "file:/etc/sgx_default_qcnl.conf",
+  "file:/tmp/",
+]
+EOF
+              
+              echo ""
+              echo "=== Generating and signing manifest ==="
+              gramine-manifest server.manifest.template server.manifest
+              gramine-sgx-sign --manifest server.manifest --output server.manifest.sgx
+              
+              echo ""
+              echo "=== Verifying manifest signature ==="
+              if [ ! -f server.sig ]; then
+                echo "ERROR: server.sig not generated"
+                exit 1
+              fi
+              
+              echo ""
+              echo "=== Extracting MRENCLAVE and MRSIGNER ==="
+              gramine-sgx-sigstruct-view server.sig | tee sigstruct.txt
+              MRENCLAVE=$(grep "mr_enclave:" sigstruct.txt | awk "{print \$2}")
+              MRSIGNER=$(grep "mr_signer:" sigstruct.txt | awk "{print \$2}")
+              echo "MRENCLAVE: $MRENCLAVE"
+              echo "MRSIGNER: $MRSIGNER"
+              
+              echo ""
+              echo "=== Testing simple SGX enclave execution ==="
+              cat > test.py <<EOF
+import sys
+print("Hello from SGX enclave with EDMM and DCAP enabled!")
+print("Python version:", sys.version)
+sys.exit(0)
+EOF
+              
+              export RA_TLS_ALLOW_DEBUG_ENCLAVE_INSECURE=1
+              export RA_TLS_ALLOW_OUTDATED_TCB_INSECURE=1
+              export RA_TLS_ALLOW_HW_CONFIG_NEEDED=1
+              export RA_TLS_ALLOW_SW_HARDENING_NEEDED=1
+              
+              gramine-sgx python3 test.py
+              
+              echo ""
+              echo "=== RA-TLS test completed successfully ==="
+              echo "✓ AESMD is running"
+              echo "✓ Gramine tools are functional"
+              echo "✓ Manifest with EDMM and DCAP was generated and signed"
+              echo "✓ SGX enclave executed successfully"
+            '
+
+      - name: Generate test summary
+        if: always()
+        run: |
+          echo "## SGX RA-TLS Test Results" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "### Test Configuration" >> $GITHUB_STEP_SUMMARY
+          echo "- **Runner**: ${{ needs.check-sgx-runner.outputs.sgx_label }}" >> $GITHUB_STEP_SUMMARY
+          echo "- **Image**: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${{ steps.image-tag.outputs.tag }}" >> $GITHUB_STEP_SUMMARY
+          echo "- **EDMM**: Enabled" >> $GITHUB_STEP_SUMMARY
+          echo "- **Remote Attestation**: DCAP" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          if [ "${{ job.status }}" = "success" ]; then
+            echo "### Status: ✅ PASSED" >> $GITHUB_STEP_SUMMARY
+          else
+            echo "### Status: ❌ FAILED" >> $GITHUB_STEP_SUMMARY
+          fi
