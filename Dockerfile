@@ -110,6 +110,8 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     python3-venv \
     libcurl4 \
     libprotobuf-c1 \
+    vim \
+    lrzsz \
     && rm -rf /var/lib/apt/lists/*
 
 # Install Intel SGX runtime dependencies and aesmd service (following Gramine documentation)
