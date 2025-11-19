@@ -230,8 +230,9 @@ jobs:
           
           cd /tmp
           wget https://github.com/openssl/openssl/archive/refs/tags/${VERSION}.tar.gz
-          tar xzf ${VERSION}.tar.gz
-          cd openssl-${VERSION#openssl-}
+          mkdir -p /tmp/openssl-src
+          tar -xzf ${VERSION}.tar.gz -C /tmp/openssl-src --strip-components=1
+          cd /tmp/openssl-src
           
           ./config --prefix=/opt/openssl-install \
             --openssldir=/opt/openssl-install/ssl \
