@@ -166,15 +166,44 @@ RUN if [ "$USE_PREBUILT" = "true" ] && [ -f /tmp/prebuilt/nodejs/node-install.ta
         tar -xzf /tmp/prebuilt/nodejs/node-install.tar.gz; \
         echo "Prebuilt Node.js extracted successfully"; \
         /opt/node-install/bin/node --version; \
-        ln -sf /opt/node-install/bin/node /usr/local/bin/node; \
-        ln -sf /opt/node-install/bin/npm /usr/local/bin/npm; \
-        ln -sf /opt/node-install/bin/npx /usr/local/bin/npx; \
     else \
         echo "Installing Node.js from NodeSource"; \
         curl -fsSL https://deb.nodesource.com/setup_${NODE_MAJOR}.x | bash -; \
         apt-get install -y nodejs; \
         rm -rf /var/lib/apt/lists/*; \
     fi
+
+# Create wrapper scripts for openssl and node to limit OpenSSL library path scope
+# This ensures only openssl CLI and Node.js use the custom OpenSSL, not other system binaries
+RUN rm -f /usr/local/bin/node /usr/local/bin/npm /usr/local/bin/npx /usr/local/bin/openssl && \
+    echo '#!/bin/sh' > /usr/local/bin/openssl && \
+    echo 'export LD_LIBRARY_PATH="/opt/openssl-install/lib64:/opt/openssl-install/lib${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"' >> /usr/local/bin/openssl && \
+    echo 'exec /opt/openssl-install/bin/openssl "$@"' >> /usr/local/bin/openssl && \
+    chmod +x /usr/local/bin/openssl && \
+    echo '#!/bin/sh' > /usr/local/bin/node && \
+    echo 'export LD_LIBRARY_PATH="/opt/openssl-install/lib64:/opt/openssl-install/lib${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"' >> /usr/local/bin/node && \
+    echo 'if [ -x /opt/node-install/bin/node ]; then' >> /usr/local/bin/node && \
+    echo '  exec /opt/node-install/bin/node "$@"' >> /usr/local/bin/node && \
+    echo 'else' >> /usr/local/bin/node && \
+    echo '  exec /usr/bin/node "$@"' >> /usr/local/bin/node && \
+    echo 'fi' >> /usr/local/bin/node && \
+    chmod +x /usr/local/bin/node && \
+    echo '#!/bin/sh' > /usr/local/bin/npm && \
+    echo 'export LD_LIBRARY_PATH="/opt/openssl-install/lib64:/opt/openssl-install/lib${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"' >> /usr/local/bin/npm && \
+    echo 'if [ -x /opt/node-install/bin/npm ]; then' >> /usr/local/bin/npm && \
+    echo '  exec /opt/node-install/bin/npm "$@"' >> /usr/local/bin/npm && \
+    echo 'else' >> /usr/local/bin/npm && \
+    echo '  exec /usr/bin/npm "$@"' >> /usr/local/bin/npm && \
+    echo 'fi' >> /usr/local/bin/npm && \
+    chmod +x /usr/local/bin/npm && \
+    echo '#!/bin/sh' > /usr/local/bin/npx && \
+    echo 'export LD_LIBRARY_PATH="/opt/openssl-install/lib64:/opt/openssl-install/lib${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"' >> /usr/local/bin/npx && \
+    echo 'if [ -x /opt/node-install/bin/npx ]; then' >> /usr/local/bin/npx && \
+    echo '  exec /opt/node-install/bin/npx "$@"' >> /usr/local/bin/npx && \
+    echo 'else' >> /usr/local/bin/npx && \
+    echo '  exec /usr/bin/npx "$@"' >> /usr/local/bin/npx && \
+    echo 'fi' >> /usr/local/bin/npx && \
+    chmod +x /usr/local/bin/npx
 
 # Install PCCS by extracting .deb to temp directory (avoids systemd postinst issues)
 RUN curl -fsSLo /etc/apt/keyrings/intel-sgx-deb.asc https://download.01.org/intel-sgx/sgx_repo/ubuntu/intel-sgx-deb.key \
@@ -204,6 +233,18 @@ COPY config/pccs-default.json /opt/intel/sgx-dcap-pccs/config/default.json
 # Create PCCS data directory for SQLite database
 RUN mkdir -p /opt/intel/sgx-dcap-pccs/data
 
+# Generate self-signed SSL certificates for PCCS HTTPS server
+# PCCS expects: ./ssl_key/private.pem and ./ssl_key/file.crt
+RUN mkdir -p /opt/intel/sgx-dcap-pccs/ssl_key && \
+    /usr/local/bin/openssl req -x509 -nodes -newkey rsa:3072 \
+        -keyout /opt/intel/sgx-dcap-pccs/ssl_key/private.pem \
+        -out /opt/intel/sgx-dcap-pccs/ssl_key/file.crt \
+        -days 3650 \
+        -subj "/CN=localhost" \
+        -addext "subjectAltName=DNS:localhost,IP:127.0.0.1" && \
+    chmod 600 /opt/intel/sgx-dcap-pccs/ssl_key/private.pem && \
+    chmod 644 /opt/intel/sgx-dcap-pccs/ssl_key/file.crt
+
 # Configure QPL to use local PCCS
 RUN echo '{\n\
   "pccs_url": "https://localhost:8081/sgx/certification/v4/",\n\
@@ -229,8 +270,9 @@ COPY scripts/entrypoint.sh /usr/local/bin/entrypoint.sh
 RUN chmod +x /usr/local/bin/entrypoint.sh
 
 # Set environment variables
-ENV PATH="/opt/node-install/bin:/opt/openssl-install/bin:/usr/local/bin:${PATH}"
-ENV LD_LIBRARY_PATH="/opt/openssl-install/lib64:/opt/openssl-install/lib:/usr/local/lib"
+# PATH is reordered so /usr/local/bin (wrappers) comes first
+ENV PATH="/usr/local/bin:/opt/node-install/bin:/opt/openssl-install/bin:${PATH}"
+# LD_LIBRARY_PATH is removed from global scope - wrappers handle it for openssl and node only
 ENV GRAMINE_DIRECT_MODE=0
 ENV GRAMINE_SGX_MODE=1
 
