@@ -5,7 +5,8 @@ services:
     build:
       context: .
       dockerfile: Dockerfile
-    image: ghcr.io/mccoysc/gramine-web3-wallet-docker:latest
+    # Image owner/repo can be customized via environment variables (see .env.example)
+    image: ghcr.io/${IMAGE_OWNER:-mccoysc}/${IMAGE_REPO:-gramine-web3-wallet-docker}:${IMAGE_TAG:-latest}
     container_name: gramine-web3-wallet
     
     # Enable SGX device access (if available)
