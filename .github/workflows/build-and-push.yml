@@ -510,16 +510,29 @@ jobs:
         if: needs.build-openssl.result == 'skipped'
         run: |
           VERSION="${{ needs.check-versions.outputs.openssl_version }}"
-          echo "Downloading OpenSSL ${VERSION} from GitHub Releases"
+          TAG="prebuilt-${VERSION}"
+          ASSET="openssl-install-${VERSION}.tar.gz"
+          echo "Downloading OpenSSL ${VERSION} from GitHub Releases (tag: ${TAG})"
           
-          curl -L \
-            -H "Accept: application/octet-stream" \
-            -H "Authorization: Bearer ${{ github.token }}" \
-            -o /tmp/openssl-install-${VERSION}.tar.gz \
-            "https://api.github.com/repos/${{ github.repository }}/releases/tags/prebuilt-${VERSION}/assets/openssl-install-${VERSION}.tar.gz" || \
-          curl -L \
-            -o /tmp/openssl-install-${VERSION}.tar.gz \
-            "https://github.com/${{ github.repository }}/releases/download/prebuilt-${VERSION}/openssl-install-${VERSION}.tar.gz"
+          # Use direct download URL with fail-fast flag
+          if ! curl -fsSL -o "/tmp/${ASSET}" \
+            "https://github.com/${{ github.repository }}/releases/download/${TAG}/${ASSET}"; then
+            echo "Direct download failed, trying with authentication..."
+            curl -fsSL \
+              -H "Authorization: Bearer ${{ github.token }}" \
+              -o "/tmp/${ASSET}" \
+              "https://github.com/${{ github.repository }}/releases/download/${TAG}/${ASSET}"
+          fi
+          
+          # Validate the downloaded archive before extraction
+          echo "Validating downloaded archive..."
+          if ! tar -tzf "/tmp/${ASSET}" >/dev/null 2>&1; then
+            echo "ERROR: Downloaded file is not a valid gzip archive"
+            ls -lh "/tmp/${ASSET}"
+            file "/tmp/${ASSET}"
+            exit 1
+          fi
+          echo "Archive validation successful"
 
       - name: Extract OpenSSL
         run: |
@@ -743,26 +756,29 @@ jobs:
           # Download Gramine
           GRAMINE_SHA_SHORT="${{ needs.check-versions.outputs.gramine_sha_short }}"
           echo "Downloading Gramine ${GRAMINE_SHA_SHORT}"
-          curl -L \
+          if ! curl -fsSL \
             -o prebuilt/gramine/gramine-install.tar.gz \
-            "https://github.com/${{ github.repository }}/releases/download/prebuilt-gramine-${GRAMINE_SHA_SHORT}/gramine-install-${GRAMINE_SHA_SHORT}.tar.gz" || \
-          echo "Gramine download failed, will compile from source"
+            "https://github.com/${{ github.repository }}/releases/download/prebuilt-gramine-${GRAMINE_SHA_SHORT}/gramine-install-${GRAMINE_SHA_SHORT}.tar.gz"; then
+            echo "Gramine download failed, will compile from source"
+          fi
           
           # Download OpenSSL
           OPENSSL_VERSION="${{ needs.check-versions.outputs.openssl_version }}"
           echo "Downloading OpenSSL ${OPENSSL_VERSION}"
-          curl -L \
+          if ! curl -fsSL \
             -o prebuilt/openssl/openssl-install.tar.gz \
-            "https://github.com/${{ github.repository }}/releases/download/prebuilt-${OPENSSL_VERSION}/openssl-install-${OPENSSL_VERSION}.tar.gz" || \
-          echo "OpenSSL download failed, will use system OpenSSL"
+            "https://github.com/${{ github.repository }}/releases/download/prebuilt-${OPENSSL_VERSION}/openssl-install-${OPENSSL_VERSION}.tar.gz"; then
+            echo "OpenSSL download failed, will use system OpenSSL"
+          fi
           
           # Download Node.js
           NODE_VERSION="${{ needs.check-versions.outputs.node_version }}"
           echo "Downloading Node.js ${NODE_VERSION}"
-          curl -L \
+          if ! curl -fsSL \
             -o prebuilt/nodejs/node-install.tar.gz \
-            "https://github.com/${{ github.repository }}/releases/download/prebuilt-${NODE_VERSION}/node-install-${NODE_VERSION}.tar.gz" || \
-          echo "Node.js download failed, will install from NodeSource"
+            "https://github.com/${{ github.repository }}/releases/download/prebuilt-${NODE_VERSION}/node-install-${NODE_VERSION}.tar.gz"; then
+            echo "Node.js download failed, will install from NodeSource"
+          fi
           
           ls -lR prebuilt/
 
