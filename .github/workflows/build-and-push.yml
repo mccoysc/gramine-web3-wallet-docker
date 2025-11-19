@@ -315,8 +315,8 @@ jobs:
             const currentOpenSSL = readVersionFile('prebuilt/openssl/VERSION');
             
             // Check if prebuilt OpenSSL exists in Releases
-            const opensslTag = `prebuilt-${latestOpenSSL}`;
-            const opensslAsset = `openssl-install-${latestOpenSSL}.tar.gz`;
+            const opensslTag = `prebuilt-openssl-${latestOpenSSL}`;
+            const opensslAsset = `openssl-install-openssl-${latestOpenSSL}.tar.gz`;
             const opensslExists = await releaseAssetExists(opensslTag, opensslAsset);
             
             const needsOpenSSL = forceRebuild || (!opensslExists && latestOpenSSL !== currentOpenSSL);
