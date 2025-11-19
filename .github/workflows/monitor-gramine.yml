@@ -34,23 +34,46 @@ jobs:
         uses: actions/github-script@v7
         with:
           script: |
+            // Determine which Gramine repository to monitor (fork-friendly)
+            console.log('Determining Gramine repository to monitor...');
+            let gramineOwner = context.repo.owner;
+            
+            // Check if the current owner has a gramine fork
+            try {
+              await github.rest.repos.get({
+                owner: gramineOwner,
+                repo: 'gramine'
+              });
+              console.log(`Monitoring Gramine repository: ${gramineOwner}/gramine`);
+            } catch (error) {
+              if (error.status === 404) {
+                console.log(`${gramineOwner}/gramine not found, falling back to mccoysc/gramine`);
+                gramineOwner = 'mccoysc';
+              } else {
+                console.log(`Warning: Error checking ${gramineOwner}/gramine: ${error.message}, using mccoysc as fallback`);
+                gramineOwner = 'mccoysc';
+              }
+            }
+            
             // Get Gramine repository default branch and latest commit
             const { data: repo } = await github.rest.repos.get({
-              owner: 'mccoysc',
+              owner: gramineOwner,
               repo: 'gramine'
             });
             const defaultBranch = repo.default_branch;
             
             const { data: commit } = await github.rest.repos.getCommit({
-              owner: 'mccoysc',
+              owner: gramineOwner,
               repo: 'gramine',
               ref: defaultBranch
             });
             
+            console.log(`Gramine owner: ${gramineOwner}`);
             console.log(`Gramine default branch: ${defaultBranch}`);
             console.log(`Latest commit SHA: ${commit.sha}`);
             
             return {
+              owner: gramineOwner,
               default_branch: defaultBranch,
               latest_sha: commit.sha
             };
@@ -156,6 +179,10 @@ jobs:
           script: |
             // Use the repository's default branch for workflow dispatch
             const defaultBranch = context.payload.repository.default_branch || 'main';
+            const gramineOwner = '${{ fromJSON(steps.gramine_info.outputs.result).owner }}';
+            const gramineSha = '${{ steps.check_updates.outputs.gramine_sha }}';
+            
+            console.log(`Triggering build with gramine_owner=${gramineOwner}, gramine_ref=${gramineSha}`);
             
             await github.rest.actions.createWorkflowDispatch({
               owner: context.repo.owner,
@@ -163,7 +190,8 @@ jobs:
               workflow_id: 'build-and-push.yml',
               ref: defaultBranch,
               inputs: {
-                gramine_ref: '${{ steps.check_updates.outputs.gramine_sha }}'
+                gramine_owner: gramineOwner,
+                gramine_ref: gramineSha
               }
             });
 
