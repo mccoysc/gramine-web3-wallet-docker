@@ -92,7 +92,7 @@ LABEL org.opencontainers.image.licenses=LGPL-3.0
 # Avoid interactive prompts during package installation
 ENV DEBIAN_FRONTEND=noninteractive
 
-# Install runtime dependencies (including Python deps for Gramine CLI tools)
+# Install runtime dependencies (including Python deps for Gramine CLI tools and build tools for testing)
 RUN apt-get update && apt-get install -y --no-install-recommends \
     ca-certificates \
     curl \
@@ -112,6 +112,16 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     libprotobuf-c1 \
     vim \
     lrzsz \
+    build-essential \
+    gcc \
+    g++ \
+    make \
+    cmake \
+    autoconf \
+    automake \
+    libtool \
+    pkg-config \
+    git \
     && rm -rf /var/lib/apt/lists/*
 
 # Install Intel SGX runtime dependencies and aesmd service (following Gramine documentation)
