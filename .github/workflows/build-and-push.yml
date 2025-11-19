@@ -38,6 +38,7 @@ jobs:
       needs_node: ${{ steps.check.outputs.needs_node }}
       needs_image: ${{ steps.check.outputs.needs_image }}
       dockerfile_changed: ${{ steps.check.outputs.dockerfile_changed }}
+      gramine_owner: ${{ steps.check.outputs.gramine_owner }}
       gramine_sha: ${{ steps.check.outputs.gramine_sha }}
       gramine_sha_short: ${{ steps.check.outputs.gramine_sha_short }}
       openssl_version: ${{ steps.check.outputs.openssl_version }}
@@ -279,16 +280,37 @@ jobs:
             
             console.log(`Dockerfile changed: ${dockerfileChanged}`);
             
+            // 0.5. Determine Gramine repository owner (fork-friendly)
+            console.log('Determining Gramine repository owner...');
+            let gramineOwner = context.repo.owner; // Default to current repo owner
+            
+            // Check if the current owner has a gramine fork
+            try {
+              await github.rest.repos.get({
+                owner: gramineOwner,
+                repo: 'gramine'
+              });
+              console.log(`Using Gramine repository from ${gramineOwner}/gramine`);
+            } catch (error) {
+              if (error.status === 404) {
+                console.log(`${gramineOwner}/gramine not found, falling back to mccoysc/gramine`);
+                gramineOwner = 'mccoysc';
+              } else {
+                console.log(`Warning: Error checking ${gramineOwner}/gramine: ${error.message}, using mccoysc as fallback`);
+                gramineOwner = 'mccoysc';
+              }
+            }
+            
             // 1. Check Gramine version
             console.log('Checking Gramine version...');
             const { data: gramineRepo } = await github.rest.repos.get({
-              owner: 'mccoysc',
+              owner: gramineOwner,
               repo: 'gramine'
             });
             const gramineBranch = gramineRepo.default_branch;
             
             const { data: gramineCommit } = await github.rest.repos.getCommit({
-              owner: 'mccoysc',
+              owner: gramineOwner,
               repo: 'gramine',
               ref: gramineBranch
             });
@@ -351,6 +373,7 @@ jobs:
             core.setOutput('needs_node', needsNode.toString());
             core.setOutput('needs_image', needsImage.toString());
             core.setOutput('dockerfile_changed', dockerfileChanged.toString());
+            core.setOutput('gramine_owner', gramineOwner);
             core.setOutput('gramine_sha', latestGramineSha);
             core.setOutput('gramine_sha_short', latestGramineShaShort);
             core.setOutput('openssl_version', latestOpenSSL || '');
@@ -371,7 +394,7 @@ jobs:
               .addHeading('Version Check Results')
               .addTable([
                 [{data: 'Component', header: true}, {data: 'Current', header: true}, {data: 'Latest', header: true}, {data: 'Needs Build', header: true}],
-                ['Gramine', currentGramineSha.substring(0,8) || 'none', latestGramineShaShort, needsGramine ? '✅' : '⏭️'],
+                ['Gramine', currentGramineSha.substring(0,8) || 'none', `${latestGramineShaShort} (${gramineOwner})`, needsGramine ? '✅' : '⏭️'],
                 ['OpenSSL', currentOpenSSL || 'none', latestOpenSSL || 'unknown', needsOpenSSL ? '✅' : '⏭️'],
                 ['Node.js', currentNode || 'none', latestNode || 'unknown', needsNode ? '✅' : '⏭️'],
                 ['Dockerfile', '-', '-', dockerfileChanged ? '✅ Changed' : '⏭️'],
@@ -512,10 +535,11 @@ jobs:
       - name: Clone and build Gramine
         run: |
           SHA="${{ needs.check-versions.outputs.gramine_sha }}"
-          echo "Building Gramine ${SHA}"
+          OWNER="${{ needs.check-versions.outputs.gramine_owner }}"
+          echo "Building Gramine ${SHA} from ${OWNER}/gramine"
           
           cd /opt
-          git clone https://github.com/mccoysc/gramine.git gramine
+          git clone https://github.com/${OWNER}/gramine.git gramine
           cd gramine
           git checkout "$SHA"
           
@@ -906,6 +930,7 @@ jobs:
           cache-from: type=gha
           cache-to: type=gha,mode=max
           build-args: |
+            GRAMINE_OWNER=${{ needs.check-versions.outputs.gramine_owner }}
             GRAMINE_REF=${{ needs.check-versions.outputs.gramine_sha }}
             USE_PREBUILT=true
 
