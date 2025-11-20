@@ -20,6 +20,7 @@ def inject_into_manifest_text(manifest_text):
     
     This modifies the manifest text to add libratls-quote-verify.so
     to loader.env.LD_PRELOAD. Works for both file and stdout output.
+    Handles both TOML table syntax ([loader.env]) and dotted key syntax (loader.env.X).
     
     Args:
         manifest_text: String containing the manifest in TOML format
@@ -35,13 +36,14 @@ def inject_into_manifest_text(manifest_text):
     if not lib_path:
         return manifest_text
     
-    if lib_path in manifest_text:
+    if re.search(r'LD_PRELOAD\s*=\s*["\'].*' + re.escape(lib_path), manifest_text):
         return manifest_text
     
     lines = manifest_text.split('\n')
     result_lines = []
     injected = False
     in_loader_env = False
+    last_loader_env_dotted_idx = None
     
     for i, line in enumerate(lines):
         if line.strip() == '[loader.env]':
@@ -60,16 +62,35 @@ def inject_into_manifest_text(manifest_text):
         elif in_loader_env and (line.strip().startswith('[') or not line.strip()):
             in_loader_env = False
             result_lines.append(line)
+        # Handle dotted key syntax: loader.env.LD_PRELOAD
+        elif re.match(r'^\s*loader\.env\.LD_PRELOAD\s*=\s*"', line):
+            match = re.match(r'^(\s*loader\.env\.LD_PRELOAD\s*=\s*")(.*?)("\s*)$', line)
+            if match:
+                prefix, existing, suffix = match.groups()
+                result_lines.append(f'{prefix}{lib_path}:{existing}{suffix}')
+                injected = True
+            else:
+                result_lines.append(line)
+        elif re.match(r'^\s*loader\.env\.', line):
+            result_lines.append(line)
+            last_loader_env_dotted_idx = len(result_lines) - 1
         else:
             result_lines.append(line)
     
     if not injected:
-        for i, line in enumerate(result_lines):
-            if line.strip() == '[loader.entrypoint]':
-                result_lines.insert(i, f'LD_PRELOAD = "{lib_path}"')
-                result_lines.insert(i, '[loader.env]')
-                result_lines.insert(i, '')
-                break
+        if last_loader_env_dotted_idx is not None:
+            result_lines.insert(last_loader_env_dotted_idx + 1, 
+                              f'loader.env.LD_PRELOAD = "{lib_path}"')
+            injected = True
+        else:
+            for i, line in enumerate(result_lines):
+                if re.match(r'^\s*(loader|libos)\.entrypoint\s*=', line):
+                    result_lines.insert(i + 1, f'loader.env.LD_PRELOAD = "{lib_path}"')
+                    injected = True
+                    break
+    
+    if not injected:
+        result_lines.append(f'loader.env.LD_PRELOAD = "{lib_path}"')
     
     return '\n'.join(result_lines)
 
