@@ -1313,6 +1313,20 @@ jobs:
           
           echo "Testing Gramine RA-TLS functionality with EDMM and DCAP enabled"
           
+          # Check if PCCS_API_KEY is set
+          if [ -z "$PCCS_API_KEY" ]; then
+            echo ""
+            echo "=========================================="
+            echo "⚠ Skipping RA-TLS handshake test"
+            echo "=========================================="
+            echo "PCCS_API_KEY is not set. The full RA-TLS handshake test requires"
+            echo "PCCS for DCAP attestation. Set the PCCS_API_KEY secret to enable"
+            echo "this test."
+            echo ""
+            echo "Running basic SGX enclave smoke test instead..."
+            echo ""
+          fi
+          
           # Run container with SGX devices, feed script via STDIN
           sudo -E docker run --rm \
             --device /dev/sgx_enclave \
@@ -1349,56 +1363,138 @@ jobs:
           gramine-manifest --help >/dev/null
           gramine-sgx-sign --help >/dev/null
           
-          echo ""
-          echo "=== Setting up RA-TLS test environment ==="
-          cd /tmp
-          mkdir -p ratls-test/ssl
-          cd ratls-test
-          
-          # Create SSL certificates
-          cat > ssl/ca_config.conf <<'EOF'
-          [req]
-          distinguished_name = req_distinguished_name
-          prompt = no
-          
-          [req_distinguished_name]
-          C = US
-          ST = Test
-          L = Test
-          O = Test
-          OU = Test
-          CN = localhost
+          # Check if PCCS_API_KEY is set for full RA-TLS test
+          if [ -n "$PCCS_API_KEY" ]; then
+            echo ""
+            echo "=== Running full RA-TLS handshake test ==="
+            echo "Copying ra-tls-mbedtls example from Gramine CI-Examples..."
+            
+            # Find Gramine source (could be in /opt/gramine or extracted from prebuilt)
+            GRAMINE_SRC=""
+            if [ -d /opt/gramine/CI-Examples/ra-tls-mbedtls ]; then
+              GRAMINE_SRC="/opt/gramine"
+            elif [ -d /usr/local/share/gramine/CI-Examples/ra-tls-mbedtls ]; then
+              GRAMINE_SRC="/usr/local/share/gramine"
+            else
+              echo "ERROR: Cannot find Gramine CI-Examples directory"
+              echo "Searched: /opt/gramine and /usr/local/share/gramine"
+              exit 1
+            fi
+            
+            cd /tmp
+            cp -r "$GRAMINE_SRC/CI-Examples/ra-tls-mbedtls" ./
+            cd ra-tls-mbedtls
+            
+            echo ""
+            echo "=== Building RA-TLS server and client ==="
+            export ARCH_LIBDIR=$(gcc -dumpmachine | sed 's/^/\/lib\//')
+            make app dcap
+            
+            echo ""
+            echo "=== Extracting MRENCLAVE and MRSIGNER ==="
+            gramine-sgx-sigstruct-view server.sig | tee sigstruct.txt
+            MRENCLAVE=$(awk '/mr_enclave:/ {print $2; exit}' sigstruct.txt)
+            MRSIGNER=$(awk '/mr_signer:/ {print $2; exit}' sigstruct.txt)
+            echo "MRENCLAVE: $MRENCLAVE"
+            echo "MRSIGNER: $MRSIGNER"
+            
+            echo ""
+            echo "=== Starting RA-TLS server in background ==="
+            export RA_TLS_ALLOW_DEBUG_ENCLAVE_INSECURE=1
+            export RA_TLS_ALLOW_OUTDATED_TCB_INSECURE=1
+            export RA_TLS_ALLOW_HW_CONFIG_NEEDED=1
+            export RA_TLS_ALLOW_SW_HARDENING_NEEDED=1
+            
+            gramine-sgx server > /tmp/server.log 2>&1 &
+            SERVER_PID=$!
+            echo "Server started with PID: $SERVER_PID"
+            
+            echo ""
+            echo "=== Waiting for server to be ready ==="
+            for i in $(seq 1 60); do
+              if nc -z 127.0.0.1 4433 2>/dev/null; then
+                echo "Server is ready on port 4433"
+                break
+              fi
+              if ! kill -0 $SERVER_PID 2>/dev/null; then
+                echo "ERROR: Server process died"
+                cat /tmp/server.log
+                exit 1
+              fi
+              echo "Waiting for server... ($i/60)"
+              sleep 1
+            done
+            
+            if ! nc -z 127.0.0.1 4433 2>/dev/null; then
+              echo "ERROR: Server not ready after 60 seconds"
+              cat /tmp/server.log
+              kill -9 $SERVER_PID 2>/dev/null || true
+              exit 1
+            fi
+            
+            echo ""
+            echo "=== Running RA-TLS client to verify attestation ==="
+            RA_TLS_MRENCLAVE=$MRENCLAVE \
+            RA_TLS_MRSIGNER=$MRSIGNER \
+            RA_TLS_ISV_PROD_ID=0 \
+            RA_TLS_ISV_SVN=0 \
+            ./client dcap | tee /tmp/client.log
+            
+            echo ""
+            echo "=== Stopping server ==="
+            kill -9 $SERVER_PID 2>/dev/null || true
+            
+            echo ""
+            echo "=== Verifying test results ==="
+            if grep -q "Verifying peer X.509 certificate... ok" /tmp/client.log; then
+              echo "✓ RA-TLS handshake successful"
+              echo "✓ SGX quote verification passed"
+            else
+              echo "ERROR: RA-TLS handshake failed"
+              echo "Server log:"
+              cat /tmp/server.log
+              echo "Client log:"
+              cat /tmp/client.log
+              exit 1
+            fi
+            
+            echo ""
+            echo "=== RA-TLS test completed successfully ==="
+            echo "✓ AESMD is running"
+            echo "✓ Gramine tools are functional"
+            echo "✓ RA-TLS server and client compiled"
+            echo "✓ RA-TLS handshake with DCAP attestation successful"
+            echo "✓ SGX quote embedded in certificate and verified"
+          else
+            echo ""
+            echo "=== Running basic SGX enclave smoke test ==="
+            cd /tmp
+            mkdir -p sgx-test
+            cd sgx-test
+            
+            cat > test.py <<'EOF'
+          import sys
+          print("Hello from SGX enclave with EDMM enabled!")
+          print("Python version:", sys.version)
+          sys.exit(0)
           EOF
-          
-          openssl genrsa -out ssl/ca.key 2048
-          openssl req -x509 -new -nodes -key ssl/ca.key -sha256 -days 1024 -out ssl/ca.crt -config ssl/ca_config.conf
-          openssl genrsa -out ssl/server.key 2048
-          openssl req -new -key ssl/server.key -out ssl/server.csr -config ssl/ca_config.conf
-          openssl x509 -req -days 360 -in ssl/server.csr -CA ssl/ca.crt -CAkey ssl/ca.key -CAcreateserial -out ssl/server.crt
-          
-          echo ""
-          echo "=== Creating RA-TLS server manifest with EDMM and DCAP ==="
-          cat > server.manifest.template <<'EOF'
+            
+            cat > test.manifest.template <<'EOF'
           libos.entrypoint = "/usr/bin/python3"
           loader.entrypoint = "file:{{ gramine.libos }}"
-          loader.env.LD_LIBRARY_PATH = "/lib:{{ arch_libdir }}:/usr{{ arch_libdir }}:/usr/local/lib"
+          loader.env.LD_LIBRARY_PATH = "/lib:{{ arch_libdir }}:/usr{{ arch_libdir }}"
           loader.insecure__use_cmdline_argv = true
-          
-          sys.enable_sigterm_injection = true
           
           fs.mounts = [
             { path = "/lib", uri = "file:{{ gramine.runtimedir() }}" },
             { path = "{{ arch_libdir }}", uri = "file:{{ arch_libdir }}" },
             { path = "/usr{{ arch_libdir }}", uri = "file:/usr{{ arch_libdir }}" },
-            { path = "/usr/local/lib", uri = "file:/usr/local/lib" },
             { path = "/usr/bin/python3", uri = "file:/usr/bin/python3" },
-            { path = "/etc", uri = "file:/etc" },
             { path = "/tmp", uri = "file:/tmp" },
           ]
           
           sgx.debug = true
           sgx.edmm_enable = true
-          sgx.remote_attestation = "dcap"
           sgx.enclave_size = "512M"
           sgx.max_threads = 4
           
@@ -1407,71 +1503,35 @@ jobs:
             "file:{{ gramine.runtimedir() }}/",
             "file:{{ arch_libdir }}/",
             "file:/usr{{ arch_libdir }}/",
-            "file:/usr/local/lib/",
             "file:/usr/bin/python3",
           ]
           
           sgx.allowed_files = [
-            "file:/etc/nsswitch.conf",
-            "file:/etc/ethers",
-            "file:/etc/hosts",
-            "file:/etc/group",
-            "file:/etc/passwd",
-            "file:/etc/gai.conf",
-            "file:/etc/ssl/certs/",
-            "file:/etc/sgx_default_qcnl.conf",
             "file:/tmp/",
           ]
           EOF
-          
-          echo ""
-          echo "=== Generating and signing manifest ==="
-          gramine-manifest server.manifest.template server.manifest
-          gramine-sgx-sign --manifest server.manifest --output server.manifest.sgx
-          
-          echo ""
-          echo "=== Verifying manifest signature ==="
-          if [ ! -f server.sig ]; then
-            echo "ERROR: server.sig not generated"
-            exit 1
+            
+            export ARCH_LIBDIR=$(gcc -dumpmachine | sed 's/^/\/lib\//')
+            gramine-manifest -Darch_libdir=$ARCH_LIBDIR test.manifest.template test.manifest
+            gramine-sgx-sign --manifest test.manifest --output test.manifest.sgx
+            
+            export RA_TLS_ALLOW_DEBUG_ENCLAVE_INSECURE=1
+            gramine-sgx test test.py | tee /tmp/test.log
+            
+            if grep -q "Hello from SGX enclave" /tmp/test.log; then
+              echo ""
+              echo "=== Basic SGX test completed successfully ==="
+              echo "✓ AESMD is running"
+              echo "✓ Gramine tools are functional"
+              echo "✓ SGX enclave executed successfully"
+              echo ""
+              echo "Note: Full RA-TLS handshake test was skipped (PCCS_API_KEY not set)"
+            else
+              echo "ERROR: SGX enclave test failed"
+              cat /tmp/test.log
+              exit 1
+            fi
           fi
-          
-          echo ""
-          echo "=== Extracting MRENCLAVE and MRSIGNER ==="
-          gramine-sgx-sigstruct-view server.sig | tee sigstruct.txt
-          if [ ! -s sigstruct.txt ]; then
-            echo "ERROR: sigstruct.txt not generated or empty" >&2
-            exit 1
-          fi
-          MRENCLAVE=$(awk '/mr_enclave:/ {print $2; exit}' sigstruct.txt)
-          MRSIGNER=$(awk '/mr_signer:/ {print $2; exit}' sigstruct.txt)
-          : "${MRENCLAVE:?Failed to parse mr_enclave}"
-          : "${MRSIGNER:?Failed to parse mr_signer}"
-          echo "MRENCLAVE: $MRENCLAVE"
-          echo "MRSIGNER: $MRSIGNER"
-          
-          echo ""
-          echo "=== Testing simple SGX enclave execution ==="
-          cat > test.py <<'EOF'
-          import sys
-          print("Hello from SGX enclave with EDMM and DCAP enabled!")
-          print("Python version:", sys.version)
-          sys.exit(0)
-          EOF
-          
-          export RA_TLS_ALLOW_DEBUG_ENCLAVE_INSECURE=1
-          export RA_TLS_ALLOW_OUTDATED_TCB_INSECURE=1
-          export RA_TLS_ALLOW_HW_CONFIG_NEEDED=1
-          export RA_TLS_ALLOW_SW_HARDENING_NEEDED=1
-          
-          gramine-sgx python3 test.py
-          
-          echo ""
-          echo "=== RA-TLS test completed successfully ==="
-          echo "✓ AESMD is running"
-          echo "✓ Gramine tools are functional"
-          echo "✓ Manifest with EDMM and DCAP was generated and signed"
-          echo "✓ SGX enclave executed successfully"
           CONTAINER_SCRIPT
 
       - name: Cleanup docker containers

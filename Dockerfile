@@ -78,6 +78,10 @@ RUN if [ "$USE_PREBUILT" = "true" ] && [ -f /tmp/prebuilt/gramine/gramine-instal
         ninja -C build/; \
         DESTDIR=/opt/gramine-install ninja -C build/ install; \
         echo "Gramine built from source successfully"; \
+    fi && \
+    if [ ! -d /opt/gramine ]; then \
+        mkdir -p /opt/gramine; \
+        echo "Gramine source not available (using prebuilt)"; \
     fi
 
 #==============================================================================
@@ -144,6 +148,10 @@ RUN curl -fsSLo /etc/apt/keyrings/intel-sgx-deb.asc https://download.01.org/inte
 
 # Copy installed Gramine from builder stage
 COPY --from=builder /opt/gramine-install/ /
+
+# Copy Gramine source (including CI-Examples) from builder stage if it exists
+# This is needed for RA-TLS testing. The directory only exists when building from source.
+COPY --from=builder /opt/gramine /opt/gramine
 
 # Update dynamic linker cache to recognize Gramine libraries
 RUN ldconfig
@@ -255,10 +263,11 @@ RUN mkdir -p /opt/intel/sgx-dcap-pccs/ssl_key && \
     chmod 600 /opt/intel/sgx-dcap-pccs/ssl_key/private.pem && \
     chmod 644 /opt/intel/sgx-dcap-pccs/ssl_key/file.crt
 
-# Configure QPL to use local PCCS
+# Configure QPL with default settings (will be updated by entrypoint based on PCCS availability)
+# Default: point to Intel PCS directly (no local PCCS)
 RUN echo '{\n\
-  "pccs_url": "https://localhost:8081/sgx/certification/v4/",\n\
-  "use_secure_cert": false,\n\
+  "pccs_url": "https://api.trustedservices.intel.com/sgx/certification/v4/",\n\
+  "use_secure_cert": true,\n\
   "collateral_service": "https://api.trustedservices.intel.com/sgx/certification/v4/",\n\
   "retry_times": 6,\n\
   "retry_delay": 10,\n\
