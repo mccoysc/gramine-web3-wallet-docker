@@ -1358,6 +1358,17 @@ jobs:
             exit 1
           fi
           
+          echo ""
+          echo "=== Generating SGX enclave signing key ==="
+          KEY_PATH="${HOME}/.config/gramine/enclave-key.pem"
+          mkdir -p "$(dirname "$KEY_PATH")"
+          if [ ! -f "$KEY_PATH" ]; then
+            gramine-sgx-gen-private-key "$KEY_PATH"
+            echo "Generated enclave key at $KEY_PATH"
+          else
+            echo "Enclave key already exists at $KEY_PATH"
+          fi
+          
           cd /app/ra-tls-mbedtls
           
           echo ""
