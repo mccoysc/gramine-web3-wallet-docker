@@ -222,11 +222,17 @@ RUN if [ "$USE_PREBUILT" = "true" ] && [ -f /tmp/prebuilt/nodejs/node-install.ta
 # This ensures only openssl CLI and Node.js use the custom OpenSSL, not other system binaries
 RUN rm -f /usr/local/bin/node /usr/local/bin/npm /usr/local/bin/npx /usr/local/bin/openssl && \
     echo '#!/bin/sh' > /usr/local/bin/openssl && \
-    echo 'export LD_LIBRARY_PATH="/opt/openssl-install/lib64:/opt/openssl-install/lib${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"' >> /usr/local/bin/openssl && \
-    echo 'exec /opt/openssl-install/bin/openssl "$@"' >> /usr/local/bin/openssl && \
+    echo 'if [ -x /opt/openssl-install/bin/openssl ]; then' >> /usr/local/bin/openssl && \
+    echo '  export LD_LIBRARY_PATH="/opt/openssl-install/lib64:/opt/openssl-install/lib${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"' >> /usr/local/bin/openssl && \
+    echo '  exec /opt/openssl-install/bin/openssl "$@"' >> /usr/local/bin/openssl && \
+    echo 'else' >> /usr/local/bin/openssl && \
+    echo '  exec /usr/bin/openssl "$@"' >> /usr/local/bin/openssl && \
+    echo 'fi' >> /usr/local/bin/openssl && \
     chmod +x /usr/local/bin/openssl && \
     echo '#!/bin/sh' > /usr/local/bin/node && \
-    echo 'export LD_LIBRARY_PATH="/opt/openssl-install/lib64:/opt/openssl-install/lib${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"' >> /usr/local/bin/node && \
+    echo 'if [ -d /opt/openssl-install ]; then' >> /usr/local/bin/node && \
+    echo '  export LD_LIBRARY_PATH="/opt/openssl-install/lib64:/opt/openssl-install/lib${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"' >> /usr/local/bin/node && \
+    echo 'fi' >> /usr/local/bin/node && \
     echo 'if [ -x /opt/node-install/bin/node ]; then' >> /usr/local/bin/node && \
     echo '  exec /opt/node-install/bin/node "$@"' >> /usr/local/bin/node && \
     echo 'else' >> /usr/local/bin/node && \
@@ -234,7 +240,9 @@ RUN rm -f /usr/local/bin/node /usr/local/bin/npm /usr/local/bin/npx /usr/local/b
     echo 'fi' >> /usr/local/bin/node && \
     chmod +x /usr/local/bin/node && \
     echo '#!/bin/sh' > /usr/local/bin/npm && \
-    echo 'export LD_LIBRARY_PATH="/opt/openssl-install/lib64:/opt/openssl-install/lib${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"' >> /usr/local/bin/npm && \
+    echo 'if [ -d /opt/openssl-install ]; then' >> /usr/local/bin/npm && \
+    echo '  export LD_LIBRARY_PATH="/opt/openssl-install/lib64:/opt/openssl-install/lib${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"' >> /usr/local/bin/npm && \
+    echo 'fi' >> /usr/local/bin/npm && \
     echo 'if [ -x /opt/node-install/bin/npm ]; then' >> /usr/local/bin/npm && \
     echo '  exec /opt/node-install/bin/npm "$@"' >> /usr/local/bin/npm && \
     echo 'else' >> /usr/local/bin/npm && \
@@ -242,7 +250,9 @@ RUN rm -f /usr/local/bin/node /usr/local/bin/npm /usr/local/bin/npx /usr/local/b
     echo 'fi' >> /usr/local/bin/npm && \
     chmod +x /usr/local/bin/npm && \
     echo '#!/bin/sh' > /usr/local/bin/npx && \
-    echo 'export LD_LIBRARY_PATH="/opt/openssl-install/lib64:/opt/openssl-install/lib${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"' >> /usr/local/bin/npx && \
+    echo 'if [ -d /opt/openssl-install ]; then' >> /usr/local/bin/npx && \
+    echo '  export LD_LIBRARY_PATH="/opt/openssl-install/lib64:/opt/openssl-install/lib${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"' >> /usr/local/bin/npx && \
+    echo 'fi' >> /usr/local/bin/npx && \
     echo 'if [ -x /opt/node-install/bin/npx ]; then' >> /usr/local/bin/npx && \
     echo '  exec /opt/node-install/bin/npx "$@"' >> /usr/local/bin/npx && \
     echo 'else' >> /usr/local/bin/npx && \
@@ -314,6 +324,33 @@ RUN mkdir -p /app/wallet /app/manifests /app/keys /var/run/aesmd
 # Copy entrypoint script
 COPY scripts/entrypoint.sh /usr/local/bin/entrypoint.sh
 RUN chmod +x /usr/local/bin/entrypoint.sh
+
+# Install RA-TLS LD_PRELOAD injection module and patch gramine-manifest
+# This enables transparent RA-TLS quote verification without renaming the command
+COPY scripts/ratls_inject.py /usr/local/lib/python3.10/dist-packages/ratls_inject.py
+RUN chmod 644 /usr/local/lib/python3.10/dist-packages/ratls_inject.py
+
+# Verify libratls-quote-verify.so is available and update ldconfig cache
+# The library should be installed by Gramine's ninja install in /usr/local/lib
+RUN if [ ! -f /usr/local/lib/libratls-quote-verify.so ]; then \
+        echo "Warning: libratls-quote-verify.so not found in /usr/local/lib" >&2; \
+        echo "Checking if it exists in Gramine source prebuilt directory..." >&2; \
+        if [ -f /opt/gramine/tools/sgx/ra-tls/prebuilt/libratls-quote-verify.so ]; then \
+            echo "Found in prebuilt directory, copying to /usr/local/lib" >&2; \
+            cp /opt/gramine/tools/sgx/ra-tls/prebuilt/libratls-quote-verify.so /usr/local/lib/; \
+        else \
+            echo "ERROR: libratls-quote-verify.so not found anywhere!" >&2; \
+        fi; \
+    fi && \
+    ldconfig && \
+    echo "Verifying libratls-quote-verify.so installation:" && \
+    ldconfig -p | grep libratls-quote-verify || echo "Warning: libratls-quote-verify.so not in ldconfig cache"
+
+# Patch gramine-manifest in-place to add RA-TLS injection (maintains command name for compatibility)
+COPY scripts/patch-gramine-manifest.sh /tmp/patch-gramine-manifest.sh
+RUN chmod +x /tmp/patch-gramine-manifest.sh && \
+    /tmp/patch-gramine-manifest.sh && \
+    rm /tmp/patch-gramine-manifest.sh
 
 # Set environment variables
 # PATH is reordered so /usr/local/bin (wrappers) comes first
