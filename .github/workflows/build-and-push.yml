@@ -1300,7 +1300,7 @@ jobs:
           echo "Testing Gramine RA-TLS functionality with EDMM and DCAP enabled"
           
           # Run container with SGX devices, feed script via STDIN
-          sudo -E docker run --rm \
+          sudo -E docker run --rm -i \
             --device /dev/sgx_enclave \
             --device /dev/sgx_provision \
             --security-opt seccomp=unconfined \
@@ -1311,6 +1311,12 @@ jobs:
             "$IMAGE" \
             bash -seuo pipefail <<'CONTAINER_SCRIPT'
           set -euo pipefail
+          
+          echo ""
+          echo "=========================================="
+          echo "RA-TLS Test Script Starting"
+          echo "=========================================="
+          echo ""
           
           echo "=== Checking AESMD socket ==="
           for i in $(seq 1 30); do
