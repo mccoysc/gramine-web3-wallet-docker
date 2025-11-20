@@ -1299,20 +1299,6 @@ jobs:
           
           echo "Testing Gramine RA-TLS functionality with EDMM and DCAP enabled"
           
-          # Check if PCCS_API_KEY is set
-          if [ -z "$PCCS_API_KEY" ]; then
-            echo ""
-            echo "=========================================="
-            echo "⚠ Skipping RA-TLS handshake test"
-            echo "=========================================="
-            echo "PCCS_API_KEY is not set. The full RA-TLS handshake test requires"
-            echo "PCCS for DCAP attestation. Set the PCCS_API_KEY secret to enable"
-            echo "this test."
-            echo ""
-            echo "Running basic SGX enclave smoke test instead..."
-            echo ""
-          fi
-          
           # Run container with SGX devices, feed script via STDIN
           sudo -E docker run --rm \
             --device /dev/sgx_enclave \
