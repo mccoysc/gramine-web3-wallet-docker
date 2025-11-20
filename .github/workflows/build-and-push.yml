@@ -1017,6 +1017,7 @@ jobs:
           MAX_WAIT_SECONDS: 1800  # 30 minutes
           POLL_INTERVAL_SECONDS: 20
         with:
+          github-token: ${{ secrets.SGX_RUNNER_TOKEN }}
           script: |
             const maxWaitSeconds = parseInt(process.env.MAX_WAIT_SECONDS || '1800', 10);
             const pollIntervalSeconds = parseInt(process.env.POLL_INTERVAL_SECONDS || '20', 10);
@@ -1042,13 +1043,15 @@ jobs:
                 
                 if (sgxRunners.length === 0) {
                   console.log('No SGX runners found');
-                  return {
-                    sgx_exists: false,
-                    sgx_online: false,
-                    sgx_ready: false,
-                    runs_on: '[]',
-                    sgx_label: ''
-                  };
+                  core.summary
+                    .addHeading('SGX Runner Check - Not Found')
+                    .addRaw('No self-hosted runners with SGX labels found.')
+                    .addRaw('')
+                    .addRaw('**Required:** At least one self-hosted runner with "sgx" label must be configured.')
+                    .addRaw('')
+                    .addRaw('Please configure a self-hosted runner with SGX capabilities and add the "sgx" label.')
+                    .write();
+                  throw new Error('No SGX runners configured. SGX testing cannot proceed.');
                 }
                 
                 console.log(`Found ${sgxRunners.length} SGX runner(s)`);
@@ -1058,13 +1061,15 @@ jobs:
                 
                 if (onlineRunners.length === 0) {
                   console.log('No SGX runners are online');
-                  return {
-                    sgx_exists: true,
-                    sgx_online: false,
-                    sgx_ready: false,
-                    runs_on: '[]',
-                    sgx_label: ''
-                  };
+                  core.summary
+                    .addHeading('SGX Runner Check - Offline')
+                    .addRaw(`Found ${sgxRunners.length} SGX runner(s) but all are offline.`)
+                    .addRaw('')
+                    .addRaw('**Required:** At least one SGX runner must be online to proceed with testing.')
+                    .addRaw('')
+                    .addRaw('Please start the self-hosted runner(s) and retry.')
+                    .write();
+                  throw new Error('All SGX runners are offline. SGX testing cannot proceed.');
                 }
                 
                 console.log(`Found ${onlineRunners.length} online SGX runner(s)`);
@@ -1116,20 +1121,23 @@ jobs:
                 };
               } catch (error) {
                 console.error(`Error checking runners: ${error.message}`);
-                // Handle permission errors gracefully (403 means GITHUB_TOKEN lacks admin permissions)
+                // Strict mode: fail on any error including permission issues
                 if (error.status === 403) {
-                  console.log('Insufficient permissions to list self-hosted runners.');
-                  console.log('This is expected when using GITHUB_TOKEN (requires admin permissions).');
-                  console.log('SGX tests will be skipped. To enable runner detection, provide a PAT with admin:read permissions.');
-                  return {
-                    sgx_exists: false,
-                    sgx_online: false,
-                    sgx_ready: false,
-                    runs_on: '[]',
-                    sgx_label: ''
-                  };
+                  core.summary
+                    .addHeading('SGX Runner Check - Permission Error')
+                    .addRaw('Failed to list self-hosted runners due to insufficient permissions.')
+                    .addRaw('')
+                    .addRaw('**Required:** SGX_RUNNER_TOKEN secret with Administration: Read permission.')
+                    .addRaw('')
+                    .addRaw('Please ensure the SGX_RUNNER_TOKEN secret is configured with the correct permissions.')
+                    .write();
+                  throw new Error('SGX_RUNNER_TOKEN missing or lacks Administration: Read permission');
                 }
-                // For other errors, still throw
+                // For other errors, throw with context
+                core.summary
+                  .addHeading('SGX Runner Check - Error')
+                  .addRaw(`Failed to check SGX runners: ${error.message}`)
+                  .write();
                 throw error;
               }
             }
@@ -1148,9 +1156,13 @@ jobs:
                   console.log(`Timeout after ${elapsedSeconds}s. SGX runners still busy.`);
                   core.summary
                     .addHeading('SGX Runner Check - Timeout')
-                    .addRaw(`Waited ${elapsedSeconds}s but SGX runners remained busy. Skipping SGX tests.`)
+                    .addRaw(`Waited ${elapsedSeconds}s but all SGX runners remained busy.`)
+                    .addRaw('')
+                    .addRaw('**Required:** At least one SGX runner must be idle to proceed with testing.')
+                    .addRaw('')
+                    .addRaw('Please wait for a runner to become available or increase the timeout, then retry.')
                     .write();
-                  break;
+                  throw new Error(`Timeout after ${elapsedSeconds}s waiting for SGX runner to become idle.`);
                 }
                 
                 console.log(`Waiting ${pollIntervalSeconds}s... (elapsed: ${elapsedSeconds}s/${maxWaitSeconds}s)`);
@@ -1173,18 +1185,6 @@ jobs:
               core.summary
                 .addHeading('SGX Runner Check - Ready')
                 .addRaw('SGX runner is available for testing')
-                .write();
-            } else if (!result.sgx_exists) {
-              console.log('No SGX runners configured');
-              core.summary
-                .addHeading('SGX Runner Check - Not Found')
-                .addRaw('No self-hosted runners with SGX labels found. Skipping SGX tests.')
-                .write();
-            } else if (!result.sgx_online) {
-              console.log('SGX runners exist but are offline');
-              core.summary
-                .addHeading('SGX Runner Check - Offline')
-                .addRaw('SGX runners are configured but currently offline. Skipping SGX tests.')
                 .write();
             }
             
