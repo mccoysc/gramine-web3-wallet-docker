@@ -998,7 +998,7 @@ jobs:
   check-sgx-runner:
     runs-on: ubuntu-latest
     needs: build-image
-    if: ${{ needs.build-image.result == 'success' }}
+    if: ${{ always() && (needs.build-image.result == 'success' || needs.build-image.result == 'skipped') }}
     permissions:
       contents: read
       actions: read
@@ -1184,7 +1184,7 @@ jobs:
   # Job 8: Test Gramine functionality on SGX runner
   sgx-test:
     needs: [build-image, check-sgx-runner]
-    if: ${{ always() && needs.build-image.result == 'success' && needs.check-sgx-runner.result == 'success' && needs.check-sgx-runner.outputs.sgx_online == 'true' && needs.check-sgx-runner.outputs.sgx_ready == 'true' }}
+    if: ${{ always() && (needs.build-image.result == 'success' || needs.build-image.result == 'skipped') && needs.check-sgx-runner.result == 'success' && needs.check-sgx-runner.outputs.sgx_online == 'true' && needs.check-sgx-runner.outputs.sgx_ready == 'true' }}
     runs-on: ${{ fromJSON(needs.check-sgx-runner.outputs.runs_on) }}
     permissions:
       contents: read
@@ -1201,13 +1201,35 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: Determine image tag
+      - name: Determine image tag with fallback
         id: image-tag
         run: |
+          # Determine the primary tag to try
           if [ "${{ github.event_name }}" = "push" ] && [ "${{ github.ref }}" = "refs/heads/main" -o "${{ github.ref }}" = "refs/heads/master" ]; then
-            echo "tag=latest" >> $GITHUB_OUTPUT
+            PRIMARY_TAG="latest"
           else
-            echo "tag=sha-${{ github.sha }}" >> $GITHUB_OUTPUT
+            PRIMARY_TAG="sha-${{ github.sha }}"
+          fi
+          
+          echo "Primary tag: $PRIMARY_TAG"
+          
+          # Check if the primary tag exists
+          IMAGE="${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${PRIMARY_TAG}"
+          if docker manifest inspect "$IMAGE" >/dev/null 2>&1; then
+            echo "Image found: $IMAGE"
+            echo "tag=${PRIMARY_TAG}" >> $GITHUB_OUTPUT
+          else
+            echo "Image not found: $IMAGE"
+            # Fall back to latest
+            FALLBACK_TAG="latest"
+            FALLBACK_IMAGE="${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${FALLBACK_TAG}"
+            if docker manifest inspect "$FALLBACK_IMAGE" >/dev/null 2>&1; then
+              echo "Falling back to: $FALLBACK_IMAGE"
+              echo "tag=${FALLBACK_TAG}" >> $GITHUB_OUTPUT
+            else
+              echo "ERROR: Neither $IMAGE nor $FALLBACK_IMAGE exists"
+              exit 1
+            fi
           fi
 
       - name: Pull Docker image
