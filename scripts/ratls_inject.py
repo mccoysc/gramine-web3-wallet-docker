@@ -267,6 +267,7 @@ def find_ratls_library():
                                 return path
                         return path
     except Exception:
+        print("error find_ratls_library")
         pass
     
     return None
