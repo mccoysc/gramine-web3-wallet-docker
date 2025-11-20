@@ -154,6 +154,14 @@ COPY --from=builder /opt/gramine-install/ /
 # This is needed for RA-TLS testing. The directory only exists when building from source.
 COPY --from=builder /opt/gramine /opt/gramine
 
+# Copy RA-TLS example to /app for testing
+RUN if [ -d /opt/gramine/CI-Examples/ra-tls-mbedtls ]; then \
+        cp -r /opt/gramine/CI-Examples/ra-tls-mbedtls /app/ra-tls-mbedtls; \
+        echo "RA-TLS example copied to /app/ra-tls-mbedtls"; \
+    else \
+        echo "Warning: RA-TLS example not found in /opt/gramine/CI-Examples"; \
+    fi
+
 # Update dynamic linker cache to recognize Gramine libraries
 RUN ldconfig
 
