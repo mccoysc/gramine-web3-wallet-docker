@@ -1274,7 +1274,7 @@ jobs:
         run: |
           IMAGE="${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${{ steps.image-tag.outputs.tag }}"
           echo "Pulling image: $IMAGE"
-          docker pull "$IMAGE"
+          sudo -E docker pull "$IMAGE"
 
       - name: Run RA-TLS test with EDMM and DCAP
         env:
@@ -1287,7 +1287,7 @@ jobs:
           echo "Testing Gramine RA-TLS functionality with EDMM and DCAP enabled"
           
           # Run container with SGX devices
-          docker run --rm \
+          sudo -E docker run --rm \
             --device /dev/sgx_enclave \
             --device /dev/sgx_provision \
             --security-opt seccomp=unconfined \
