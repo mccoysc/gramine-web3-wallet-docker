@@ -998,7 +998,6 @@ jobs:
   check-sgx-runner:
     runs-on: ubuntu-latest
     needs: build-image
-    if: ${{ needs.build-image.result == 'success' }}
     permissions:
       contents: read
       actions: read
