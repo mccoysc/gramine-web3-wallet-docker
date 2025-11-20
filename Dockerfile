@@ -327,8 +327,8 @@ RUN chmod +x /usr/local/bin/entrypoint.sh
 
 # Install RA-TLS LD_PRELOAD injection module and patch gramine-manifest
 # This enables transparent RA-TLS quote verification without renaming the command
-COPY scripts/ratls_inject.py /usr/local/lib/python3.10/dist-packages/ratls_inject.py
-RUN chmod 644 /usr/local/lib/python3.10/dist-packages/ratls_inject.py
+# COPY scripts/ratls_inject.py /usr/local/lib/python3.10/dist-packages/ratls_inject.py
+# RUN chmod 644 /usr/local/lib/python3.10/dist-packages/ratls_inject.py
 
 # Verify libratls-quote-verify.so is available and update ldconfig cache
 # The library is installed by Gramine's ninja install (typically to /usr/local/lib/x86_64-linux-gnu/)
@@ -345,10 +345,10 @@ RUN ldconfig && \
     fi
 
 # Patch gramine-manifest in-place to add RA-TLS injection (maintains command name for compatibility)
-COPY scripts/patch-gramine-manifest.sh /tmp/patch-gramine-manifest.sh
-RUN chmod +x /tmp/patch-gramine-manifest.sh && \
-    /tmp/patch-gramine-manifest.sh && \
-    rm /tmp/patch-gramine-manifest.sh
+# COPY scripts/patch-gramine-manifest.sh /tmp/patch-gramine-manifest.sh
+# RUN chmod +x /tmp/patch-gramine-manifest.sh && \
+#     /tmp/patch-gramine-manifest.sh && \
+#     rm /tmp/patch-gramine-manifest.sh
 
 # Set environment variables
 # PATH is reordered so /usr/local/bin (wrappers) comes first
