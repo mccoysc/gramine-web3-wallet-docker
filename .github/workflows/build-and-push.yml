@@ -237,7 +237,6 @@ jobs:
               // Check if any image-related files changed
               dockerfileChanged = files.some(f => 
                 f.filename === 'Dockerfile' ||
-                f.filename === '.github/workflows/build-and-push.yml' ||
                 f.filename.startsWith('scripts/') ||
                 f.filename.startsWith('config/')
               );
@@ -246,7 +245,6 @@ jobs:
                 const changedFiles = files
                   .filter(f => 
                     f.filename === 'Dockerfile' ||
-                    f.filename === '.github/workflows/build-and-push.yml' ||
                     f.filename.startsWith('scripts/') ||
                     f.filename.startsWith('config/')
                   )
@@ -269,7 +267,6 @@ jobs:
                   
                   dockerfileChanged = (comparison.data.files || []).some(f =>
                     f.filename === 'Dockerfile' ||
-                    f.filename === '.github/workflows/build-and-push.yml' ||
                     f.filename.startsWith('scripts/') ||
                     f.filename.startsWith('config/')
                   );
@@ -278,7 +275,6 @@ jobs:
                     const changedFiles = (comparison.data.files || [])
                       .filter(f =>
                         f.filename === 'Dockerfile' ||
-                        f.filename === '.github/workflows/build-and-push.yml' ||
                         f.filename.startsWith('scripts/') ||
                         f.filename.startsWith('config/')
                       )
@@ -1247,34 +1243,40 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: Pull Docker image by digest
+      - name: Pull Docker image by digest or latest
         run: |
-          # Use the digest from build-image to pull the exact image that was just built
-          DIGEST="${{ needs.build-image.outputs.digest }}"
           IMAGE_BASE="${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}"
-          IMAGE_WITH_DIGEST="${IMAGE_BASE}@${DIGEST}"
+          DIGEST="${{ needs.build-image.outputs.digest }}"
           
-          echo "Pulling image by digest: $IMAGE_WITH_DIGEST"
-          
-          # Retry loop for registry propagation
-          for i in {1..10}; do
-            if sudo -E docker pull "$IMAGE_WITH_DIGEST"; then
-              echo "Successfully pulled image"
-              break
-            else
-              if [ $i -lt 10 ]; then
-                echo "Pull failed, retrying in 3 seconds... ($i/10)"
-                sleep 3
+          # If build-image ran and produced a digest, use it; otherwise fall back to latest
+          if [ -n "$DIGEST" ]; then
+            IMAGE_TO_PULL="${IMAGE_BASE}@${DIGEST}"
+            echo "Pulling newly built image by digest: $IMAGE_TO_PULL"
+            
+            # Retry loop for registry propagation
+            for i in {1..10}; do
+              if sudo -E docker pull "$IMAGE_TO_PULL"; then
+                echo "Successfully pulled image"
+                break
               else
-                echo "ERROR: Failed to pull image after 10 attempts"
-                exit 1
+                if [ $i -lt 10 ]; then
+                  echo "Pull failed, retrying in 3 seconds... ($i/10)"
+                  sleep 3
+                else
+                  echo "ERROR: Failed to pull image after 10 attempts"
+                  exit 1
+                fi
               fi
-            fi
-          done
+            done
+          else
+            IMAGE_TO_PULL="${IMAGE_BASE}:latest"
+            echo "No new image built, pulling existing image: $IMAGE_TO_PULL"
+            sudo -E docker pull "$IMAGE_TO_PULL"
+          fi
           
           # Tag the image with a friendly name for easier reference
           FRIENDLY_TAG="${IMAGE_BASE}:test-${{ github.run_id }}"
-          sudo -E docker tag "$IMAGE_WITH_DIGEST" "$FRIENDLY_TAG"
+          sudo -E docker tag "$IMAGE_TO_PULL" "$FRIENDLY_TAG"
           echo "Tagged as: $FRIENDLY_TAG"
           
           # Clean up old test containers
