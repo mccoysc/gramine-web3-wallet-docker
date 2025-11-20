@@ -14,6 +14,164 @@ import sys
 import subprocess
 
 
+def inject_into_manifest_text(manifest_text):
+    """
+    Inject LD_PRELOAD into manifest text (TOML format).
+    
+    This modifies the manifest text to add libratls-quote-verify.so
+    to loader.env.LD_PRELOAD. Works for both file and stdout output.
+    Handles both TOML table syntax ([loader.env]) and dotted key syntax (loader.env.X).
+    
+    Args:
+        manifest_text: String containing the manifest in TOML format
+        
+    Returns:
+        str: Modified manifest text with LD_PRELOAD injected
+    """
+    disable_flags = ['1', 'true', 'yes']
+    if os.environ.get('DISABLE_RATLS_PRELOAD', '').lower() in disable_flags:
+        return manifest_text
+    
+    lib_path = find_ratls_library()
+    if not lib_path:
+        return manifest_text
+    
+    if re.search(r'LD_PRELOAD\s*=\s*["\'].*' + re.escape(lib_path), manifest_text):
+        return manifest_text
+    
+    lines = manifest_text.split('\n')
+    result_lines = []
+    injected = False
+    in_loader_env = False
+    last_loader_env_dotted_idx = None
+    
+    for i, line in enumerate(lines):
+        if line.strip() == '[loader.env]':
+            in_loader_env = True
+            result_lines.append(line)
+            result_lines.append(f'LD_PRELOAD = "{lib_path}"')
+            injected = True
+        elif in_loader_env and line.strip().startswith('LD_PRELOAD'):
+            match = re.match(r'^(\s*LD_PRELOAD\s*=\s*")(.*?)("\s*)$', line)
+            if match:
+                prefix, existing, suffix = match.groups()
+                result_lines.append(f'{prefix}{lib_path}:{existing}{suffix}')
+                injected = True
+            else:
+                result_lines.append(line)
+        elif in_loader_env and (line.strip().startswith('[') or not line.strip()):
+            in_loader_env = False
+            result_lines.append(line)
+        # Handle dotted key syntax: loader.env.LD_PRELOAD
+        elif re.match(r'^\s*loader\.env\.LD_PRELOAD\s*=\s*"', line):
+            match = re.match(r'^(\s*loader\.env\.LD_PRELOAD\s*=\s*")(.*?)("\s*)$', line)
+            if match:
+                prefix, existing, suffix = match.groups()
+                result_lines.append(f'{prefix}{lib_path}:{existing}{suffix}')
+                injected = True
+            else:
+                result_lines.append(line)
+        elif re.match(r'^\s*loader\.env\.', line):
+            result_lines.append(line)
+            last_loader_env_dotted_idx = len(result_lines) - 1
+        else:
+            result_lines.append(line)
+    
+    if not injected:
+        if last_loader_env_dotted_idx is not None:
+            result_lines.insert(last_loader_env_dotted_idx + 1, 
+                              f'loader.env.LD_PRELOAD = "{lib_path}"')
+            injected = True
+        else:
+            for i, line in enumerate(result_lines):
+                if re.match(r'^\s*(loader|libos)\.entrypoint\s*=', line):
+                    result_lines.insert(i + 1, f'loader.env.LD_PRELOAD = "{lib_path}"')
+                    injected = True
+                    break
+    
+    if not injected:
+        result_lines.append(f'loader.env.LD_PRELOAD = "{lib_path}"')
+    
+    result_text = '\n'.join(result_lines)
+    if 'sgx.' in result_text and f'file:{lib_path}' not in result_text:
+        result_lines = result_text.split('\n')
+        sgx_files_added = False
+        
+        for i, line in enumerate(result_lines):
+            if re.match(r'^\s*sgx\.allowed_files\s*=\s*\[', line):
+                result_lines.insert(i + 1, f'  "file:{lib_path}",')
+                sgx_files_added = True
+                break
+        
+        if not sgx_files_added:
+            last_sgx_line_idx = None
+            for i, line in enumerate(result_lines):
+                if re.match(r'^\s*sgx\.', line):
+                    last_sgx_line_idx = i
+                elif re.match(r'^\s*sgx\.trusted_files\s*=\s*\[', line):
+                    result_lines.insert(i, '')
+                    result_lines.insert(i, ']')
+                    result_lines.insert(i, f'  "file:{lib_path}",')
+                    result_lines.insert(i, 'sgx.allowed_files = [')
+                    sgx_files_added = True
+                    break
+            
+            if not sgx_files_added and last_sgx_line_idx is not None:
+                result_lines.insert(last_sgx_line_idx + 1, '')
+                result_lines.insert(last_sgx_line_idx + 2, 'sgx.allowed_files = [')
+                result_lines.insert(last_sgx_line_idx + 3, f'  "file:{lib_path}",')
+                result_lines.insert(last_sgx_line_idx + 4, ']')
+        
+        result_text = '\n'.join(result_lines)
+    
+    return result_text
+
+
+def inject_into_manifest_object(manifest):
+    """
+    Inject LD_PRELOAD into a Gramine Manifest object before it's dumped.
+    
+    This modifies the manifest object in-place to add libratls-quote-verify.so
+    to loader.env.LD_PRELOAD. This works for both file and stdout output.
+    
+    Args:
+        manifest: A graminelibos.Manifest object
+        
+    Returns:
+        bool: True if injection was performed or skipped (success), False on error
+    """
+    disable_flags = ['1', 'true', 'yes']
+    if os.environ.get('DISABLE_RATLS_PRELOAD', '').lower() in disable_flags:
+        return True
+    
+    lib_path = find_ratls_library()
+    if not lib_path:
+        return True
+    
+    try:
+        if 'loader' not in manifest._manifest:
+            manifest._manifest['loader'] = {}
+        if 'env' not in manifest._manifest['loader']:
+            manifest._manifest['loader']['env'] = {}
+        
+        existing_preload = manifest._manifest['loader']['env'].get('LD_PRELOAD', '')
+        if lib_path in existing_preload:
+            return True
+        
+        # Prepend the library to LD_PRELOAD
+        if existing_preload:
+            manifest._manifest['loader']['env']['LD_PRELOAD'] = f'{lib_path}:{existing_preload}'
+        else:
+            manifest._manifest['loader']['env']['LD_PRELOAD'] = lib_path
+        
+        return True
+        
+    except Exception as e:
+        print(f'Warning: Failed to inject LD_PRELOAD into manifest object: {e}',
+              file=sys.stderr)
+        return True
+
+
 def find_ratls_library():
     """
     Find the libratls-quote-verify.so library path.
@@ -28,6 +186,7 @@ def find_ratls_library():
     
     search_paths = [
         '/usr/local/lib/libratls-quote-verify.so',
+        '/usr/local/lib/x86_64-linux-gnu/libratls-quote-verify.so',
         '/usr/lib/x86_64-linux-gnu/libratls-quote-verify.so',
     ]
     

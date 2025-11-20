@@ -1380,6 +1380,26 @@ jobs:
           EDMM=1 make
           
           echo ""
+          echo "=== Verifying LD_PRELOAD injection in manifests ==="
+          if grep -q "LD_PRELOAD.*libratls-quote-verify.so" server.manifest; then
+            echo "✓ LD_PRELOAD injected in server.manifest"
+            grep "LD_PRELOAD" server.manifest
+          else
+            echo "⚠ LD_PRELOAD not found in server.manifest"
+          fi
+          
+          if grep -q "LD_PRELOAD.*libratls-quote-verify.so" client_dcap.manifest; then
+            echo "✓ LD_PRELOAD injected in client_dcap.manifest"
+            grep "LD_PRELOAD" client_dcap.manifest
+          else
+            echo "⚠ LD_PRELOAD not found in client_dcap.manifest"
+          fi
+          
+          echo ""
+          echo "=== Testing library constructor (non-SGX) ==="
+          LD_PRELOAD=/usr/local/lib/x86_64-linux-gnu/libratls-quote-verify.so /bin/true 2>&1 | grep "RA-TLS SO" || echo "⚠ Constructor logs not found"
+          
+          echo ""
           echo "=== Starting RA-TLS server in background ==="
           gramine-sgx server > /tmp/server.log 2>&1 &
           SERVER_PID=$!
@@ -1428,9 +1448,25 @@ jobs:
             echo ""
             echo "=== Running RA-TLS client to verify DCAP attestation ==="
             set +e
-            gramine-sgx client_dcap dcap 0 0 0 0 | tee /tmp/client.log
+            gramine-sgx client_dcap dcap 0 0 0 0 2>&1 | tee /tmp/client.log
             CLIENT_EXIT=$?
             set -e
+            
+            echo ""
+            echo "=== Checking for RA-TLS library initialization logs ==="
+            if grep -q "\[RA-TLS SO\]" /tmp/client.log; then
+              echo "✓ libratls-quote-verify.so loaded and initialized"
+              grep "\[RA-TLS SO\]" /tmp/client.log | head -5
+            else
+              echo "⚠ No RA-TLS SO initialization logs found in client output"
+            fi
+            
+            if grep -q "\[RA-TLS SO\]" /tmp/server.log; then
+              echo "✓ libratls-quote-verify.so loaded in server"
+              grep "\[RA-TLS SO\]" /tmp/server.log | head -5
+            else
+              echo "⚠ No RA-TLS SO initialization logs found in server output"
+            fi
             
             echo ""
             echo "=== Stopping server ==="
