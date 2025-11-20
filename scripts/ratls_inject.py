@@ -14,22 +14,64 @@ import sys
 import subprocess
 
 
+def is_dcap_manifest(manifest_text):
+    """
+    Check if a manifest uses DCAP attestation.
+    
+    Looks for sgx.remote_attestation = "dcap" in both dotted key and table syntax.
+    
+    Args:
+        manifest_text: String containing the manifest in TOML format
+        
+    Returns:
+        bool: True if DCAP attestation is configured, False otherwise
+    """
+    lines = manifest_text.split('\n')
+    in_sgx_section = False
+    
+    for line in lines:
+        stripped = line.strip()
+        
+        if stripped.startswith('#'):
+            continue
+        
+        if stripped == '[sgx]':
+            in_sgx_section = True
+            continue
+        
+        if in_sgx_section and stripped.startswith('['):
+            in_sgx_section = False
+        
+        if re.match(r'^\s*sgx\.remote_attestation\s*=\s*["\']dcap["\']', line, re.IGNORECASE):
+            return True
+        
+        if in_sgx_section and re.match(r'^\s*remote_attestation\s*=\s*["\']dcap["\']', line, re.IGNORECASE):
+            return True
+    
+    return False
+
+
 def inject_into_manifest_text(manifest_text):
     """
-    Inject LD_PRELOAD into manifest text (TOML format).
+    Inject LD_PRELOAD and trusted_files into manifest text (TOML format).
     
     This modifies the manifest text to add libratls-quote-verify.so
-    to loader.env.LD_PRELOAD. Works for both file and stdout output.
+    to loader.env.LD_PRELOAD and sgx.trusted_files, but ONLY if the manifest
+    uses DCAP attestation (sgx.remote_attestation = "dcap").
+    
     Handles both TOML table syntax ([loader.env]) and dotted key syntax (loader.env.X).
     
     Args:
         manifest_text: String containing the manifest in TOML format
         
     Returns:
-        str: Modified manifest text with LD_PRELOAD injected
+        str: Modified manifest text with LD_PRELOAD and trusted_files injected (if DCAP)
     """
     disable_flags = ['1', 'true', 'yes']
     if os.environ.get('DISABLE_RATLS_PRELOAD', '').lower() in disable_flags:
+        return manifest_text
+    
+    if not is_dcap_manifest(manifest_text):
         return manifest_text
     
     lib_path = find_ratls_library()
@@ -93,14 +135,22 @@ def inject_into_manifest_text(manifest_text):
         result_lines.append(f'loader.env.LD_PRELOAD = "{lib_path}"')
     
     result_text = '\n'.join(result_lines)
-    if 'sgx.' in result_text and f'file:{lib_path}' not in result_text:
+    if f'file:{lib_path}' not in result_text:
         result_lines = result_text.split('\n')
         sgx_files_added = False
         
         for i, line in enumerate(result_lines):
-            if re.match(r'^\s*sgx\.allowed_files\s*=\s*\[', line):
-                result_lines.insert(i + 1, f'  "file:{lib_path}",')
-                sgx_files_added = True
+            if re.match(r'^\s*sgx\.trusted_files\s*=\s*\[', line):
+                bracket_depth = 1
+                for j in range(i + 1, len(result_lines)):
+                    if '[' in result_lines[j]:
+                        bracket_depth += result_lines[j].count('[')
+                    if ']' in result_lines[j]:
+                        bracket_depth -= result_lines[j].count(']')
+                        if bracket_depth == 0:
+                            result_lines.insert(j, f'  "file:{lib_path}",')
+                            sgx_files_added = True
+                            break
                 break
         
         if not sgx_files_added:
@@ -108,17 +158,10 @@ def inject_into_manifest_text(manifest_text):
             for i, line in enumerate(result_lines):
                 if re.match(r'^\s*sgx\.', line):
                     last_sgx_line_idx = i
-                elif re.match(r'^\s*sgx\.trusted_files\s*=\s*\[', line):
-                    result_lines.insert(i, '')
-                    result_lines.insert(i, ']')
-                    result_lines.insert(i, f'  "file:{lib_path}",')
-                    result_lines.insert(i, 'sgx.allowed_files = [')
-                    sgx_files_added = True
-                    break
             
-            if not sgx_files_added and last_sgx_line_idx is not None:
+            if last_sgx_line_idx is not None:
                 result_lines.insert(last_sgx_line_idx + 1, '')
-                result_lines.insert(last_sgx_line_idx + 2, 'sgx.allowed_files = [')
+                result_lines.insert(last_sgx_line_idx + 2, 'sgx.trusted_files = [')
                 result_lines.insert(last_sgx_line_idx + 3, f'  "file:{lib_path}",')
                 result_lines.insert(last_sgx_line_idx + 4, ']')
         
