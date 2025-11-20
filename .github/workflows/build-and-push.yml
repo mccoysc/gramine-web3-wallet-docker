@@ -1411,8 +1411,8 @@ jobs:
               echo ""
               echo "=== Extracting MRENCLAVE and MRSIGNER ==="
               gramine-sgx-sigstruct-view server.sig | tee sigstruct.txt
-              MRENCLAVE=$(grep "mr_enclave:" sigstruct.txt | awk "{print \$2}")
-              MRSIGNER=$(grep "mr_signer:" sigstruct.txt | awk "{print \$2}")
+              MRENCLAVE=$(grep "mr_enclave:" sigstruct.txt | awk "{print $2}")
+              MRSIGNER=$(grep "mr_signer:" sigstruct.txt | awk "{print $2}")
               echo "MRENCLAVE: $MRENCLAVE"
               echo "MRSIGNER: $MRSIGNER"
               
