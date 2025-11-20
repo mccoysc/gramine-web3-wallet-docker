@@ -154,13 +154,27 @@ COPY --from=builder /opt/gramine-install/ /
 # This is needed for RA-TLS testing. The directory only exists when building from source.
 COPY --from=builder /opt/gramine /opt/gramine
 
+# Re-declare build args for runtime stage (needed for fallback clone)
+ARG GRAMINE_OWNER=mccoysc
+ARG GRAMINE_REF=master
+
 # Copy RA-TLS example to /app for testing
+# If using prebuilt Gramine, CI-Examples won't exist, so we clone it from the fork
 RUN if [ -d /opt/gramine/CI-Examples/ra-tls-mbedtls ]; then \
+        echo "Using RA-TLS example from built-from-source Gramine"; \
         cp -r /opt/gramine/CI-Examples/ra-tls-mbedtls /app/ra-tls-mbedtls; \
-        echo "RA-TLS example copied to /app/ra-tls-mbedtls"; \
     else \
-        echo "Warning: RA-TLS example not found in /opt/gramine/CI-Examples"; \
-    fi
+        echo "CI-Examples not found in /opt/gramine; cloning from ${GRAMINE_OWNER}/gramine@${GRAMINE_REF}"; \
+        apt-get update && apt-get install -y --no-install-recommends git && rm -rf /var/lib/apt/lists/*; \
+        git clone --depth=1 --filter=blob:none --sparse https://github.com/${GRAMINE_OWNER}/gramine.git /tmp/gramine && \
+        cd /tmp/gramine && \
+        git sparse-checkout set CI-Examples/ra-tls-mbedtls && \
+        git checkout ${GRAMINE_REF} && \
+        cp -r CI-Examples/ra-tls-mbedtls /app/ && \
+        cd / && \
+        rm -rf /tmp/gramine; \
+    fi && \
+    echo "RA-TLS example available at /app/ra-tls-mbedtls"
 
 # Update dynamic linker cache to recognize Gramine libraries
 RUN ldconfig
