@@ -1253,7 +1253,7 @@ jobs:
           
           # Check if the primary tag exists
           IMAGE="${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${PRIMARY_TAG}"
-          if docker manifest inspect "$IMAGE" >/dev/null 2>&1; then
+          if sudo -E docker manifest inspect "$IMAGE" >/dev/null 2>&1; then
             echo "Image found: $IMAGE"
             echo "tag=${PRIMARY_TAG}" >> $GITHUB_OUTPUT
           else
@@ -1261,7 +1261,7 @@ jobs:
             # Fall back to latest
             FALLBACK_TAG="latest"
             FALLBACK_IMAGE="${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${FALLBACK_TAG}"
-            if docker manifest inspect "$FALLBACK_IMAGE" >/dev/null 2>&1; then
+            if sudo -E docker manifest inspect "$FALLBACK_IMAGE" >/dev/null 2>&1; then
               echo "Falling back to: $FALLBACK_IMAGE"
               echo "tag=${FALLBACK_TAG}" >> $GITHUB_OUTPUT
             else
