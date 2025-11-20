@@ -331,20 +331,18 @@ COPY scripts/ratls_inject.py /usr/local/lib/python3.10/dist-packages/ratls_injec
 RUN chmod 644 /usr/local/lib/python3.10/dist-packages/ratls_inject.py
 
 # Verify libratls-quote-verify.so is available and update ldconfig cache
-# The library should be installed by Gramine's ninja install in /usr/local/lib
-RUN if [ ! -f /usr/local/lib/libratls-quote-verify.so ]; then \
-        echo "Warning: libratls-quote-verify.so not found in /usr/local/lib" >&2; \
-        echo "Checking if it exists in Gramine source prebuilt directory..." >&2; \
-        if [ -f /opt/gramine/tools/sgx/ra-tls/prebuilt/libratls-quote-verify.so ]; then \
-            echo "Found in prebuilt directory, copying to /usr/local/lib" >&2; \
-            cp /opt/gramine/tools/sgx/ra-tls/prebuilt/libratls-quote-verify.so /usr/local/lib/; \
-        else \
-            echo "ERROR: libratls-quote-verify.so not found anywhere!" >&2; \
-        fi; \
-    fi && \
-    ldconfig && \
+# The library is installed by Gramine's ninja install (typically to /usr/local/lib/x86_64-linux-gnu/)
+RUN ldconfig && \
     echo "Verifying libratls-quote-verify.so installation:" && \
-    ldconfig -p | grep libratls-quote-verify || echo "Warning: libratls-quote-verify.so not in ldconfig cache"
+    RATLS_LIB_PATH=$(ldconfig -p | grep 'libratls-quote-verify.so ' | awk '{print $NF}' | head -1) && \
+    if [ -n "$RATLS_LIB_PATH" ] && [ -f "$RATLS_LIB_PATH" ]; then \
+        echo "✓ Found libratls-quote-verify.so at: $RATLS_LIB_PATH"; \
+    else \
+        echo "ERROR: libratls-quote-verify.so not found in ldconfig cache!" >&2; \
+        echo "Checking common installation paths..." >&2; \
+        find /usr/local/lib -name 'libratls-quote-verify.so*' 2>/dev/null || true; \
+        exit 1; \
+    fi
 
 # Patch gramine-manifest in-place to add RA-TLS injection (maintains command name for compatibility)
 COPY scripts/patch-gramine-manifest.sh /tmp/patch-gramine-manifest.sh

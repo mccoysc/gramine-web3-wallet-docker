@@ -28,6 +28,7 @@ def find_ratls_library():
     
     search_paths = [
         '/usr/local/lib/libratls-quote-verify.so',
+        '/usr/local/lib/x86_64-linux-gnu/libratls-quote-verify.so',
         '/usr/lib/x86_64-linux-gnu/libratls-quote-verify.so',
     ]
     
