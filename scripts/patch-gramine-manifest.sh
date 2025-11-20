@@ -30,9 +30,8 @@ new_lines = []
 import_added = False
 
 for i, line in enumerate(lines):
-    new_lines.append(line)
-    
     if not import_added and 'from graminelibos import Manifest' in line:
+        new_lines.append(line)
         new_lines.append('import ratls_inject')
         import_added = True
     
@@ -41,22 +40,24 @@ for i, line in enumerate(lines):
         indent_str = ' ' * indent
         
         injection_lines = [
-            '',
             f'{indent_str}# RA-TLS LD_PRELOAD injection (added by patch-gramine-manifest.sh)',
-            f'{indent_str}# Close the file first so injection can read/write it',
-            f'{indent_str}outfile_name = outfile.name',
-            f'{indent_str}outfile_is_stdout = (outfile_name == \'<stdout>\' or outfile_name == \'-\')',
-            f'{indent_str}if hasattr(outfile, \'close\'):',
-            f'{indent_str}    outfile.close()',
-            f'{indent_str}',
-            f'{indent_str}# Inject LD_PRELOAD if processing a template file',
-            f'{indent_str}if infile and infile.name.endswith(\'.template\') and not outfile_is_stdout:',
+            f'{indent_str}if infile and infile.name.endswith(\'.template\'):',
             f'{indent_str}    try:',
-            f'{indent_str}        ratls_inject.inject_ld_preload(outfile_name)',
+            f'{indent_str}        import io',
+            f'{indent_str}        buffer = io.BytesIO()',
+            f'{indent_str}        manifest.dump(buffer)',
+            f'{indent_str}        manifest_text = buffer.getvalue().decode(\'utf-8\')',
+            f'{indent_str}        modified_text = ratls_inject.inject_into_manifest_text(manifest_text)',
+            f'{indent_str}        outfile.write(modified_text.encode(\'utf-8\'))',
             f'{indent_str}    except Exception as e:',
             f'{indent_str}        click.echo(f\'Warning: RA-TLS injection failed: {{e}}\', err=True)',
+            f'{indent_str}        manifest.dump(outfile)',
+            f'{indent_str}else:',
+            f'{indent_str}    manifest.dump(outfile)',
         ]
         new_lines.extend(injection_lines)
+    else:
+        new_lines.append(line)
 
 with open(manifest_path, 'w') as f:
     f.write('\n'.join(new_lines))
