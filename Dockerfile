@@ -126,6 +126,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     libtool \
     pkg-config \
     git \
+    netcat-openbsd \
     && rm -rf /var/lib/apt/lists/*
 
 # Install Intel SGX runtime dependencies and aesmd service (following Gramine documentation)

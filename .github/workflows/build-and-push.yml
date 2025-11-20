@@ -894,6 +894,9 @@ jobs:
     permissions:
       contents: read
       packages: write
+    outputs:
+      digest: ${{ steps.build.outputs.digest }}
+      image: ${{ steps.meta.outputs.tags }}
     
     steps:
       - name: Checkout repository
@@ -936,7 +939,6 @@ jobs:
         uses: docker/setup-buildx-action@v3
 
       - name: Log in to GitHub Container Registry
-        if: github.event_name != 'pull_request'
         uses: docker/login-action@v3
         with:
           registry: ${{ env.REGISTRY }}
@@ -958,11 +960,12 @@ jobs:
             type=raw,value=latest,enable={{is_default_branch}}
 
       - name: Build and push Docker image
+        id: build
         uses: docker/build-push-action@v5
         with:
           context: .
           file: ./Dockerfile
-          push: ${{ github.event_name != 'pull_request' }}
+          push: true
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
           cache-from: type=gha
@@ -1239,68 +1242,44 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: Determine image tag with fallback
-        id: image-tag
+      - name: Pull Docker image by digest
         run: |
-          # Determine the primary tag to try
-          if [ "${{ github.event_name }}" = "push" ] && [ "${{ github.ref }}" = "refs/heads/main" -o "${{ github.ref }}" = "refs/heads/master" ]; then
-            PRIMARY_TAG="latest"
-          else
-            PRIMARY_TAG="sha-${{ github.sha }}"
-          fi
+          # Use the digest from build-image to pull the exact image that was just built
+          DIGEST="${{ needs.build-image.outputs.digest }}"
+          IMAGE_BASE="${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}"
+          IMAGE_WITH_DIGEST="${IMAGE_BASE}@${DIGEST}"
           
-          echo "Primary tag: $PRIMARY_TAG"
+          echo "Pulling image by digest: $IMAGE_WITH_DIGEST"
           
-          # Check if the primary tag exists
-          IMAGE="${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${PRIMARY_TAG}"
-          if sudo -E docker manifest inspect "$IMAGE" >/dev/null 2>&1; then
-            echo "Image found: $IMAGE"
-            echo "tag=${PRIMARY_TAG}" >> $GITHUB_OUTPUT
-          else
-            echo "Image not found: $IMAGE"
-            # Fall back to latest
-            FALLBACK_TAG="latest"
-            FALLBACK_IMAGE="${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${FALLBACK_TAG}"
-            if sudo -E docker manifest inspect "$FALLBACK_IMAGE" >/dev/null 2>&1; then
-              echo "Falling back to: $FALLBACK_IMAGE"
-              echo "tag=${FALLBACK_TAG}" >> $GITHUB_OUTPUT
+          # Retry loop for registry propagation
+          for i in {1..10}; do
+            if sudo -E docker pull "$IMAGE_WITH_DIGEST"; then
+              echo "Successfully pulled image"
+              break
             else
-              echo "ERROR: Neither $IMAGE nor $FALLBACK_IMAGE exists"
-              exit 1
+              if [ $i -lt 10 ]; then
+                echo "Pull failed, retrying in 3 seconds... ($i/10)"
+                sleep 3
+              else
+                echo "ERROR: Failed to pull image after 10 attempts"
+                exit 1
+              fi
             fi
-          fi
-
-      - name: Pull Docker image and cleanup if updated
-        run: |
-          IMAGE="${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${{ steps.image-tag.outputs.tag }}"
-          echo "Checking current image: $IMAGE"
+          done
           
-          # Get current image ID (if exists)
-          BEFORE=$(sudo -E docker images --no-trunc --quiet "$IMAGE" 2>/dev/null || echo "")
-          echo "Current image ID: ${BEFORE:-<none>}"
+          # Tag the image with a friendly name for easier reference
+          FRIENDLY_TAG="${IMAGE_BASE}:test-${{ github.run_id }}"
+          sudo -E docker tag "$IMAGE_WITH_DIGEST" "$FRIENDLY_TAG"
+          echo "Tagged as: $FRIENDLY_TAG"
           
-          # Pull the image
-          echo "Pulling image: $IMAGE"
-          sudo -E docker pull "$IMAGE"
-          
-          # Get new image ID
-          AFTER=$(sudo -E docker images --no-trunc --quiet "$IMAGE" 2>/dev/null || echo "")
-          echo "New image ID: $AFTER"
-          
-          # Check if image was updated
-          if [ -z "$BEFORE" ] || [ "$BEFORE" != "$AFTER" ]; then
-            echo "Image was updated, cleaning up old containers..."
-            
-            # Remove containers created from this image
-            CONTAINER_IDS=$(sudo -E docker ps -a --filter "ancestor=$IMAGE" -q 2>/dev/null || echo "")
-            if [ -n "$CONTAINER_IDS" ]; then
-              echo "Removing containers: $CONTAINER_IDS"
-              sudo -E docker rm -f $CONTAINER_IDS || true
-            else
-              echo "No containers to clean up"
-            fi
+          # Clean up old test containers
+          echo "Cleaning up old test containers..."
+          OLD_CONTAINERS=$(sudo -E docker ps -a --filter "label=ci.sgx-test=1" -q 2>/dev/null || echo "")
+          if [ -n "$OLD_CONTAINERS" ]; then
+            echo "Removing old containers: $OLD_CONTAINERS"
+            sudo -E docker rm -f $OLD_CONTAINERS || true
           else
-            echo "Image is already up to date, no cleanup needed"
+            echo "No old containers to clean up"
           fi
 
       - name: Run RA-TLS test with EDMM and DCAP
@@ -1309,7 +1288,7 @@ jobs:
         run: |
           set -e
           
-          IMAGE="${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${{ steps.image-tag.outputs.tag }}"
+          IMAGE="${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:test-${{ github.run_id }}"
           
           echo "Testing Gramine RA-TLS functionality with EDMM and DCAP enabled"
           
