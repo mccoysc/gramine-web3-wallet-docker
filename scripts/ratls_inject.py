@@ -92,7 +92,39 @@ def inject_into_manifest_text(manifest_text):
     if not injected:
         result_lines.append(f'loader.env.LD_PRELOAD = "{lib_path}"')
     
-    return '\n'.join(result_lines)
+    result_text = '\n'.join(result_lines)
+    if 'sgx.' in result_text and f'file:{lib_path}' not in result_text:
+        result_lines = result_text.split('\n')
+        sgx_files_added = False
+        
+        for i, line in enumerate(result_lines):
+            if re.match(r'^\s*sgx\.allowed_files\s*=\s*\[', line):
+                result_lines.insert(i + 1, f'  "file:{lib_path}",')
+                sgx_files_added = True
+                break
+        
+        if not sgx_files_added:
+            last_sgx_line_idx = None
+            for i, line in enumerate(result_lines):
+                if re.match(r'^\s*sgx\.', line):
+                    last_sgx_line_idx = i
+                elif re.match(r'^\s*sgx\.trusted_files\s*=\s*\[', line):
+                    result_lines.insert(i, '')
+                    result_lines.insert(i, ']')
+                    result_lines.insert(i, f'  "file:{lib_path}",')
+                    result_lines.insert(i, 'sgx.allowed_files = [')
+                    sgx_files_added = True
+                    break
+            
+            if not sgx_files_added and last_sgx_line_idx is not None:
+                result_lines.insert(last_sgx_line_idx + 1, '')
+                result_lines.insert(last_sgx_line_idx + 2, 'sgx.allowed_files = [')
+                result_lines.insert(last_sgx_line_idx + 3, f'  "file:{lib_path}",')
+                result_lines.insert(last_sgx_line_idx + 4, ']')
+        
+        result_text = '\n'.join(result_lines)
+    
+    return result_text
 
 
 def inject_into_manifest_object(manifest):
