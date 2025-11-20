@@ -155,23 +155,24 @@ COPY --from=builder /opt/gramine-install/ /
 COPY --from=builder /opt/gramine /opt/gramine
 
 # Re-declare build args for runtime stage (needed for fallback clone)
-ARG GRAMINE_OWNER=mccoysc
+# GRAMINE_OWNER is dynamically set by workflow from github.repository_owner
+ARG GRAMINE_OWNER
 ARG GRAMINE_REF=master
 
 # Copy RA-TLS example to /app for testing
-# If using prebuilt Gramine, CI-Examples won't exist, so we clone it from the fork
+# If using prebuilt Gramine, CI-Examples won't exist, so we clone only the single example directory
 RUN if [ -d /opt/gramine/CI-Examples/ra-tls-mbedtls ]; then \
         echo "Using RA-TLS example from built-from-source Gramine"; \
         cp -r /opt/gramine/CI-Examples/ra-tls-mbedtls /app/ra-tls-mbedtls; \
     else \
-        echo "CI-Examples not found in /opt/gramine; cloning from ${GRAMINE_OWNER}/gramine@${GRAMINE_REF}"; \
-        apt-get update && apt-get install -y --no-install-recommends git && rm -rf /var/lib/apt/lists/*; \
-        git clone --depth=1 --filter=blob:none --sparse https://github.com/${GRAMINE_OWNER}/gramine.git /tmp/gramine && \
-        cd /tmp/gramine && \
-        git sparse-checkout set CI-Examples/ra-tls-mbedtls && \
-        git checkout ${GRAMINE_REF} && \
-        cp -r CI-Examples/ra-tls-mbedtls /app/ && \
-        cd / && \
+        echo "CI-Examples not found in /opt/gramine; cloning ra-tls-mbedtls from ${GRAMINE_OWNER}/gramine@${GRAMINE_REF}"; \
+        git init /tmp/gramine && \
+        git -C /tmp/gramine remote add origin https://github.com/${GRAMINE_OWNER}/gramine.git && \
+        git -C /tmp/gramine sparse-checkout init --cone && \
+        git -C /tmp/gramine sparse-checkout set CI-Examples/ra-tls-mbedtls && \
+        git -C /tmp/gramine fetch --depth=1 --filter=blob:none origin "${GRAMINE_REF}" && \
+        git -C /tmp/gramine checkout FETCH_HEAD && \
+        cp -r /tmp/gramine/CI-Examples/ra-tls-mbedtls /app/ && \
         rm -rf /tmp/gramine; \
     fi && \
     echo "RA-TLS example available at /app/ra-tls-mbedtls"
