@@ -39,9 +39,9 @@ else
 fi
 
 echo ""
-echo "Starting PCCS (Provisioning Certificate Caching Service)..."
-if [ -f /opt/intel/sgx-dcap-pccs/pccs_server.js ]; then
-    if [ -n "$PCCS_API_KEY" ]; then
+if [ -n "$PCCS_API_KEY" ]; then
+    echo "Starting PCCS (Provisioning Certificate Caching Service)..."
+    if [ -f /opt/intel/sgx-dcap-pccs/pccs_server.js ]; then
         echo "  Configuring PCCS with API key from environment..."
         if command -v jq >/dev/null 2>&1; then
             jq --arg key "$PCCS_API_KEY" '.ApiKey = $key' \
@@ -51,24 +51,44 @@ if [ -f /opt/intel/sgx-dcap-pccs/pccs_server.js ]; then
             sed -i "s|\"ApiKey\": \"\"|\"ApiKey\": \"$PCCS_API_KEY\"|" \
                 /opt/intel/sgx-dcap-pccs/config/default.json
         fi
-    fi
-    
-    mkdir -p /opt/intel/sgx-dcap-pccs/data
-    
-    cd /opt/intel/sgx-dcap-pccs
-    node pccs_server.js &
-    PCCS_PID=$!
-    
-    sleep 2
-    if kill -0 $PCCS_PID 2>/dev/null; then
-        echo "✓ PCCS started (PID: $PCCS_PID)"
-        echo "  HTTP port: 8080, HTTPS port: 8081"
+        
+        mkdir -p /opt/intel/sgx-dcap-pccs/data
+        
+        cd /opt/intel/sgx-dcap-pccs
+        node pccs_server.js &
+        PCCS_PID=$!
+        
+        sleep 2
+        if kill -0 $PCCS_PID 2>/dev/null; then
+            echo "✓ PCCS started (PID: $PCCS_PID)"
+            echo "  HTTP port: 8080, HTTPS port: 8081"
+            
+            echo "  Configuring QPL to use local PCCS..."
+            cat > /etc/sgx_default_qcnl.conf <<'EOF'
+{
+  "pccs_url": "https://127.0.0.1:8081/sgx/certification/v4/",
+  "use_secure_cert": false,
+  "collateral_service": "https://api.trustedservices.intel.com/sgx/certification/v4/",
+  "retry_times": 6,
+  "retry_delay": 10,
+  "local_pck_url": "",
+  "pck_cache_expire_hours": 168
+}
+EOF
+            echo "✓ QPL configured to use local PCCS at https://127.0.0.1:8081"
+        else
+            echo "⚠ PCCS failed to start (check logs above)"
+            echo "  QPL will use Intel PCS directly"
+        fi
+        cd /app
     else
-        echo "⚠ PCCS failed to start (check logs above)"
+        echo "⚠ PCCS not found at /opt/intel/sgx-dcap-pccs/pccs_server.js"
+        echo "  QPL will use Intel PCS directly"
     fi
-    cd /app
 else
-    echo "⚠ PCCS not found at /opt/intel/sgx-dcap-pccs/pccs_server.js"
+    echo "ℹ Skipping PCCS startup (PCCS_API_KEY not set)"
+    echo "  PCCS is only needed for DCAP remote attestation"
+    echo "  QPL will use Intel PCS directly (requires network access)"
 fi
 
 echo ""

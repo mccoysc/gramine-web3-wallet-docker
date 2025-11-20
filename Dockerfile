@@ -78,6 +78,10 @@ RUN if [ "$USE_PREBUILT" = "true" ] && [ -f /tmp/prebuilt/gramine/gramine-instal
         ninja -C build/; \
         DESTDIR=/opt/gramine-install ninja -C build/ install; \
         echo "Gramine built from source successfully"; \
+    fi && \
+    if [ ! -d /opt/gramine ]; then \
+        mkdir -p /opt/gramine; \
+        echo "Gramine source not available (using prebuilt)"; \
     fi
 
 #==============================================================================
@@ -122,6 +126,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     libtool \
     pkg-config \
     git \
+    netcat-openbsd \
     && rm -rf /var/lib/apt/lists/*
 
 # Install Intel SGX runtime dependencies and aesmd service (following Gramine documentation)
@@ -144,6 +149,36 @@ RUN curl -fsSLo /etc/apt/keyrings/intel-sgx-deb.asc https://download.01.org/inte
 
 # Copy installed Gramine from builder stage
 COPY --from=builder /opt/gramine-install/ /
+
+# Copy Gramine source (including CI-Examples) from builder stage if it exists
+# This is needed for RA-TLS testing. The directory only exists when building from source.
+COPY --from=builder /opt/gramine /opt/gramine
+
+# Re-declare build args for runtime stage (needed for fallback clone)
+# GRAMINE_OWNER is dynamically set by workflow from github.repository_owner
+ARG GRAMINE_OWNER
+ARG GRAMINE_REF=master
+
+# Copy RA-TLS example to /app for testing
+# If using prebuilt Gramine, CI-Examples won't exist, so we clone only the single example directory
+RUN set -eux && \
+    mkdir -p /app && \
+    if [ -d /opt/gramine/CI-Examples/ra-tls-mbedtls ]; then \
+        echo "Using RA-TLS example from built-from-source Gramine"; \
+        cp -r /opt/gramine/CI-Examples/ra-tls-mbedtls /app/ra-tls-mbedtls; \
+    else \
+        echo "CI-Examples not found in /opt/gramine; cloning ra-tls-mbedtls from ${GRAMINE_OWNER}/gramine@${GRAMINE_REF}"; \
+        git init /tmp/gramine && \
+        git -C /tmp/gramine remote add origin https://github.com/${GRAMINE_OWNER}/gramine.git && \
+        git -C /tmp/gramine sparse-checkout init --cone && \
+        git -C /tmp/gramine sparse-checkout set CI-Examples/ra-tls-mbedtls && \
+        git -C /tmp/gramine fetch --depth=1 --filter=blob:none origin "${GRAMINE_REF}" && \
+        git -C /tmp/gramine checkout FETCH_HEAD && \
+        cp -r /tmp/gramine/CI-Examples/ra-tls-mbedtls /app/ && \
+        rm -rf /tmp/gramine; \
+    fi && \
+    test -d /app/ra-tls-mbedtls && \
+    echo "RA-TLS example available at /app/ra-tls-mbedtls"
 
 # Update dynamic linker cache to recognize Gramine libraries
 RUN ldconfig
@@ -255,10 +290,11 @@ RUN mkdir -p /opt/intel/sgx-dcap-pccs/ssl_key && \
     chmod 600 /opt/intel/sgx-dcap-pccs/ssl_key/private.pem && \
     chmod 644 /opt/intel/sgx-dcap-pccs/ssl_key/file.crt
 
-# Configure QPL to use local PCCS
+# Configure QPL with default settings (will be updated by entrypoint based on PCCS availability)
+# Default: point to Intel PCS directly (no local PCCS)
 RUN echo '{\n\
-  "pccs_url": "https://localhost:8081/sgx/certification/v4/",\n\
-  "use_secure_cert": false,\n\
+  "pccs_url": "https://api.trustedservices.intel.com/sgx/certification/v4/",\n\
+  "use_secure_cert": true,\n\
   "collateral_service": "https://api.trustedservices.intel.com/sgx/certification/v4/",\n\
   "retry_times": 6,\n\
   "retry_delay": 10,\n\
