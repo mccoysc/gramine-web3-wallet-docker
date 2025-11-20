@@ -225,6 +225,11 @@ def find_ratls_library():
     if 'RATLS_PRELOAD_PATH' in os.environ:
         path = os.environ['RATLS_PRELOAD_PATH']
         if os.path.isfile(path):
+            is_link=os.path.islink(path)
+            if is_link:
+                path=os.path.realpath(path)
+                if os.path.isfile(path):
+                    return path
             return path
     
     search_paths = [
@@ -235,6 +240,11 @@ def find_ratls_library():
     
     for path in search_paths:
         if os.path.isfile(path):
+            is_link=os.path.islink(path)
+            if is_link:
+                path=os.path.realpath(path)
+                if os.path.isfile(path):
+                    return path
             return path
     
     try:
@@ -250,6 +260,11 @@ def find_ratls_library():
                 if match:
                     path = match.group(1).strip()
                     if os.path.isfile(path):
+                        is_link=os.path.islink(path)
+                        if is_link:
+                            path=os.path.realpath(path)
+                            if os.path.isfile(path):
+                                return path
                         return path
     except Exception:
         pass
