@@ -1440,6 +1440,14 @@ jobs:
               echo "✓ SGX enclave executed successfully"
             '
 
+      - name: Cleanup docker containers
+        if: always()
+        run: |
+          echo "Cleaning up docker containers..."
+          # Remove all stopped containers
+          sudo docker container prune -f || true
+          echo "Cleanup completed"
+
       - name: Generate test summary
         if: always()
         run: |
