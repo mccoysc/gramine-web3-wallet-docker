@@ -161,7 +161,9 @@ ARG GRAMINE_REF=master
 
 # Copy RA-TLS example to /app for testing
 # If using prebuilt Gramine, CI-Examples won't exist, so we clone only the single example directory
-RUN if [ -d /opt/gramine/CI-Examples/ra-tls-mbedtls ]; then \
+RUN set -eux && \
+    mkdir -p /app && \
+    if [ -d /opt/gramine/CI-Examples/ra-tls-mbedtls ]; then \
         echo "Using RA-TLS example from built-from-source Gramine"; \
         cp -r /opt/gramine/CI-Examples/ra-tls-mbedtls /app/ra-tls-mbedtls; \
     else \
@@ -175,6 +177,7 @@ RUN if [ -d /opt/gramine/CI-Examples/ra-tls-mbedtls ]; then \
         cp -r /tmp/gramine/CI-Examples/ra-tls-mbedtls /app/ && \
         rm -rf /tmp/gramine; \
     fi && \
+    test -d /app/ra-tls-mbedtls && \
     echo "RA-TLS example available at /app/ra-tls-mbedtls"
 
 # Update dynamic linker cache to recognize Gramine libraries
