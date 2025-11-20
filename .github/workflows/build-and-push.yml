@@ -1116,6 +1116,20 @@ jobs:
                 };
               } catch (error) {
                 console.error(`Error checking runners: ${error.message}`);
+                // Handle permission errors gracefully (403 means GITHUB_TOKEN lacks admin permissions)
+                if (error.status === 403) {
+                  console.log('Insufficient permissions to list self-hosted runners.');
+                  console.log('This is expected when using GITHUB_TOKEN (requires admin permissions).');
+                  console.log('SGX tests will be skipped. To enable runner detection, provide a PAT with admin:read permissions.');
+                  return {
+                    sgx_exists: false,
+                    sgx_online: false,
+                    sgx_ready: false,
+                    runs_on: '[]',
+                    sgx_label: ''
+                  };
+                }
+                // For other errors, still throw
                 throw error;
               }
             }
