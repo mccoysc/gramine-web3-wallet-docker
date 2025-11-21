@@ -313,11 +313,11 @@ jobs:
                 console.log(`Using Gramine repository from ${gramineOwner}/gramine`);
               } catch (error) {
                 if (error.status === 404) {
-                  console.log(`${gramineOwner}/gramine not found, falling back to mccoysc/gramine`);
-                  gramineOwner = 'mccoysc';
+                  console.log(`${gramineOwner}/gramine not found, falling back to gramineproject/gramine`);
+                  gramineOwner = 'gramineproject';
                 } else {
-                  console.log(`Warning: Error checking ${gramineOwner}/gramine: ${error.message}, using mccoysc as fallback`);
-                  gramineOwner = 'mccoysc';
+                  console.log(`Warning: Error checking ${gramineOwner}/gramine: ${error.message}, using gramineproject as fallback`);
+                  gramineOwner = 'gramineproject';
                 }
               }
             }
