@@ -28,23 +28,20 @@ on:
         required: false
         type: string
         default: 'auto'
-
-# Global repository-wide concurrency control
-# Ensures only one workflow runs at a time across the entire repository
-concurrency:
-  group: repo-wide-mutex-${{ github.repository }}
-  cancel-in-progress: false
-
-# Timeout to prevent stuck runs from holding the mutex indefinitely
-timeout-minutes: 180
       pccs_api_key:
         description: 'PCCS API Key for SGX attestation testing (optional)'
         required: false
         type: string
         default: ''
   schedule:
-    # Run every 6 hours to check for updates
-    - cron: '0 */6 * * *'
+    # Run every 5 minutes to check for updates
+    - cron: '*/5 * * * *'
+
+# Global repository-wide concurrency control
+# Ensures only one workflow runs at a time across the entire repository
+concurrency:
+  group: repo-wide-mutex-${{ github.repository }}
+  cancel-in-progress: false
 
 env:
   REGISTRY: ghcr.io
