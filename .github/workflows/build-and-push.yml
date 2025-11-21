@@ -1325,7 +1325,6 @@ jobs:
         run: |
           echo "Cleaning up dangling Docker images and layers..."
           sudo docker image prune -f || true
-          sudo docker system prune -f || true
           echo "Docker cleanup completed"
 
       - name: Pull Docker image by digest or latest
