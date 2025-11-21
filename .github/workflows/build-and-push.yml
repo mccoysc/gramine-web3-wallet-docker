@@ -1268,6 +1268,49 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
+      - name: Configure Docker data directory
+        run: |
+          set -e
+          
+          # Check if /data directory exists
+          if [ -d /data ]; then
+            echo "/data directory exists, configuring Docker to use it for image storage"
+            
+            # Create Docker data directory in /data if it doesn't exist
+            sudo mkdir -p /data/docker
+            
+            # Check if Docker daemon.json exists
+            if [ ! -f /etc/docker/daemon.json ]; then
+              echo "Creating /etc/docker/daemon.json"
+              echo '{}' | sudo tee /etc/docker/daemon.json > /dev/null
+            fi
+            
+            # Update Docker daemon configuration to use /data/docker as data-root
+            sudo cat /etc/docker/daemon.json | \
+              jq '. + {"data-root": "/data/docker"}' | \
+              sudo tee /etc/docker/daemon.json.tmp > /dev/null
+            sudo mv /etc/docker/daemon.json.tmp /etc/docker/daemon.json
+            
+            # Restart Docker daemon to apply changes
+            echo "Restarting Docker daemon..."
+            sudo systemctl restart docker
+            
+            # Wait for Docker to be ready
+            for i in {1..30}; do
+              if sudo docker info > /dev/null 2>&1; then
+                echo "Docker is ready"
+                break
+              fi
+              echo "Waiting for Docker to be ready... ($i/30)"
+              sleep 1
+            done
+            
+            echo "Docker configured to use /data/docker for image storage"
+            sudo docker info | grep "Docker Root Dir" || true
+          else
+            echo "/data directory does not exist, using default Docker configuration"
+          fi
+
       - name: Pull Docker image by digest or latest
         run: |
           IMAGE_BASE="${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}"
