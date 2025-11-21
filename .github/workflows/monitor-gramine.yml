@@ -2,7 +2,7 @@ name: Monitor Gramine Repository
 
 on:
   schedule:
-    # Run every 6 hours to check for updates in Gramine repository
+    # Run every 5 minutes to check for updates in dependencies
     - cron: '*/5 * * * *'
   workflow_dispatch:
     inputs:
@@ -18,12 +18,10 @@ concurrency:
   group: repo-wide-mutex-${{ github.repository }}
   cancel-in-progress: false
 
-# Timeout to prevent stuck runs from holding the mutex indefinitely
-timeout-minutes: 60
-
 jobs:
   check-gramine-updates:
     runs-on: ubuntu-latest
+    timeout-minutes: 60
     permissions:
       contents: write
       packages: write
