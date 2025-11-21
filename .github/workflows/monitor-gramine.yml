@@ -1,8 +1,8 @@
-name: Monitor Gramine Repository
+name: Monitor Dependencies
 
 on:
   schedule:
-    # Run every 6 hours to check for updates in Gramine repository
+    # Run every 5 minutes to check for updates in dependencies
     - cron: '*/5 * * * *'
   workflow_dispatch:
     inputs:
@@ -18,12 +18,10 @@ concurrency:
   group: repo-wide-mutex-${{ github.repository }}
   cancel-in-progress: false
 
-# Timeout to prevent stuck runs from holding the mutex indefinitely
-timeout-minutes: 60
-
 jobs:
-  check-gramine-updates:
+  check-dependency-updates:
     runs-on: ubuntu-latest
+    timeout-minutes: 60
     permissions:
       contents: write
       packages: write
@@ -35,13 +33,27 @@ jobs:
         with:
           fetch-depth: 0
 
-      - name: Get Gramine repository info
-        id: gramine_info
+      - name: Check dependency versions
+        id: check_versions
         uses: actions/github-script@v7
         with:
           script: |
-            // Determine which Gramine repository to monitor (fork-friendly)
-            console.log('Determining Gramine repository to monitor...');
+            const fs = require('fs');
+            
+            // Helper to read version file
+            function readVersionFile(filePath) {
+              try {
+                if (fs.existsSync(filePath)) {
+                  return fs.readFileSync(filePath, 'utf8').trim();
+                }
+              } catch (e) {
+                console.log(`Could not read ${filePath}: ${e.message}`);
+              }
+              return '';
+            }
+            
+            // === GRAMINE VERSION CHECK ===
+            console.log('=== Checking Gramine version ===');
             let gramineOwner = context.repo.owner;
             
             // Check if the current owner has a gramine fork
@@ -62,69 +74,139 @@ jobs:
             }
             
             // Get Gramine repository default branch and latest commit
-            const { data: repo } = await github.rest.repos.get({
+            const { data: gramineRepo } = await github.rest.repos.get({
               owner: gramineOwner,
               repo: 'gramine'
             });
-            const defaultBranch = repo.default_branch;
+            const gramineBranch = gramineRepo.default_branch;
             
-            const { data: commit } = await github.rest.repos.getCommit({
+            const { data: gramineCommit } = await github.rest.repos.getCommit({
               owner: gramineOwner,
               repo: 'gramine',
-              ref: defaultBranch
+              ref: gramineBranch
             });
             
-            console.log(`Gramine owner: ${gramineOwner}`);
-            console.log(`Gramine default branch: ${defaultBranch}`);
-            console.log(`Latest commit SHA: ${commit.sha}`);
+            const latestGramineSha = gramineCommit.sha;
+            const currentGramineSha = readVersionFile('prebuilt/gramine/VERSION') || readVersionFile('.gramine-version') || '';
+            const gramineChanged = latestGramineSha !== currentGramineSha;
+            
+            console.log(`Gramine: current=${currentGramineSha.substring(0,8) || 'none'}, latest=${latestGramineSha.substring(0,8)}, changed=${gramineChanged}`);
+            
+            // === OPENSSL VERSION CHECK ===
+            console.log('=== Checking OpenSSL version ===');
+            
+            function parseOpenSSLTag(name) {
+              const m = name.match(/^openssl-(\d+)\.(\d+)\.(\d+)([a-z])?$/);
+              if (!m) return null;
+              const major = parseInt(m[1], 10);
+              const minor = parseInt(m[2], 10);
+              const patch = parseInt(m[3], 10);
+              const letter = m[4] ? m[4].charCodeAt(0) : 0;
+              return { name, major, minor, patch, letter };
+            }
+            
+            function isOpenSSLPreRelease(name) {
+              return /-(alpha|beta|pre|rc)/i.test(name);
+            }
+            
+            const opensslTags = await github.paginate(github.rest.repos.listTags, {
+              owner: 'openssl',
+              repo: 'openssl',
+              per_page: 100
+            });
+            const opensslCandidates = opensslTags
+              .map(t => t.name)
+              .filter(n => !isOpenSSLPreRelease(n))
+              .map(parseOpenSSLTag)
+              .filter(Boolean);
+            opensslCandidates.sort((a, b) => {
+              if (a.major !== b.major) return b.major - a.major;
+              if (a.minor !== b.minor) return b.minor - a.minor;
+              if (a.patch !== b.patch) return b.patch - a.patch;
+              return b.letter - a.letter;
+            });
+            
+            const latestOpenSSL = opensslCandidates.length ? opensslCandidates[0].name : null;
+            const currentOpenSSL = readVersionFile('prebuilt/openssl/VERSION');
+            const opensslChanged = latestOpenSSL !== currentOpenSSL;
+            
+            console.log(`OpenSSL: current=${currentOpenSSL || 'none'}, latest=${latestOpenSSL}, changed=${opensslChanged}`);
+            
+            // === NODE.JS VERSION CHECK ===
+            console.log('=== Checking Node.js version ===');
+            
+            function parseNodeTag(name) {
+              const m = name.match(/^v(\d+)\.(\d+)\.(\d+)$/);
+              if (!m) return null;
+              return { name, major: +m[1], minor: +m[2], patch: +m[3] };
+            }
+            
+            function isNodePreRelease(name) {
+              return /-(rc|beta|alpha|nightly)/i.test(name);
+            }
+            
+            let latestNode = null;
+            try {
+              const response = await fetch('https://nodejs.org/dist/index.json');
+              const releases = await response.json();
+              const maxMajor = 22; // GCC 11 compatibility
+              
+              const ltsReleases = releases
+                .filter(r => r.lts && !isNodePreRelease(r.version))
+                .map(r => parseNodeTag(r.version))
+                .filter(Boolean)
+                .filter(v => v.major <= maxMajor)
+                .sort((a, b) => {
+                  if (a.major !== b.major) return b.major - a.major;
+                  if (a.minor !== b.minor) return b.minor - a.minor;
+                  return b.patch - a.patch;
+                });
+              
+              if (ltsReleases.length > 0) {
+                latestNode = ltsReleases[0].name;
+                console.log(`Found latest LTS Node.js: ${latestNode}`);
+              }
+            } catch (error) {
+              console.log(`Failed to fetch from nodejs.org: ${error.message}`);
+            }
+            
+            const currentNode = readVersionFile('prebuilt/nodejs/VERSION');
+            const nodeChanged = latestNode !== currentNode;
+            
+            console.log(`Node.js: current=${currentNode || 'none'}, latest=${latestNode}, changed=${nodeChanged}`);
+            
+            // === DETERMINE IF REBUILD NEEDED ===
+            const forceRebuild = '${{ github.event.inputs.force_rebuild }}' === 'true';
+            const needsRebuild = forceRebuild || gramineChanged || opensslChanged || nodeChanged;
+            
+            console.log(`=== Summary ===`);
+            console.log(`Force rebuild: ${forceRebuild}`);
+            console.log(`Gramine changed: ${gramineChanged}`);
+            console.log(`OpenSSL changed: ${opensslChanged}`);
+            console.log(`Node.js changed: ${nodeChanged}`);
+            console.log(`Needs rebuild: ${needsRebuild}`);
             
             return {
-              owner: gramineOwner,
-              default_branch: defaultBranch,
-              latest_sha: commit.sha
+              needs_rebuild: needsRebuild,
+              gramine_owner: gramineOwner,
+              gramine_sha: latestGramineSha,
+              gramine_changed: gramineChanged,
+              openssl_version: latestOpenSSL,
+              openssl_changed: opensslChanged,
+              node_version: latestNode,
+              node_changed: nodeChanged
             };
 
-      - name: Check for updates
-        id: check_updates
-        run: |
-          LATEST_GRAMINE_SHA="${{ fromJSON(steps.gramine_info.outputs.result).latest_sha }}"
-          echo "Latest Gramine SHA: $LATEST_GRAMINE_SHA"
-          
-          # Check if we have a record of the last built SHA
-          if [ -f .gramine-version ]; then
-            LAST_BUILT_SHA=$(cat .gramine-version)
-            echo "Last built SHA: $LAST_BUILT_SHA"
-          else
-            LAST_BUILT_SHA=""
-            echo "No previous build record found"
-          fi
-          
-          # Determine if we need to rebuild
-          if [ "${{ github.event.inputs.force_rebuild }}" == "true" ]; then
-            echo "Force rebuild requested"
-            echo "needs_rebuild=true" >> $GITHUB_OUTPUT
-          elif [ "$LATEST_GRAMINE_SHA" != "$LAST_BUILT_SHA" ]; then
-            echo "New Gramine version detected"
-            echo "needs_rebuild=true" >> $GITHUB_OUTPUT
-          else
-            echo "No updates detected"
-            echo "needs_rebuild=false" >> $GITHUB_OUTPUT
-          fi
-          
-          echo "gramine_sha=$LATEST_GRAMINE_SHA" >> $GITHUB_OUTPUT
-          echo "gramine_branch=${{ fromJSON(steps.gramine_info.outputs.result).default_branch }}" >> $GITHUB_OUTPUT
-
       - name: Trigger Docker image rebuild
-        if: steps.check_updates.outputs.needs_rebuild == 'true'
+        if: fromJSON(steps.check_versions.outputs.result).needs_rebuild == true
         uses: actions/github-script@v7
         with:
           script: |
-            // Use the repository's default branch for workflow dispatch
+            const result = ${{ steps.check_versions.outputs.result }};
             const defaultBranch = context.payload.repository.default_branch || 'main';
-            const gramineOwner = '${{ fromJSON(steps.gramine_info.outputs.result).owner }}';
-            const gramineSha = '${{ steps.check_updates.outputs.gramine_sha }}';
             
-            console.log(`Triggering build with gramine_owner=${gramineOwner}, gramine_ref=${gramineSha}`);
+            console.log(`Triggering build with gramine_owner=${result.gramine_owner}, gramine_ref=${result.gramine_sha}`);
+            console.log(`Changes detected: Gramine=${result.gramine_changed}, OpenSSL=${result.openssl_changed}, Node.js=${result.node_changed}`);
             
             await github.rest.actions.createWorkflowDispatch({
               owner: context.repo.owner,
@@ -132,24 +214,60 @@ jobs:
               workflow_id: 'build-and-push.yml',
               ref: defaultBranch,
               inputs: {
-                gramine_owner: gramineOwner,
-                gramine_ref: gramineSha
+                gramine_owner: result.gramine_owner,
+                gramine_ref: result.gramine_sha
               }
             });
+            
+            console.log(`Successfully dispatched build-and-push.yml on ${defaultBranch}`);
 
       - name: Create summary
         run: |
-          echo "## Gramine Repository Monitor" >> $GITHUB_STEP_SUMMARY
+          RESULT='${{ steps.check_versions.outputs.result }}'
+          NEEDS_REBUILD=$(echo "$RESULT" | jq -r '.needs_rebuild')
+          GRAMINE_CHANGED=$(echo "$RESULT" | jq -r '.gramine_changed')
+          OPENSSL_CHANGED=$(echo "$RESULT" | jq -r '.openssl_changed')
+          NODE_CHANGED=$(echo "$RESULT" | jq -r '.node_changed')
+          GRAMINE_SHA=$(echo "$RESULT" | jq -r '.gramine_sha')
+          OPENSSL_VERSION=$(echo "$RESULT" | jq -r '.openssl_version')
+          NODE_VERSION=$(echo "$RESULT" | jq -r '.node_version')
+          
+          echo "## Dependency Monitor" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
           echo "### Status" >> $GITHUB_STEP_SUMMARY
-          if [ "${{ steps.check_updates.outputs.needs_rebuild }}" == "true" ]; then
+          
+          if [ "$NEEDS_REBUILD" == "true" ]; then
             echo "✅ **Rebuild triggered**" >> $GITHUB_STEP_SUMMARY
             echo "" >> $GITHUB_STEP_SUMMARY
-            echo "- **Gramine SHA**: \`${{ steps.check_updates.outputs.gramine_sha }}\`" >> $GITHUB_STEP_SUMMARY
-            echo "- **Action**: Docker image rebuild initiated" >> $GITHUB_STEP_SUMMARY
+            echo "### Changes Detected" >> $GITHUB_STEP_SUMMARY
+            
+            if [ "$GRAMINE_CHANGED" == "true" ]; then
+              echo "- **Gramine**: \`${GRAMINE_SHA:0:8}\` (changed)" >> $GITHUB_STEP_SUMMARY
+            else
+              echo "- **Gramine**: \`${GRAMINE_SHA:0:8}\` (no change)" >> $GITHUB_STEP_SUMMARY
+            fi
+            
+            if [ "$OPENSSL_CHANGED" == "true" ]; then
+              echo "- **OpenSSL**: \`$OPENSSL_VERSION\` (changed)" >> $GITHUB_STEP_SUMMARY
+            else
+              echo "- **OpenSSL**: \`$OPENSSL_VERSION\` (no change)" >> $GITHUB_STEP_SUMMARY
+            fi
+            
+            if [ "$NODE_CHANGED" == "true" ]; then
+              echo "- **Node.js**: \`$NODE_VERSION\` (changed)" >> $GITHUB_STEP_SUMMARY
+            else
+              echo "- **Node.js**: \`$NODE_VERSION\` (no change)" >> $GITHUB_STEP_SUMMARY
+            fi
+            
+            echo "" >> $GITHUB_STEP_SUMMARY
+            echo "**Action**: Docker image rebuild initiated" >> $GITHUB_STEP_SUMMARY
           else
             echo "ℹ️ **No updates detected**" >> $GITHUB_STEP_SUMMARY
             echo "" >> $GITHUB_STEP_SUMMARY
-            echo "- **Current Gramine SHA**: \`${{ steps.check_updates.outputs.gramine_sha }}\`" >> $GITHUB_STEP_SUMMARY
-            echo "- **Action**: No rebuild needed" >> $GITHUB_STEP_SUMMARY
+            echo "### Current Versions" >> $GITHUB_STEP_SUMMARY
+            echo "- **Gramine**: \`${GRAMINE_SHA:0:8}\`" >> $GITHUB_STEP_SUMMARY
+            echo "- **OpenSSL**: \`$OPENSSL_VERSION\`" >> $GITHUB_STEP_SUMMARY
+            echo "- **Node.js**: \`$NODE_VERSION\`" >> $GITHUB_STEP_SUMMARY
+            echo "" >> $GITHUB_STEP_SUMMARY
+            echo "**Action**: No rebuild needed" >> $GITHUB_STEP_SUMMARY
           fi

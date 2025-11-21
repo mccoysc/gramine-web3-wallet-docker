@@ -33,9 +33,6 @@ on:
         required: false
         type: string
         default: ''
-  schedule:
-    # Run every 5 minutes to check for updates
-    - cron: '*/5 * * * *'
 
 # Global repository-wide concurrency control
 # Ensures only one workflow runs at a time across the entire repository
