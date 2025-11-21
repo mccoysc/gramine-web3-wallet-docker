@@ -359,52 +359,71 @@ jobs:
             const currentGramineSha = readVersionFile('prebuilt/gramine/VERSION') || 
                                       readVersionFile('.gramine-version') || '';
             
-            // Check if prebuilt Gramine exists in Releases
+            // Check if prebuilt Gramine exists in Releases (for informational purposes)
             const gramineTag = `prebuilt-gramine-${latestGramineShaShort}`;
             const gramineAsset = `gramine-install-${latestGramineShaShort}.tar.gz`;
             const gramineExists = await releaseAssetExists(gramineTag, gramineAsset);
             
-            const needsGramine = forceRebuild || (!gramineExists && latestGramineSha !== currentGramineSha);
+            // Determine if Gramine version changed or if gramine_ref was explicitly provided
+            const gramineInputProvided = !!(inputGramineRef && inputGramineRef !== '');
+            const gramineChanged = latestGramineSha !== currentGramineSha;
+            
+            // Always recompile Gramine when version changes or when explicitly requested
+            // Do NOT skip compilation just because prebuilt exists
+            const needsGramine = forceRebuild || gramineInputProvided || gramineChanged;
+            
             if (gramineExists) {
-              console.log(`Gramine: prebuilt found in Releases at ${gramineTag}, skipping build`);
+              console.log(`Gramine: prebuilt found in Releases at ${gramineTag} (will still recompile if version changed)`);
             }
-            console.log(`Gramine: current=${currentGramineSha.substring(0,8) || 'none'}, latest=${latestGramineShaShort}, exists_in_releases=${gramineExists}, needs_build=${needsGramine}`);
+            console.log(`Gramine: current=${currentGramineSha.substring(0,8) || 'none'}, latest=${latestGramineShaShort}, changed=${gramineChanged}, input_provided=${gramineInputProvided}, exists_in_releases=${gramineExists}, needs_build=${needsGramine}`);
             
             // 2. Check OpenSSL version
             console.log('Checking OpenSSL version...');
             const latestOpenSSL = await getLatestOpenSSL(github);
             const currentOpenSSL = readVersionFile('prebuilt/openssl/VERSION');
             
-            // Check if prebuilt OpenSSL exists in Releases
+            // Check if prebuilt OpenSSL exists in Releases (for informational purposes)
             const opensslTag = `prebuilt-openssl-${latestOpenSSL}`;
             const opensslAsset = `openssl-install-openssl-${latestOpenSSL}.tar.gz`;
             const opensslExists = await releaseAssetExists(opensslTag, opensslAsset);
             
-            const needsOpenSSL = forceRebuild || (!opensslExists && latestOpenSSL !== currentOpenSSL);
+            // Determine if OpenSSL version changed
+            const opensslChanged = latestOpenSSL !== currentOpenSSL;
+            
+            // Always recompile OpenSSL when version changes
+            const needsOpenSSL = forceRebuild || opensslChanged;
+            
             if (opensslExists) {
-              console.log(`OpenSSL: prebuilt found in Releases at ${opensslTag}, skipping build`);
+              console.log(`OpenSSL: prebuilt found in Releases at ${opensslTag} (will still recompile if version changed)`);
             }
-            console.log(`OpenSSL: current=${currentOpenSSL || 'none'}, latest=${latestOpenSSL || 'unknown'}, exists_in_releases=${opensslExists}, needs_build=${needsOpenSSL}`);
+            console.log(`OpenSSL: current=${currentOpenSSL || 'none'}, latest=${latestOpenSSL || 'unknown'}, changed=${opensslChanged}, exists_in_releases=${opensslExists}, needs_build=${needsOpenSSL}`);
             
             // 3. Check Node.js version
             console.log('Checking Node.js version...');
             const latestNode = await getLatestNode(github);
             const currentNode = readVersionFile('prebuilt/nodejs/VERSION');
             
-            // Check if prebuilt Node.js exists in Releases
+            // Check if prebuilt Node.js exists in Releases (for informational purposes)
             const nodeTag = `prebuilt-${latestNode}`;
             const nodeAsset = `node-install-${latestNode}.tar.gz`;
             const nodeExists = await releaseAssetExists(nodeTag, nodeAsset);
             
-            const needsNode = forceRebuild || (!nodeExists && latestNode !== currentNode);
+            // Determine if Node.js version changed
+            const nodeChanged = latestNode !== currentNode;
+            
+            // Always recompile Node.js when version changes
+            const needsNode = forceRebuild || nodeChanged;
+            
             if (nodeExists) {
-              console.log(`Node.js: prebuilt found in Releases at ${nodeTag}, skipping build`);
+              console.log(`Node.js: prebuilt found in Releases at ${nodeTag} (will still recompile if version changed)`);
             }
-            console.log(`Node.js: current=${currentNode || 'none'}, latest=${latestNode || 'unknown'}, exists_in_releases=${nodeExists}, needs_build=${needsNode}`);
+            console.log(`Node.js: current=${currentNode || 'none'}, latest=${latestNode || 'unknown'}, changed=${nodeChanged}, exists_in_releases=${nodeExists}, needs_build=${needsNode}`);
             
             // 4. Determine if image needs rebuild
-            const needsImage = dockerfileChanged || needsGramine || needsOpenSSL || needsNode;
-            console.log(`Docker image needs rebuild: ${needsImage} (dockerfile_changed=${dockerfileChanged}, deps_changed=${needsGramine || needsOpenSSL || needsNode})`);
+            // Use version change signals instead of needs_* flags to ensure image rebuilds
+            // when dependencies change, even if prebuilt assets exist
+            const needsImage = dockerfileChanged || gramineChanged || opensslChanged || nodeChanged;
+            console.log(`Docker image needs rebuild: ${needsImage} (dockerfile_changed=${dockerfileChanged}, gramine_changed=${gramineChanged}, openssl_changed=${opensslChanged}, node_changed=${nodeChanged})`);
             
             // Set outputs
             core.setOutput('needs_gramine', needsGramine.toString());
