@@ -17,7 +17,10 @@ ARG GRAMINE_REF=master
 ARG USE_PREBUILT=false
 
 # Copy prebuilt directory (downloaded by workflow before build)
-COPY prebuilt/ /tmp/prebuilt/
+# Split by component to reduce layer size when only one component changes
+COPY prebuilt/gramine/ /tmp/prebuilt/gramine/
+COPY prebuilt/openssl/ /tmp/prebuilt/openssl/
+COPY prebuilt/nodejs/ /tmp/prebuilt/nodejs/
 
 # Check if we should use prebuilt Gramine
 RUN if [ "$USE_PREBUILT" = "true" ] && [ -f /tmp/prebuilt/gramine/gramine-install.tar.gz ]; then \
@@ -96,12 +99,19 @@ LABEL org.opencontainers.image.licenses=LGPL-3.0
 # Avoid interactive prompts during package installation
 ENV DEBIAN_FRONTEND=noninteractive
 
-# Install runtime dependencies (including Python deps for Gramine CLI tools and build tools for testing)
+# Install core system tools (rarely changes)
 RUN apt-get update && apt-get install -y --no-install-recommends \
     ca-certificates \
     curl \
     wget \
     gnupg \
+    vim \
+    lrzsz \
+    netcat-openbsd \
+    && rm -rf /var/lib/apt/lists/*
+
+# Install Python runtime and dependencies (changes occasionally)
+RUN apt-get update && apt-get install -y --no-install-recommends \
     python3 \
     python3-click \
     python3-jinja2 \
@@ -112,10 +122,10 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     python3-cryptography \
     python3-pip \
     python3-venv \
-    libcurl4 \
-    libprotobuf-c1 \
-    vim \
-    lrzsz \
+    && rm -rf /var/lib/apt/lists/*
+
+# Install build tools and development libraries (changes occasionally)
+RUN apt-get update && apt-get install -y --no-install-recommends \
     build-essential \
     gcc \
     g++ \
@@ -126,7 +136,8 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     libtool \
     pkg-config \
     git \
-    netcat-openbsd \
+    libcurl4 \
+    libprotobuf-c1 \
     && rm -rf /var/lib/apt/lists/*
 
 # Install Intel SGX runtime dependencies and aesmd service (following Gramine documentation)
@@ -185,7 +196,6 @@ RUN ldconfig
 
 # Install OpenSSL (prebuilt or system)
 ARG USE_PREBUILT=false
-COPY prebuilt/ /tmp/prebuilt/
 RUN if [ "$USE_PREBUILT" = "true" ] && [ -f /tmp/prebuilt/openssl/openssl-install.tar.gz ]; then \
         echo "Using prebuilt OpenSSL"; \
         cd /opt; \
@@ -220,7 +230,10 @@ RUN if [ "$USE_PREBUILT" = "true" ] && [ -f /tmp/prebuilt/nodejs/node-install.ta
 
 # Create wrapper scripts for openssl and node to limit OpenSSL library path scope
 # This ensures only openssl CLI and Node.js use the custom OpenSSL, not other system binaries
-RUN rm -f /usr/local/bin/node /usr/local/bin/npm /usr/local/bin/npx /usr/local/bin/openssl && \
+# Split into separate layers to reduce size when scripts change
+
+# Create openssl wrapper
+RUN rm -f /usr/local/bin/openssl && \
     echo '#!/bin/sh' > /usr/local/bin/openssl && \
     echo 'if [ -x /opt/openssl-install/bin/openssl ]; then' >> /usr/local/bin/openssl && \
     echo '  export LD_LIBRARY_PATH="/opt/openssl-install/lib64:/opt/openssl-install/lib${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"' >> /usr/local/bin/openssl && \
@@ -228,7 +241,10 @@ RUN rm -f /usr/local/bin/node /usr/local/bin/npm /usr/local/bin/npx /usr/local/b
     echo 'else' >> /usr/local/bin/openssl && \
     echo '  exec /usr/bin/openssl "$@"' >> /usr/local/bin/openssl && \
     echo 'fi' >> /usr/local/bin/openssl && \
-    chmod +x /usr/local/bin/openssl && \
+    chmod +x /usr/local/bin/openssl
+
+# Create node wrapper
+RUN rm -f /usr/local/bin/node && \
     echo '#!/bin/sh' > /usr/local/bin/node && \
     echo 'if [ -d /opt/openssl-install ]; then' >> /usr/local/bin/node && \
     echo '  export LD_LIBRARY_PATH="/opt/openssl-install/lib64:/opt/openssl-install/lib${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"' >> /usr/local/bin/node && \
@@ -238,7 +254,10 @@ RUN rm -f /usr/local/bin/node /usr/local/bin/npm /usr/local/bin/npx /usr/local/b
     echo 'else' >> /usr/local/bin/node && \
     echo '  exec /usr/bin/node "$@"' >> /usr/local/bin/node && \
     echo 'fi' >> /usr/local/bin/node && \
-    chmod +x /usr/local/bin/node && \
+    chmod +x /usr/local/bin/node
+
+# Create npm wrapper
+RUN rm -f /usr/local/bin/npm && \
     echo '#!/bin/sh' > /usr/local/bin/npm && \
     echo 'if [ -d /opt/openssl-install ]; then' >> /usr/local/bin/npm && \
     echo '  export LD_LIBRARY_PATH="/opt/openssl-install/lib64:/opt/openssl-install/lib${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"' >> /usr/local/bin/npm && \
@@ -248,7 +267,10 @@ RUN rm -f /usr/local/bin/node /usr/local/bin/npm /usr/local/bin/npx /usr/local/b
     echo 'else' >> /usr/local/bin/npm && \
     echo '  exec /usr/bin/npm "$@"' >> /usr/local/bin/npm && \
     echo 'fi' >> /usr/local/bin/npm && \
-    chmod +x /usr/local/bin/npm && \
+    chmod +x /usr/local/bin/npm
+
+# Create npx wrapper
+RUN rm -f /usr/local/bin/npx && \
     echo '#!/bin/sh' > /usr/local/bin/npx && \
     echo 'if [ -d /opt/openssl-install ]; then' >> /usr/local/bin/npx && \
     echo '  export LD_LIBRARY_PATH="/opt/openssl-install/lib64:/opt/openssl-install/lib${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"' >> /usr/local/bin/npx && \
