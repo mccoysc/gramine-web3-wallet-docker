@@ -1274,39 +1274,49 @@ jobs:
           
           # Check if /data directory exists
           if [ -d /data ]; then
-            echo "/data directory exists, configuring Docker to use it for image storage"
+            echo "/data directory exists, checking Docker configuration"
             
-            # Create Docker data directory in /data if it doesn't exist
-            sudo mkdir -p /data/docker
+            # Check current Docker data-root configuration
+            CURRENT_DATA_ROOT=$(sudo docker info --format '{{.DockerRootDir}}' 2>/dev/null || echo "")
             
-            # Check if Docker daemon.json exists
-            if [ ! -f /etc/docker/daemon.json ]; then
-              echo "Creating /etc/docker/daemon.json"
-              echo '{}' | sudo tee /etc/docker/daemon.json > /dev/null
-            fi
-            
-            # Update Docker daemon configuration to use /data/docker as data-root
-            sudo cat /etc/docker/daemon.json | \
-              jq '. + {"data-root": "/data/docker"}' | \
-              sudo tee /etc/docker/daemon.json.tmp > /dev/null
-            sudo mv /etc/docker/daemon.json.tmp /etc/docker/daemon.json
-            
-            # Restart Docker daemon to apply changes
-            echo "Restarting Docker daemon..."
-            sudo systemctl restart docker
-            
-            # Wait for Docker to be ready
-            for i in {1..30}; do
-              if sudo docker info > /dev/null 2>&1; then
-                echo "Docker is ready"
-                break
+            if [ "$CURRENT_DATA_ROOT" = "/data/docker" ]; then
+              echo "Docker is already configured to use /data/docker, skipping configuration"
+            else
+              echo "Current Docker Root Dir: $CURRENT_DATA_ROOT"
+              echo "Configuring Docker to use /data/docker for image storage"
+              
+              # Create Docker data directory in /data if it doesn't exist
+              sudo mkdir -p /data/docker
+              
+              # Check if Docker daemon.json exists
+              if [ ! -f /etc/docker/daemon.json ]; then
+                echo "Creating /etc/docker/daemon.json"
+                echo '{}' | sudo tee /etc/docker/daemon.json > /dev/null
               fi
-              echo "Waiting for Docker to be ready... ($i/30)"
-              sleep 1
-            done
-            
-            echo "Docker configured to use /data/docker for image storage"
-            sudo docker info | grep "Docker Root Dir" || true
+              
+              # Update Docker daemon configuration to use /data/docker as data-root
+              sudo cat /etc/docker/daemon.json | \
+                jq '. + {"data-root": "/data/docker"}' | \
+                sudo tee /etc/docker/daemon.json.tmp > /dev/null
+              sudo mv /etc/docker/daemon.json.tmp /etc/docker/daemon.json
+              
+              # Restart Docker daemon to apply changes
+              echo "Restarting Docker daemon..."
+              sudo systemctl restart docker
+              
+              # Wait for Docker to be ready
+              for i in {1..30}; do
+                if sudo docker info > /dev/null 2>&1; then
+                  echo "Docker is ready"
+                  break
+                fi
+                echo "Waiting for Docker to be ready... ($i/30)"
+                sleep 1
+              done
+              
+              echo "Docker configured to use /data/docker for image storage"
+              sudo docker info | grep "Docker Root Dir" || true
+            fi
           else
             echo "/data directory does not exist, using default Docker configuration"
           fi
