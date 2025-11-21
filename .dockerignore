@@ -1,0 +1,46 @@
+# Git files
+.git
+.gitignore
+.gitattributes
+
+# GitHub Actions
+.github
+
+# Documentation
+*.md
+docs/
+Documentation/
+
+# Development files
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# Test files
+tests/
+test/
+*.test.js
+*.spec.js
+
+# Build artifacts (keep prebuilt/ as it's needed)
+build/
+dist/
+*.o
+*.a
+*.so.tmp
+*.pyc
+__pycache__/
+
+# Logs
+*.log
+logs/
+
+# Temporary files
+tmp/
+temp/
+*.tmp
+
+# CI artifacts
+.devin/
