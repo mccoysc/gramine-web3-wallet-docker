@@ -12,6 +12,15 @@ on:
         type: boolean
         default: false
 
+# Global repository-wide concurrency control
+# Ensures only one workflow runs at a time across the entire repository
+concurrency:
+  group: repo-wide-mutex-${{ github.repository }}
+  cancel-in-progress: false
+
+# Timeout to prevent stuck runs from holding the mutex indefinitely
+timeout-minutes: 60
+
 jobs:
   check-gramine-updates:
     runs-on: ubuntu-latest
@@ -19,9 +28,6 @@ jobs:
       contents: write
       packages: write
       actions: write
-    concurrency:
-      group: monitor-gramine-${{ github.ref }}
-      cancel-in-progress: true
       
     steps:
       - name: Checkout repository
