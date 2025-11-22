@@ -1458,6 +1458,7 @@ jobs:
           export RA_TLS_ALLOW_OUTDATED_TCB_INSECURE=1
           export RA_TLS_ALLOW_HW_CONFIG_NEEDED=1
           export RA_TLS_ALLOW_SW_HARDENING_NEEDED=1
+          export GRAMINE_LD_PRELOAD=file:/usr/local/lib/x86_64-linux-gnu/libratls-quote-verify.so
           EDMM=1 make
           
           # echo ""
