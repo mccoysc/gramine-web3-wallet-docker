@@ -191,22 +191,50 @@ gramine-web3-wallet-docker/
 | `NODE_ENV` | Node.js 环境 | `production` | 否 |
 | `PCCS_API_KEY` | 用于 DCAP 认证的 Intel PCCS API 密钥 | 空 | DCAP 推荐 |
 
-### RA-TLS 环境变量
+### RA-TLS 配置
 
-本镜像通过透明的 LD_PRELOAD 注入提供自动 RA-TLS（远程认证 TLS）支持。以下环境变量控制 RA-TLS 行为：
+本 Docker 镜像包含用于远程认证的 Gramine RA-TLS 库。要在应用程序中启用 RA-TLS，请使用 Gramine manifest 处理提供的自动注入功能。
 
-| 变量名 | 说明 | 默认值 | 是否必需 |
-|--------|------|--------|----------|
-| `DISABLE_RATLS_PRELOAD` | 禁用自动 RA-TLS LD_PRELOAD 注入 | 未设置 | 否 |
-| `RATLS_PRELOAD_PATH` | libratls-quote-verify.so 的自定义路径 | 自动检测 | 否 |
+**推荐：通过 GRAMINE_LD_PRELOAD 自动注入**
 
-**RA-TLS 自动注入**：
-- 镜像会自动将 `libratls-quote-verify.so` 注入到使用 DCAP 认证的 Gramine manifest 文件中（`sgx.remote_attestation = "dcap"`）
-- 这使得应用程序无需手动修改 manifest 即可实现透明的 RA-TLS quote 验证
-- 要禁用自动注入，请设置 `DISABLE_RATLS_PRELOAD=1`
-- 该库会在 manifest 处理期间自动添加到 `loader.env.LD_PRELOAD` 和 `sgx.trusted_files`
+Gramine manifest 处理器支持自动 RA-TLS 库注入。在运行 `gramine-manifest` 之前设置 `GRAMINE_LD_PRELOAD` 环境变量：
 
-**注意**：RA-TLS 验证环境变量（如 `RATLS_ENABLE_VERIFY`、`RA_TLS_MRSIGNER` 等）是 Gramine RA-TLS 库的一部分，应在应用程序的 manifest 文件或运行时环境中配置。详细信息请参阅 [mccoysc/gramine 仓库文档](https://github.com/mccoysc/gramine)。
+```bash
+# 查找库路径（常见位置）
+# /usr/local/lib/x86_64-linux-gnu/libratls-quote-verify.so
+# /usr/local/lib/libratls-quote-verify.so
+# 或使用：ldconfig -p | grep libratls-quote-verify.so
+
+export GRAMINE_LD_PRELOAD="file:/usr/local/lib/x86_64-linux-gnu/libratls-quote-verify.so"
+gramine-manifest my-app.manifest.template my-app.manifest
+```
+
+这会自动：
+- 将库添加到 `sgx.trusted_files`
+- 将 `loader.env.LD_PRELOAD` 设置为库路径
+- 设置 `loader.env.RATLS_ENABLE_VERIFY=1`
+- 创建必要的 `fs.mounts` 条目
+
+**手动配置**
+
+或者，在 manifest 模板中手动配置 LD_PRELOAD：
+
+```toml
+sgx.remote_attestation = "dcap"
+
+loader.env.LD_PRELOAD = "/usr/local/lib/x86_64-linux-gnu/libratls-quote-verify.so"
+loader.env.RATLS_ENABLE_VERIFY = "1"
+
+sgx.trusted_files = [
+    "file:/usr/local/lib/x86_64-linux-gnu/libratls-quote-verify.so",
+]
+```
+
+**RA-TLS 环境变量**
+
+有关 RA-TLS 环境变量的完整文档（包括 `RATLS_ENABLE_VERIFY`、`RATLS_REQUIRE_PEER_CERT`、`RA_TLS_MRSIGNER`、`RA_TLS_MRENCLAVE` 等），请参阅 [Gramine RA-TLS 文档](https://github.com/mccoysc/gramine#ra-tls-quick-start)。
+
+**历史遗留说明**：本仓库以前包含用于自动注入的 `ratls_inject.py` 和 `patch-gramine-manifest.sh` 脚本。这些脚本现已禁用（在 Dockerfile 中注释掉），并将在未来版本中删除。环境变量 `DISABLE_RATLS_PRELOAD` 和 `RATLS_PRELOAD_PATH` 已弃用且不再使用。请改用 `GRAMINE_LD_PRELOAD`。
 
 ### API 密钥配置
 

@@ -191,22 +191,50 @@ gramine-web3-wallet-docker/
 | `NODE_ENV` | Node.js environment | `production` | No |
 | `PCCS_API_KEY` | Intel PCCS API key for DCAP attestation | Empty | Recommended for DCAP |
 
-### RA-TLS Environment Variables
+### RA-TLS Configuration
 
-This image includes automatic RA-TLS (Remote Attestation TLS) support through transparent LD_PRELOAD injection. The following environment variables control RA-TLS behavior:
+This Docker image includes the Gramine RA-TLS libraries for remote attestation. To enable RA-TLS in your applications, use the automatic injection feature provided by Gramine's manifest processing.
 
-| Variable | Description | Default | Required |
-|----------|-------------|---------|----------|
-| `DISABLE_RATLS_PRELOAD` | Disable automatic RA-TLS LD_PRELOAD injection | Not set | No |
-| `RATLS_PRELOAD_PATH` | Custom path to libratls-quote-verify.so | Auto-detected | No |
+**Recommended: Automatic Injection via GRAMINE_LD_PRELOAD**
 
-**RA-TLS Automatic Injection**:
-- The image automatically injects `libratls-quote-verify.so` into Gramine manifest files that use DCAP attestation (`sgx.remote_attestation = "dcap"`)
-- This enables transparent RA-TLS quote verification without manual manifest modifications
-- To disable automatic injection, set `DISABLE_RATLS_PRELOAD=1`
-- The library is automatically added to `loader.env.LD_PRELOAD` and `sgx.trusted_files` during manifest processing
+The Gramine manifest processor supports automatic RA-TLS library injection. Set the `GRAMINE_LD_PRELOAD` environment variable before running `gramine-manifest`:
 
-**Note**: The RA-TLS verification environment variables (like `RATLS_ENABLE_VERIFY`, `RA_TLS_MRSIGNER`, etc.) are part of the Gramine RA-TLS library and should be configured in your application's manifest file or runtime environment. See the [mccoysc/gramine repository documentation](https://github.com/mccoysc/gramine) for details on RA-TLS verification configuration.
+```bash
+# Find the library path (common locations)
+# /usr/local/lib/x86_64-linux-gnu/libratls-quote-verify.so
+# /usr/local/lib/libratls-quote-verify.so
+# Or use: ldconfig -p | grep libratls-quote-verify.so
+
+export GRAMINE_LD_PRELOAD="file:/usr/local/lib/x86_64-linux-gnu/libratls-quote-verify.so"
+gramine-manifest my-app.manifest.template my-app.manifest
+```
+
+This automatically:
+- Adds the library to `sgx.trusted_files`
+- Sets `loader.env.LD_PRELOAD` to the library path
+- Sets `loader.env.RATLS_ENABLE_VERIFY=1`
+- Creates necessary `fs.mounts` entries
+
+**Manual Configuration**
+
+Alternatively, configure LD_PRELOAD manually in your manifest template:
+
+```toml
+sgx.remote_attestation = "dcap"
+
+loader.env.LD_PRELOAD = "/usr/local/lib/x86_64-linux-gnu/libratls-quote-verify.so"
+loader.env.RATLS_ENABLE_VERIFY = "1"
+
+sgx.trusted_files = [
+    "file:/usr/local/lib/x86_64-linux-gnu/libratls-quote-verify.so",
+]
+```
+
+**RA-TLS Environment Variables**
+
+For complete documentation of RA-TLS environment variables (including `RATLS_ENABLE_VERIFY`, `RATLS_REQUIRE_PEER_CERT`, `RA_TLS_MRSIGNER`, `RA_TLS_MRENCLAVE`, etc.), see the [Gramine RA-TLS documentation](https://github.com/mccoysc/gramine#ra-tls-quick-start).
+
+**Legacy Note**: This repository previously contained `ratls_inject.py` and `patch-gramine-manifest.sh` scripts for auto-injection. These scripts are now disabled (commented out in Dockerfile) and will be removed in a future release. The environment variables `DISABLE_RATLS_PRELOAD` and `RATLS_PRELOAD_PATH` are deprecated and not used. Please use `GRAMINE_LD_PRELOAD` instead.
 
 ### API Key Configuration
 
