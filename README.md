@@ -231,6 +231,119 @@ PCCS_API_KEY=your-api-key-here
 - If API key is not configured, PCCS will still start but cannot fetch latest certificates from Intel
 - For development and testing environments, API key configuration is optional
 
+### RA-TLS Configuration
+
+This image does not automatically inject RA-TLS libraries. To enable RA-TLS quote verification in your applications, you must configure it manually in your Gramine manifest file.
+
+**Manual Configuration Example**:
+
+Add the following to your manifest template (`.manifest.template`):
+
+```toml
+# Enable DCAP remote attestation
+sgx.remote_attestation = "dcap"
+
+# Load RA-TLS verification library via LD_PRELOAD
+loader.env.LD_PRELOAD = "libratls-quote-verify.so"
+
+# Add the library to trusted files
+sgx.trusted_files = [
+    # ... other trusted files ...
+    "file:/usr/local/lib/x86_64-linux-gnu/libratls-quote-verify.so",
+]
+```
+
+**RA-TLS Verification Environment Variables**:
+
+Configure these in your manifest's `loader.env` section to control verification behavior:
+
+- `RATLS_ENABLE_VERIFY` - Set to `1` to enable RA-TLS quote verification
+- `RA_TLS_MRSIGNER` - Expected MRSIGNER value (hex string)
+- `RA_TLS_MRENCLAVE` - Expected MRENCLAVE value (hex string)
+- `RA_TLS_ISV_PROD_ID` - Expected ISV_PROD_ID (decimal string)
+- `RA_TLS_ISV_SVN` - Expected ISV_SVN (decimal string)
+- `RA_TLS_ALLOW_OUTDATED_TCB_INSECURE` - Allow outdated TCB (insecure, testing only)
+- `RA_TLS_ALLOW_DEBUG_ENCLAVE_INSECURE` - Allow debug enclaves (insecure, testing only)
+
+For complete RA-TLS documentation, see the [Gramine attestation documentation](https://github.com/mccoysc/gramine/blob/master/Documentation/attestation.rst).
+
+### SGX Services Configuration
+
+The Docker image includes three critical SGX services for DCAP remote attestation:
+
+#### 1. aesmd (Architectural Enclave Service Manager)
+
+**Purpose**: Manages SGX architectural enclaves (Quoting Enclave, Provisioning Enclave, etc.) required for attestation.
+
+**Installation Details**:
+- Package: `sgx-aesm-service` (not `libsgx-aesm-service`)
+- Plugins: `libsgx-aesm-launch-plugin`, `libsgx-aesm-pce-plugin`, `libsgx-aesm-epid-plugin`, `libsgx-aesm-quote-ex-plugin`, `libsgx-aesm-ecdsa-plugin`
+- Binary location: `/opt/intel/sgx-aesm-service/aesm/aesm_service`
+- Socket: `/var/run/aesmd/aesm.socket`
+
+**Startup**: The entrypoint script automatically starts aesmd in the background without systemd:
+```bash
+LD_LIBRARY_PATH=/opt/intel/sgx-aesm-service/aesm /opt/intel/sgx-aesm-service/aesm/aesm_service &
+```
+
+**Verification**: Check if aesmd is running:
+```bash
+# Inside container
+test -S /var/run/aesmd/aesm.socket && echo "aesmd is running" || echo "aesmd not running"
+```
+
+#### 2. PCCS (Provisioning Certificate Caching Service)
+
+**Purpose**: Caches SGX provisioning certificates from Intel PCS (Provisioning Certificate Service) to reduce network latency and provide offline attestation support.
+
+**Installation Details**:
+- Package: `sgx-dcap-pccs`
+- Installation path: `/opt/intel/sgx-dcap-pccs`
+- Configuration: `/opt/intel/sgx-dcap-pccs/config/default.json`
+- Ports: HTTP 8080, HTTPS 8081
+
+**Startup**: Conditionally started by entrypoint script when `PCCS_API_KEY` is set:
+```bash
+# Only starts if PCCS_API_KEY environment variable is provided
+if [ -n "$PCCS_API_KEY" ]; then
+    cd /opt/intel/sgx-dcap-pccs
+    node pccs_server.js &
+fi
+```
+
+**Configuration**: The entrypoint script automatically injects the API key from the `PCCS_API_KEY` environment variable into the PCCS configuration file.
+
+#### 3. QPL (Quote Provider Library) Configuration
+
+**Purpose**: Configures how Gramine applications fetch attestation collateral (certificates, CRLs, TCB info).
+
+**Configuration File**: `/etc/sgx_default_qcnl.conf`
+
+**Behavior**:
+- **When PCCS_API_KEY is set**: QPL is configured to use the local PCCS instance:
+  ```json
+  {
+    "pccs_url": "https://127.0.0.1:8081/sgx/certification/v4/",
+    "use_secure_cert": false,
+    "collateral_service": "https://api.trustedservices.intel.com/sgx/certification/v4/",
+    "retry_times": 6,
+    "retry_delay": 10
+  }
+  ```
+  This allows aesmd to fetch attestation collateral from the local PCCS, which in turn uses the API key to fetch from Intel PCS.
+
+- **When PCCS_API_KEY is not set**: QPL is configured to use Intel PCS directly:
+  ```json
+  {
+    "pccs_url": "https://api.trustedservices.intel.com/sgx/certification/v4/",
+    "use_secure_cert": true,
+    "collateral_service": "https://api.trustedservices.intel.com/sgx/certification/v4/"
+  }
+  ```
+  This requires direct network access to Intel's servers during attestation.
+
+**Note**: The aesmd service does not directly use the PCCS_API_KEY. Instead, aesmd uses QPL to connect to PCCS, and PCCS uses the API key to fetch certificates from Intel PCS.
+
 ## Pre-installed Tools
 
 The image includes the following pre-installed tools:

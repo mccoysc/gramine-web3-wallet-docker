@@ -231,6 +231,119 @@ PCCS_API_KEY=your-api-key-here
 - 如果不配置 API 密钥，PCCS 仍会启动，但无法从 Intel 获取最新证书
 - 对于开发和测试环境，可以不配置 API 密钥
 
+### RA-TLS 配置
+
+本镜像不会自动注入 RA-TLS 库。要在应用程序中启用 RA-TLS quote 验证，您必须在 Gramine manifest 文件中手动配置。
+
+**手动配置示例**：
+
+在您的 manifest 模板文件（`.manifest.template`）中添加以下内容：
+
+```toml
+# 启用 DCAP 远程认证
+sgx.remote_attestation = "dcap"
+
+# 通过 LD_PRELOAD 加载 RA-TLS 验证库
+loader.env.LD_PRELOAD = "libratls-quote-verify.so"
+
+# 将库添加到可信文件列表
+sgx.trusted_files = [
+    # ... 其他可信文件 ...
+    "file:/usr/local/lib/x86_64-linux-gnu/libratls-quote-verify.so",
+]
+```
+
+**RA-TLS 验证环境变量**：
+
+在 manifest 的 `loader.env` 部分配置这些变量以控制验证行为：
+
+- `RATLS_ENABLE_VERIFY` - 设置为 `1` 启用 RA-TLS quote 验证
+- `RA_TLS_MRSIGNER` - 期望的 MRSIGNER 值（十六进制字符串）
+- `RA_TLS_MRENCLAVE` - 期望的 MRENCLAVE 值（十六进制字符串）
+- `RA_TLS_ISV_PROD_ID` - 期望的 ISV_PROD_ID（十进制字符串）
+- `RA_TLS_ISV_SVN` - 期望的 ISV_SVN（十进制字符串）
+- `RA_TLS_ALLOW_OUTDATED_TCB_INSECURE` - 允许过时的 TCB（不安全，仅用于测试）
+- `RA_TLS_ALLOW_DEBUG_ENCLAVE_INSECURE` - 允许调试飞地（不安全，仅用于测试）
+
+完整的 RA-TLS 文档请参阅 [Gramine 认证文档](https://github.com/mccoysc/gramine/blob/master/Documentation/attestation.rst)。
+
+### SGX 服务配置
+
+Docker 镜像包含三个用于 DCAP 远程认证的关键 SGX 服务：
+
+#### 1. aesmd (架构飞地服务管理器)
+
+**用途**：管理认证所需的 SGX 架构飞地（Quoting Enclave、Provisioning Enclave 等）。
+
+**安装详情**：
+- 软件包：`sgx-aesm-service`（不是 `libsgx-aesm-service`）
+- 插件：`libsgx-aesm-launch-plugin`、`libsgx-aesm-pce-plugin`、`libsgx-aesm-epid-plugin`、`libsgx-aesm-quote-ex-plugin`、`libsgx-aesm-ecdsa-plugin`
+- 二进制文件位置：`/opt/intel/sgx-aesm-service/aesm/aesm_service`
+- Socket：`/var/run/aesmd/aesm.socket`
+
+**启动方式**：entrypoint 脚本在后台自动启动 aesmd，无需 systemd：
+```bash
+LD_LIBRARY_PATH=/opt/intel/sgx-aesm-service/aesm /opt/intel/sgx-aesm-service/aesm/aesm_service &
+```
+
+**验证**：检查 aesmd 是否运行：
+```bash
+# 在容器内
+test -S /var/run/aesmd/aesm.socket && echo "aesmd 正在运行" || echo "aesmd 未运行"
+```
+
+#### 2. PCCS (配置证书缓存服务)
+
+**用途**：缓存来自 Intel PCS（配置证书服务）的 SGX 配置证书，以减少网络延迟并提供离线认证支持。
+
+**安装详情**：
+- 软件包：`sgx-dcap-pccs`
+- 安装路径：`/opt/intel/sgx-dcap-pccs`
+- 配置文件：`/opt/intel/sgx-dcap-pccs/config/default.json`
+- 端口：HTTP 8080、HTTPS 8081
+
+**启动方式**：当设置 `PCCS_API_KEY` 时，entrypoint 脚本会条件性启动：
+```bash
+# 仅在提供 PCCS_API_KEY 环境变量时启动
+if [ -n "$PCCS_API_KEY" ]; then
+    cd /opt/intel/sgx-dcap-pccs
+    node pccs_server.js &
+fi
+```
+
+**配置**：entrypoint 脚本会自动将 `PCCS_API_KEY` 环境变量中的 API 密钥注入到 PCCS 配置文件中。
+
+#### 3. QPL (Quote Provider Library) 配置
+
+**用途**：配置 Gramine 应用程序如何获取认证材料（证书、CRL、TCB 信息）。
+
+**配置文件**：`/etc/sgx_default_qcnl.conf`
+
+**行为**：
+- **当设置 PCCS_API_KEY 时**：QPL 配置为使用本地 PCCS 实例：
+  ```json
+  {
+    "pccs_url": "https://127.0.0.1:8081/sgx/certification/v4/",
+    "use_secure_cert": false,
+    "collateral_service": "https://api.trustedservices.intel.com/sgx/certification/v4/",
+    "retry_times": 6,
+    "retry_delay": 10
+  }
+  ```
+  这允许 aesmd 从本地 PCCS 获取认证材料，而 PCCS 则使用 API 密钥从 Intel PCS 获取。
+
+- **当未设置 PCCS_API_KEY 时**：QPL 配置为直接使用 Intel PCS：
+  ```json
+  {
+    "pccs_url": "https://api.trustedservices.intel.com/sgx/certification/v4/",
+    "use_secure_cert": true,
+    "collateral_service": "https://api.trustedservices.intel.com/sgx/certification/v4/"
+  }
+  ```
+  这需要在认证期间直接访问 Intel 服务器的网络连接。
+
+**注意**：aesmd 服务不直接使用 PCCS_API_KEY。相反，aesmd 使用 QPL 连接到 PCCS，而 PCCS 使用 API 密钥从 Intel PCS 获取证书。
+
 ## 预装工具
 
 镜像中预装了以下工具：
