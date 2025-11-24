@@ -129,7 +129,7 @@ echo ""
 echo "Gramine version:"
 if [ "$GRAMINE_SGX_MODE" = "1" ]; then
     gramine-sgx --version 2>/dev/null || echo "gramine-sgx not found"
-    gramine-sgx-gen-private-key 2>/dev/null || echo "gramine-sgx-gen-private-key not found"
+    gramine-sgx-gen-private-key >/dev/null || echo "gramine-sgx-gen-private-key not found"
 else
     gramine-direct --version 2>/dev/null || echo "gramine-direct not found"
 fi
