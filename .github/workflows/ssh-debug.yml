@@ -1,23 +1,15 @@
-# SSH Debug Workflow (Docker 容器模式) - 通过 tmate 建立反向隧道访问内网 self-hosted runner
+# SSH Debug Workflow - 通过 tmate 建立反向隧道访问内网 self-hosted runner
 # 
 # 使用方法：
-# 1. 将此文件放到你的仓库 .github/workflows/ 目录下
-# 2. 在 GitHub 仓库页面手动触发此 workflow（Actions -> SSH Debug -> Run workflow）
-# 3. 查看 workflow 运行日志，找到 tmate 输出的 SSH 连接地址
-# 4. 在本地终端执行该 SSH 命令即可连接
-# 5. SSH 连接后，workflow 会在后台等待；断开 SSH 连接后，workflow 自动结束
-#
-# 连接后如何操作 host：
-# - 查看 host 文件系统：ls /host
-# - 切换到 host 根目录：chroot /host
-# - 控制 host 上的 Docker：docker ps / docker exec 等
-# - 查看 host 进程：ps aux（因为 --pid=host）
+# 1. 在 GitHub 仓库页面手动触发此 workflow（Actions -> SSH Debug -> Run workflow）
+# 2. 查看 workflow 运行日志，找到 tmate 输出的 SSH 连接地址
+# 3. 在本地终端执行该 SSH 命令即可连接
+# 4. SSH 连接后，workflow 会在后台等待；断开 SSH 连接后，workflow 自动结束
 #
 # 安全说明：
-# - 此 workflow 使用 --privileged 和挂载 host 根目录，等同于给连接者 root 级完全控制权
-# - 仅在临时调试时使用
 # - 只有仓库 owner 能触发此 workflow（通过 workflow 中的检查）
 # - limit-access-to-actor: true 确保只有触发者的 GitHub SSH key 能连接
+# - SSH 进入后直接就是 host 环境，可以完全控制 runner 机器
 
 name: SSH Debug
 
@@ -190,167 +182,99 @@ jobs:
             }
 
   # Job 3: SSH Debug Session
-  # 注意：不使用 container: 配置，因为 self-hosted runner 需要 sudo 才能运行 docker
-  # 改为手动用 sudo docker run 启动容器
+  # 直接在 host 上运行 tmate，不使用 Docker 容器
   ssh-session:
     needs: [check-owner, check-sgx-runner]
     if: ${{ needs.check-owner.outputs.is_owner == 'true' && needs.check-sgx-runner.outputs.sgx_ready == 'true' }}
     runs-on: ${{ fromJSON(needs.check-sgx-runner.outputs.runs_on) }}
     timeout-minutes: 30
     
-    env:
-      DEBUG_CONTAINER_NAME: ssh-debug-${{ github.run_id }}
-    
     steps:
       - name: Show runner info
         run: |
           echo "Running on SGX runner with label: ${{ needs.check-sgx-runner.outputs.sgx_label }}"
-          echo "Container name: $DEBUG_CONTAINER_NAME"
+          echo "Host: $(hostname)"
+          echo "User: $(whoami)"
+          echo "Working directory: $(pwd)"
           
-      - name: Pull and start privileged debug container
+      - name: Install tmate on host if missing
         run: |
-          echo "Pulling ubuntu:24.04 image..."
-          sudo -E docker pull ubuntu:24.04
-          
-          echo "Starting privileged debug container..."
-          sudo -E docker run -d \
-            --name "$DEBUG_CONTAINER_NAME" \
-            --privileged \
-            --network=host \
-            --pid=host \
-            -v /:/host \
-            -v /var/run/docker.sock:/var/run/docker.sock \
-            ubuntu:24.04 sleep infinity
-          
-          echo "Container started successfully"
-          sudo -E docker ps --filter "name=$DEBUG_CONTAINER_NAME"
-          
-      - name: Install dependencies inside container
-        run: |
-          sudo -E docker exec "$DEBUG_CONTAINER_NAME" bash -c '
-            apt-get update && apt-get install -y tmate openssh-client procps curl jq
-          '
-          
-      - name: Fetch GitHub SSH keys for actor
-        id: fetch-keys
-        env:
-          GITHUB_ACTOR: ${{ github.actor }}
-        run: |
-          echo "Fetching SSH public keys for GitHub user: $GITHUB_ACTOR"
-          KEYS=$(curl -s "https://github.com/$GITHUB_ACTOR.keys")
-          if [ -z "$KEYS" ]; then
-            echo "Warning: No SSH keys found for $GITHUB_ACTOR"
-            echo "Anyone with the SSH URL will be able to connect!"
-            echo "has_keys=false" >> $GITHUB_OUTPUT
+          if ! command -v tmate >/dev/null 2>&1; then
+            echo "tmate not found, installing..."
+            sudo DEBIAN_FRONTEND=noninteractive apt-get update
+            sudo DEBIAN_FRONTEND=noninteractive apt-get install -y tmate openssh-client procps
           else
-            echo "Found SSH keys for $GITHUB_ACTOR"
-            echo "$KEYS"
-            echo "has_keys=true" >> $GITHUB_OUTPUT
-            # Save keys to a temp file that we'll copy into the container
-            echo "$KEYS" > /tmp/authorized_keys
+            echo "tmate already installed on host: $(which tmate)"
           fi
           
-      - name: Configure tmate with actor's SSH keys
-        if: steps.fetch-keys.outputs.has_keys == 'true'
-        run: |
-          # Copy authorized_keys into container
-          sudo -E docker cp /tmp/authorized_keys "$DEBUG_CONTAINER_NAME":/tmp/authorized_keys
+      - name: Setup tmate session
+        uses: mxschmitt/action-tmate@v3
+        with:
+          limit-access-to-actor: true
+          install-dependencies: false
+          detached: true
           
-          # Configure tmate to only accept these keys
-          sudo -E docker exec "$DEBUG_CONTAINER_NAME" bash -c '
-            mkdir -p ~/.tmate
-            echo "set -g tmate-authorized-keys \"/tmp/authorized_keys\"" > ~/.tmate.conf
-            echo "tmate configured to only accept keys from: ${{ github.actor }}"
-          '
-          
-      - name: Start tmate and wait for connection
+      - name: Wait for SSH connection and auto-exit
         run: |
-          sudo -E docker exec "$DEBUG_CONTAINER_NAME" bash -c '
-            TMATE_SOCK="/tmp/tmate.sock"
-            TIMEOUT=1800  # 30 minutes
-            
-            # Start tmate in detached mode
-            echo "Starting tmate session..."
-            tmate -S "$TMATE_SOCK" new-session -d
-            
-            # Wait for tmate to be ready
-            echo "Waiting for tmate to initialize..."
-            sleep 3
-            tmate -S "$TMATE_SOCK" wait tmate-ready || true
-            
-            # Display connection info
-            echo ""
-            echo "=============================================="
-            echo "SSH Connection Info:"
-            echo "=============================================="
-            SSH_CMD=$(tmate -S "$TMATE_SOCK" display -p "#{tmate_ssh}" 2>/dev/null || echo "")
-            WEB_URL=$(tmate -S "$TMATE_SOCK" display -p "#{tmate_web}" 2>/dev/null || echo "")
-            
-            if [ -n "$SSH_CMD" ]; then
-              echo "SSH: $SSH_CMD"
-            fi
-            if [ -n "$WEB_URL" ]; then
-              echo "Web: $WEB_URL"
-            fi
-            echo "=============================================="
-            echo ""
-            echo "Waiting for SSH connection..."
-            echo "Once connected, the workflow will automatically end when you disconnect."
-            echo ""
-            
-            # Wait for SSH connection
-            CONNECTED=false
-            ELAPSED=0
-            
-            while [ "$CONNECTED" = "false" ] && [ $ELAPSED -lt $TIMEOUT ]; do
-              if [ -S "$TMATE_SOCK" ]; then
-                CLIENT_COUNT=$(tmate -S "$TMATE_SOCK" display -p "#{tmate_num_clients}" 2>/dev/null || echo "0")
-                if [ "$CLIENT_COUNT" != "0" ] && [ -n "$CLIENT_COUNT" ]; then
-                  CONNECTED=true
-                  echo "SSH client connected! Client count: $CLIENT_COUNT"
-                fi
+          echo "Waiting for SSH connection..."
+          echo "Once connected, the workflow will automatically end when you disconnect."
+          echo ""
+          
+          TMATE_SOCK="/tmp/tmate.sock"
+          TIMEOUT=1800  # 30 minutes in seconds
+          ELAPSED=0
+          
+          # Wait for tmate socket to appear
+          while [ ! -S "$TMATE_SOCK" ] && [ $ELAPSED -lt 60 ]; do
+            sleep 1
+            ELAPSED=$((ELAPSED + 1))
+          done
+          
+          if [ ! -S "$TMATE_SOCK" ]; then
+            echo "Warning: tmate socket not found at $TMATE_SOCK, checking for active tmate processes..."
+            pgrep -a tmate || true
+          fi
+          
+          CONNECTED=false
+          ELAPSED=0
+          
+          while [ "$CONNECTED" = "false" ] && [ $ELAPSED -lt $TIMEOUT ]; do
+            if [ -S "$TMATE_SOCK" ]; then
+              CLIENT_COUNT=$(tmate -S "$TMATE_SOCK" display -p '#{tmate_num_clients}' 2>/dev/null || echo "0")
+              if [ "$CLIENT_COUNT" != "0" ] && [ -n "$CLIENT_COUNT" ]; then
+                CONNECTED=true
+                echo "SSH client connected! Client count: $CLIENT_COUNT"
               fi
-              
-              if [ "$CONNECTED" = "false" ]; then
-                sleep 5
-                ELAPSED=$((ELAPSED + 5))
-                if [ $((ELAPSED % 60)) -eq 0 ]; then
-                  echo "Still waiting for SSH connection... ($((ELAPSED / 60)) minutes elapsed)"
-                fi
-              fi
-            done
+            fi
             
             if [ "$CONNECTED" = "false" ]; then
-              echo "Timeout: No SSH connection within 30 minutes. Exiting..."
-              exit 0
+              sleep 5
+              ELAPSED=$((ELAPSED + 5))
+              if [ $((ELAPSED % 60)) -eq 0 ]; then
+                echo "Still waiting for SSH connection... ($((ELAPSED / 60)) minutes elapsed)"
+              fi
             fi
-            
-            # SSH connected, wait for disconnect
-            echo "SSH session active. Waiting for disconnect..."
-            while true; do
-              if [ -S "$TMATE_SOCK" ]; then
-                CLIENT_COUNT=$(tmate -S "$TMATE_SOCK" display -p "#{tmate_num_clients}" 2>/dev/null || echo "0")
-                if [ "$CLIENT_COUNT" = "0" ] || [ -z "$CLIENT_COUNT" ]; then
-                  echo "SSH client disconnected. Ending workflow..."
-                  break
-                fi
-              else
-                echo "tmate socket gone. Ending workflow..."
+          done
+          
+          if [ "$CONNECTED" = "false" ]; then
+            echo "Timeout: No SSH connection within 30 minutes. Exiting..."
+            exit 0
+          fi
+          
+          # SSH connected, wait for disconnect
+          echo "SSH session active. Waiting for disconnect..."
+          while true; do
+            if [ -S "$TMATE_SOCK" ]; then
+              CLIENT_COUNT=$(tmate -S "$TMATE_SOCK" display -p '#{tmate_num_clients}' 2>/dev/null || echo "0")
+              if [ "$CLIENT_COUNT" = "0" ] || [ -z "$CLIENT_COUNT" ]; then
+                echo "SSH client disconnected. Ending workflow..."
                 break
               fi
-              sleep 2
-            done
-            
-            echo "Workflow completed."
-          '
+            else
+              echo "tmate socket gone. Ending workflow..."
+              break
+            fi
+            sleep 2
+          done
           
-      - name: Cleanup debug container
-        if: always()
-        run: |
-          echo "Cleaning up debug container..."
-          if sudo -E docker ps -a --format '{{.Names}}' | grep -q "^${DEBUG_CONTAINER_NAME}$"; then
-            sudo -E docker rm -f "$DEBUG_CONTAINER_NAME" || true
-            echo "Container $DEBUG_CONTAINER_NAME removed"
-          else
-            echo "Container $DEBUG_CONTAINER_NAME not found (already cleaned up)"
-          fi
+          echo "Workflow completed."
