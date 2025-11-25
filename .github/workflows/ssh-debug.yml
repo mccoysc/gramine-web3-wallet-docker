@@ -4,11 +4,13 @@
 # 1. 在 GitHub 仓库页面手动触发此 workflow（Actions -> SSH Debug -> Run workflow）
 # 2. 查看 workflow 运行日志，找到 tmate 输出的 SSH 连接地址
 # 3. 在本地终端执行该 SSH 命令即可连接
-# 4. SSH 连接后，workflow 会在后台等待；断开 SSH 连接后，workflow 自动结束
+# 4. SSH 连接建立后，workflow 会立即结束，但 tmate 会继续在后台运行
+# 5. 支持同一用户发起多个 SSH 连接
+# 6. 当所有 SSH 连接都断开后，tmate 会自动退出
 #
 # 安全说明：
 # - 只有仓库 owner 能触发此 workflow（通过 workflow 中的检查）
-# - limit-access-to-actor: true 确保只有触发者的 GitHub SSH key 能连接
+# - 只有触发者的 GitHub SSH key 能连接（通过 tmate-authorized-keys 配置）
 # - SSH 进入后直接就是 host 环境，可以完全控制 runner 机器
 
 name: SSH Debug
@@ -183,6 +185,8 @@ jobs:
 
   # Job 3: SSH Debug Session
   # 直接在 host 上运行 tmate，不使用 Docker 容器
+  # 连接后 workflow 立即退出，tmate 继续后台运行
+  # 后台监控脚本会在所有客户端断开后自动杀掉 tmate
   ssh-session:
     needs: [check-owner, check-sgx-runner]
     if: ${{ needs.check-owner.outputs.is_owner == 'true' && needs.check-sgx-runner.outputs.sgx_ready == 'true' }}
@@ -202,79 +206,226 @@ jobs:
           if ! command -v tmate >/dev/null 2>&1; then
             echo "tmate not found, installing..."
             sudo DEBIAN_FRONTEND=noninteractive apt-get update
-            sudo DEBIAN_FRONTEND=noninteractive apt-get install -y tmate openssh-client procps
+            sudo DEBIAN_FRONTEND=noninteractive apt-get install -y tmate openssh-client procps curl
           else
             echo "tmate already installed on host: $(which tmate)"
           fi
           
-      - name: Setup tmate session
-        uses: mxschmitt/action-tmate@v3
-        with:
-          limit-access-to-actor: true
-          install-dependencies: false
-          detached: true
-          
-      - name: Wait for SSH connection and auto-exit
+      - name: Cleanup any previous tmate session
         run: |
-          echo "Waiting for SSH connection..."
-          echo "Once connected, the workflow will automatically end when you disconnect."
-          echo ""
+          TMATE_SOCK="/tmp/ssh-debug-tmate.sock"
+          TMATE_PID_FILE="/tmp/ssh-debug-tmate.pid"
+          MONITOR_PID_FILE="/tmp/ssh-debug-monitor.pid"
           
-          TMATE_SOCK="/tmp/tmate.sock"
-          TIMEOUT=1800  # 30 minutes in seconds
+          # Kill old tmate if exists
+          if [ -f "$TMATE_PID_FILE" ]; then
+            OLD_PID=$(cat "$TMATE_PID_FILE" 2>/dev/null || echo "")
+            if [ -n "$OLD_PID" ] && kill -0 "$OLD_PID" 2>/dev/null; then
+              echo "Killing old tmate process (PID: $OLD_PID)"
+              kill "$OLD_PID" 2>/dev/null || true
+            fi
+            rm -f "$TMATE_PID_FILE"
+          fi
+          
+          # Kill old monitor if exists
+          if [ -f "$MONITOR_PID_FILE" ]; then
+            OLD_PID=$(cat "$MONITOR_PID_FILE" 2>/dev/null || echo "")
+            if [ -n "$OLD_PID" ] && kill -0 "$OLD_PID" 2>/dev/null; then
+              echo "Killing old monitor process (PID: $OLD_PID)"
+              kill "$OLD_PID" 2>/dev/null || true
+            fi
+            rm -f "$MONITOR_PID_FILE"
+          fi
+          
+          # Remove old socket
+          rm -f "$TMATE_SOCK"
+          echo "Cleanup completed"
+          
+      - name: Fetch GitHub SSH keys for actor
+        env:
+          GITHUB_ACTOR: ${{ github.actor }}
+        run: |
+          echo "Fetching SSH public keys for GitHub user: $GITHUB_ACTOR"
+          KEYS=$(curl -s "https://github.com/$GITHUB_ACTOR.keys")
+          if [ -z "$KEYS" ]; then
+            echo "Warning: No SSH keys found for $GITHUB_ACTOR"
+            echo "Anyone with the SSH URL will be able to connect!"
+          else
+            echo "Found SSH keys for $GITHUB_ACTOR:"
+            echo "$KEYS"
+            echo "$KEYS" > /tmp/ssh-debug-authorized-keys
+          fi
+          
+      - name: Configure tmate with actor's SSH keys
+        run: |
+          if [ -f /tmp/ssh-debug-authorized-keys ]; then
+            echo "set -g tmate-authorized-keys \"/tmp/ssh-debug-authorized-keys\"" > ~/.tmate.conf
+            echo "tmate configured to only accept keys from: ${{ github.actor }}"
+          else
+            echo "No authorized keys configured, tmate will accept any connection"
+          fi
+          
+      - name: Start tmate and monitor script
+        run: |
+          TMATE_SOCK="/tmp/ssh-debug-tmate.sock"
+          TMATE_PID_FILE="/tmp/ssh-debug-tmate.pid"
+          MONITOR_PID_FILE="/tmp/ssh-debug-monitor.pid"
+          MONITOR_LOG="/tmp/ssh-debug-monitor.log"
+          
+          # Start tmate in detached mode with nohup/setsid to survive job termination
+          echo "Starting tmate session..."
+          setsid nohup tmate -S "$TMATE_SOCK" new-session -d > /tmp/ssh-debug-tmate.log 2>&1 &
+          TMATE_PID=$!
+          echo "$TMATE_PID" > "$TMATE_PID_FILE"
+          echo "tmate started with PID: $TMATE_PID"
+          
+          # Wait for socket to be ready
           ELAPSED=0
-          
-          # Wait for tmate socket to appear
-          while [ ! -S "$TMATE_SOCK" ] && [ $ELAPSED -lt 60 ]; do
+          while [ ! -S "$TMATE_SOCK" ] && [ $ELAPSED -lt 30 ]; do
             sleep 1
             ELAPSED=$((ELAPSED + 1))
           done
           
           if [ ! -S "$TMATE_SOCK" ]; then
-            echo "Warning: tmate socket not found at $TMATE_SOCK, checking for active tmate processes..."
-            pgrep -a tmate || true
+            echo "Error: tmate socket not created after 30 seconds"
+            cat /tmp/ssh-debug-tmate.log || true
+            exit 1
           fi
           
-          CONNECTED=false
-          ELAPSED=0
+          # Wait for tmate to be ready
+          sleep 2
+          tmate -S "$TMATE_SOCK" wait tmate-ready 2>/dev/null || true
           
-          while [ "$CONNECTED" = "false" ] && [ $ELAPSED -lt $TIMEOUT ]; do
-            if [ -S "$TMATE_SOCK" ]; then
-              CLIENT_COUNT=$(tmate -S "$TMATE_SOCK" display -p '#{tmate_num_clients}' 2>/dev/null || echo "0")
-              if [ "$CLIENT_COUNT" != "0" ] && [ -n "$CLIENT_COUNT" ]; then
-                CONNECTED=true
-                echo "SSH client connected! Client count: $CLIENT_COUNT"
-              fi
-            fi
-            
-            if [ "$CONNECTED" = "false" ]; then
-              sleep 5
-              ELAPSED=$((ELAPSED + 5))
-              if [ $((ELAPSED % 60)) -eq 0 ]; then
-                echo "Still waiting for SSH connection... ($((ELAPSED / 60)) minutes elapsed)"
-              fi
-            fi
-          done
+          # Display connection info
+          echo ""
+          echo "=============================================="
+          echo "SSH Connection Info:"
+          echo "=============================================="
+          SSH_CMD=$(tmate -S "$TMATE_SOCK" display -p '#{tmate_ssh}' 2>/dev/null || echo "")
+          WEB_URL=$(tmate -S "$TMATE_SOCK" display -p '#{tmate_web}' 2>/dev/null || echo "")
           
-          if [ "$CONNECTED" = "false" ]; then
-            echo "Timeout: No SSH connection within 30 minutes. Exiting..."
-            exit 0
+          if [ -n "$SSH_CMD" ]; then
+            echo "SSH: $SSH_CMD"
           fi
+          if [ -n "$WEB_URL" ]; then
+            echo "Web: $WEB_URL"
+          fi
+          echo "=============================================="
+          echo ""
           
-          # SSH connected, wait for disconnect
-          echo "SSH session active. Waiting for disconnect..."
+          # Create monitor script that will kill tmate when all clients disconnect
+          cat > /tmp/ssh-debug-monitor.sh << 'MONITOR_SCRIPT'
+          #!/bin/bash
+          TMATE_SOCK="/tmp/ssh-debug-tmate.sock"
+          TMATE_PID_FILE="/tmp/ssh-debug-tmate.pid"
+          MONITOR_LOG="/tmp/ssh-debug-monitor.log"
+          
+          echo "$(date): Monitor started" >> "$MONITOR_LOG"
+          
+          # Wait for first client connection
           while true; do
             if [ -S "$TMATE_SOCK" ]; then
               CLIENT_COUNT=$(tmate -S "$TMATE_SOCK" display -p '#{tmate_num_clients}' 2>/dev/null || echo "0")
-              if [ "$CLIENT_COUNT" = "0" ] || [ -z "$CLIENT_COUNT" ]; then
-                echo "SSH client disconnected. Ending workflow..."
+              if [ "$CLIENT_COUNT" != "0" ] && [ -n "$CLIENT_COUNT" ]; then
+                echo "$(date): First client connected, count=$CLIENT_COUNT" >> "$MONITOR_LOG"
                 break
               fi
             else
-              echo "tmate socket gone. Ending workflow..."
-              break
+              echo "$(date): Socket not found, exiting monitor" >> "$MONITOR_LOG"
+              exit 0
             fi
             sleep 2
           done
           
-          echo "Workflow completed."
+          # Wait for all clients to disconnect
+          while true; do
+            if [ -S "$TMATE_SOCK" ]; then
+              CLIENT_COUNT=$(tmate -S "$TMATE_SOCK" display -p '#{tmate_num_clients}' 2>/dev/null || echo "0")
+              if [ "$CLIENT_COUNT" = "0" ] || [ -z "$CLIENT_COUNT" ]; then
+                echo "$(date): All clients disconnected, stopping tmate" >> "$MONITOR_LOG"
+                if [ -f "$TMATE_PID_FILE" ]; then
+                  TMATE_PID=$(cat "$TMATE_PID_FILE" 2>/dev/null || echo "")
+                  if [ -n "$TMATE_PID" ]; then
+                    kill "$TMATE_PID" 2>/dev/null || true
+                    echo "$(date): Killed tmate PID $TMATE_PID" >> "$MONITOR_LOG"
+                  fi
+                fi
+                rm -f "$TMATE_SOCK" "$TMATE_PID_FILE" /tmp/ssh-debug-monitor.pid
+                echo "$(date): Cleanup completed" >> "$MONITOR_LOG"
+                exit 0
+              fi
+            else
+              echo "$(date): Socket gone, tmate already exited" >> "$MONITOR_LOG"
+              rm -f "$TMATE_PID_FILE" /tmp/ssh-debug-monitor.pid
+              exit 0
+            fi
+            sleep 2
+          done
+          MONITOR_SCRIPT
+          
+          chmod +x /tmp/ssh-debug-monitor.sh
+          
+          # Start monitor script in background with setsid/nohup to survive job termination
+          echo "Starting monitor script..."
+          setsid nohup bash /tmp/ssh-debug-monitor.sh > /dev/null 2>&1 &
+          MONITOR_PID=$!
+          echo "$MONITOR_PID" > "$MONITOR_PID_FILE"
+          echo "Monitor started with PID: $MONITOR_PID"
+          
+      - name: Wait for first SSH connection
+        run: |
+          TMATE_SOCK="/tmp/ssh-debug-tmate.sock"
+          TIMEOUT=1800  # 30 minutes
+          ELAPSED=0
+          
+          echo "Waiting for SSH connection..."
+          echo "Once connected, the workflow will exit but tmate will keep running."
+          echo "tmate will automatically exit when all SSH connections are closed."
+          echo ""
+          
+          while [ $ELAPSED -lt $TIMEOUT ]; do
+            if [ -S "$TMATE_SOCK" ]; then
+              CLIENT_COUNT=$(tmate -S "$TMATE_SOCK" display -p '#{tmate_num_clients}' 2>/dev/null || echo "0")
+              if [ "$CLIENT_COUNT" != "0" ] && [ -n "$CLIENT_COUNT" ]; then
+                echo ""
+                echo "=============================================="
+                echo "SSH client connected!"
+                echo "=============================================="
+                echo "Client count: $CLIENT_COUNT"
+                SSH_CMD=$(tmate -S "$TMATE_SOCK" display -p '#{tmate_ssh}' 2>/dev/null || echo "")
+                WEB_URL=$(tmate -S "$TMATE_SOCK" display -p '#{tmate_web}' 2>/dev/null || echo "")
+                if [ -n "$SSH_CMD" ]; then
+                  echo "SSH: $SSH_CMD"
+                fi
+                if [ -n "$WEB_URL" ]; then
+                  echo "Web: $WEB_URL"
+                fi
+                echo "=============================================="
+                echo ""
+                echo "Workflow will now exit. tmate continues running in background."
+                echo "tmate will automatically exit when all SSH connections are closed."
+                exit 0
+              fi
+            else
+              echo "Error: tmate socket not found"
+              exit 1
+            fi
+            
+            sleep 5
+            ELAPSED=$((ELAPSED + 5))
+            if [ $((ELAPSED % 60)) -eq 0 ]; then
+              echo "Still waiting for SSH connection... ($((ELAPSED / 60)) minutes elapsed)"
+            fi
+          done
+          
+          echo "Timeout: No SSH connection within 30 minutes."
+          echo "Cleaning up tmate..."
+          TMATE_PID_FILE="/tmp/ssh-debug-tmate.pid"
+          if [ -f "$TMATE_PID_FILE" ]; then
+            TMATE_PID=$(cat "$TMATE_PID_FILE" 2>/dev/null || echo "")
+            if [ -n "$TMATE_PID" ]; then
+              kill "$TMATE_PID" 2>/dev/null || true
+            fi
+          fi
+          rm -f "$TMATE_SOCK" "$TMATE_PID_FILE" /tmp/ssh-debug-monitor.pid
+          exit 0
