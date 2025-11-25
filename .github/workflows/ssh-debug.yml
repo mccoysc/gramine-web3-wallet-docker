@@ -259,9 +259,7 @@ jobs:
           # Configure tmate to only accept these keys
           sudo -E docker exec "$DEBUG_CONTAINER_NAME" bash -c '
             mkdir -p ~/.tmate
-            cat > ~/.tmate.conf << EOF
-set -g tmate-authorized-keys "/tmp/authorized_keys"
-EOF
+            echo "set -g tmate-authorized-keys \"/tmp/authorized_keys\"" > ~/.tmate.conf
             echo "tmate configured to only accept keys from: ${{ github.actor }}"
           '
           
