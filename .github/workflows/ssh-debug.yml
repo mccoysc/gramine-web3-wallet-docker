@@ -5,6 +5,7 @@
 # 2. 在 GitHub 仓库页面手动触发此 workflow（Actions -> SSH Debug -> Run workflow）
 # 3. 查看 workflow 运行日志，找到 tmate 输出的 SSH 连接地址
 # 4. 在本地终端执行该 SSH 命令即可连接
+# 5. SSH 连接后，workflow 会在后台等待；断开 SSH 连接后，workflow 自动结束
 #
 # 连接后如何操作 host：
 # - 查看 host 文件系统：ls /host
@@ -12,22 +13,16 @@
 # - 控制 host 上的 Docker：docker ps / docker exec 等
 # - 查看 host 进程：ps aux（因为 --pid=host）
 #
-# 安全警告：
+# 安全说明：
 # - 此 workflow 使用 --privileged 和挂载 host 根目录，等同于给连接者 root 级完全控制权
-# - 仅在临时调试时使用，用完后立即停止 workflow
-# - limit-access-to-actor: true 会限制只有触发 workflow 的用户才能连接
-# - 请确保只有授权人员能查看 workflow 日志和触发此 workflow
+# - 仅在临时调试时使用
+# - 只有仓库 owner 能触发此 workflow（通过 workflow 中的检查）
+# - limit-access-to-actor: true 确保只有触发者的 GitHub SSH key 能连接
 
 name: SSH Debug
 
 on:
   workflow_dispatch:
-    inputs:
-      timeout_minutes:
-        description: 'SSH 会话超时时间（分钟）'
-        required: false
-        default: '30'
-        type: string
 
 # 确保同一时间只有一个 workflow 在执行
 concurrency:
@@ -36,8 +31,8 @@ concurrency:
 
 jobs:
   ssh-session:
-    runs-on: self-hosted  # 指定在你的 self-hosted runner 上运行
-    # 如果你的 runner 有特定标签，可以改成如：runs-on: [self-hosted, linux, sgx]
+    runs-on: [self-hosted, sgx]
+    timeout-minutes: 30
     
     container:
       image: ubuntu:24.04
@@ -49,17 +44,92 @@ jobs:
         -v /var/run/docker.sock:/var/run/docker.sock
     
     steps:
+      - name: Check if actor is repository owner
+        run: |
+          apt-get update && apt-get install -y curl jq
+          REPO_OWNER=$(echo "${{ github.repository }}" | cut -d'/' -f1)
+          if [ "${{ github.actor }}" != "$REPO_OWNER" ]; then
+            echo "Error: Only repository owner ($REPO_OWNER) can run this workflow. Current actor: ${{ github.actor }}"
+            exit 1
+          fi
+          echo "Actor ${{ github.actor }} is the repository owner. Proceeding..."
+          
       - name: Install dependencies
         run: |
-          apt-get update
-          apt-get install -y tmate openssh-client docker.io curl sudo
+          apt-get install -y tmate openssh-client docker.io procps
           
-      - name: Setup tmate session
+      - name: Setup tmate session (detached)
         uses: mxschmitt/action-tmate@v3
-        timeout-minutes: ${{ fromJSON(inputs.timeout_minutes || '30') }}
         with:
-          # 限制只有触发 workflow 的用户才能连接（推荐开启）
           limit-access-to-actor: true
-          
-          # 不需要 action 再安装依赖，我们已经手动安装了
           install-dependencies: false
+          detached: true
+          
+      - name: Wait for SSH connection and auto-exit
+        run: |
+          echo "Waiting for SSH connection..."
+          echo "Once connected, the workflow will automatically end when you disconnect."
+          echo ""
+          
+          # 等待 tmate socket 文件出现
+          TMATE_SOCK="/tmp/tmate.sock"
+          TIMEOUT=1800  # 30 minutes in seconds
+          ELAPSED=0
+          
+          # 等待 tmate 启动
+          while [ ! -S "$TMATE_SOCK" ] && [ $ELAPSED -lt 60 ]; do
+            sleep 1
+            ELAPSED=$((ELAPSED + 1))
+          done
+          
+          if [ ! -S "$TMATE_SOCK" ]; then
+            echo "tmate socket not found, checking for active tmate processes..."
+          fi
+          
+          # 等待 SSH 连接
+          CONNECTED=false
+          ELAPSED=0
+          
+          while [ "$CONNECTED" = "false" ] && [ $ELAPSED -lt $TIMEOUT ]; do
+            # 检查是否有 SSH 客户端连接（通过检查 tmate 的客户端数量）
+            if [ -S "$TMATE_SOCK" ]; then
+              CLIENT_COUNT=$(tmate -S "$TMATE_SOCK" display -p '#{tmate_num_clients}' 2>/dev/null || echo "0")
+              if [ "$CLIENT_COUNT" != "0" ] && [ -n "$CLIENT_COUNT" ]; then
+                CONNECTED=true
+                echo "SSH client connected! Client count: $CLIENT_COUNT"
+              fi
+            fi
+            
+            if [ "$CONNECTED" = "false" ]; then
+              sleep 5
+              ELAPSED=$((ELAPSED + 5))
+              if [ $((ELAPSED % 60)) -eq 0 ]; then
+                echo "Still waiting for SSH connection... ($((ELAPSED / 60)) minutes elapsed)"
+              fi
+            fi
+          done
+          
+          if [ "$CONNECTED" = "false" ]; then
+            echo "Timeout: No SSH connection within 30 minutes. Exiting..."
+            touch /tmp/continue
+            exit 0
+          fi
+          
+          # SSH 已连接，等待断开
+          echo "SSH session active. Waiting for disconnect..."
+          while true; do
+            if [ -S "$TMATE_SOCK" ]; then
+              CLIENT_COUNT=$(tmate -S "$TMATE_SOCK" display -p '#{tmate_num_clients}' 2>/dev/null || echo "0")
+              if [ "$CLIENT_COUNT" = "0" ] || [ -z "$CLIENT_COUNT" ]; then
+                echo "SSH client disconnected. Ending workflow..."
+                break
+              fi
+            else
+              echo "tmate socket gone. Ending workflow..."
+              break
+            fi
+            sleep 2
+          done
+          
+          touch /tmp/continue
+          echo "Workflow completed."
