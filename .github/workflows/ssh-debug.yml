@@ -1,0 +1,65 @@
+# SSH Debug Workflow (Docker 容器模式) - 通过 tmate 建立反向隧道访问内网 self-hosted runner
+# 
+# 使用方法：
+# 1. 将此文件放到你的仓库 .github/workflows/ 目录下
+# 2. 在 GitHub 仓库页面手动触发此 workflow（Actions -> SSH Debug -> Run workflow）
+# 3. 查看 workflow 运行日志，找到 tmate 输出的 SSH 连接地址
+# 4. 在本地终端执行该 SSH 命令即可连接
+#
+# 连接后如何操作 host：
+# - 查看 host 文件系统：ls /host
+# - 切换到 host 根目录：chroot /host
+# - 控制 host 上的 Docker：docker ps / docker exec 等
+# - 查看 host 进程：ps aux（因为 --pid=host）
+#
+# 安全警告：
+# - 此 workflow 使用 --privileged 和挂载 host 根目录，等同于给连接者 root 级完全控制权
+# - 仅在临时调试时使用，用完后立即停止 workflow
+# - limit-access-to-actor: true 会限制只有触发 workflow 的用户才能连接
+# - 请确保只有授权人员能查看 workflow 日志和触发此 workflow
+
+name: SSH Debug
+
+on:
+  workflow_dispatch:
+    inputs:
+      timeout_minutes:
+        description: 'SSH 会话超时时间（分钟）'
+        required: false
+        default: '30'
+        type: string
+
+# 确保同一时间只有一个 workflow 在执行
+concurrency:
+  group: ssh-debug-${{ github.repository }}
+  cancel-in-progress: false
+
+jobs:
+  ssh-session:
+    runs-on: self-hosted  # 指定在你的 self-hosted runner 上运行
+    # 如果你的 runner 有特定标签，可以改成如：runs-on: [self-hosted, linux, sgx]
+    
+    container:
+      image: ubuntu:24.04
+      options: >-
+        --privileged
+        --network=host
+        --pid=host
+        -v /:/host
+        -v /var/run/docker.sock:/var/run/docker.sock
+    
+    steps:
+      - name: Install dependencies
+        run: |
+          apt-get update
+          apt-get install -y tmate openssh-client docker.io curl sudo
+          
+      - name: Setup tmate session
+        uses: mxschmitt/action-tmate@v3
+        timeout-minutes: ${{ fromJSON(inputs.timeout_minutes || '30') }}
+        with:
+          # 限制只有触发 workflow 的用户才能连接（推荐开启）
+          limit-access-to-actor: true
+          
+          # 不需要 action 再安装依赖，我们已经手动安装了
+          install-dependencies: false
