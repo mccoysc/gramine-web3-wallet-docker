@@ -4,9 +4,12 @@
 # 1. 在 GitHub 仓库页面手动触发此 workflow（Actions -> SSH Debug -> Run workflow）
 # 2. 查看 workflow 运行日志，找到 tmate 输出的 SSH 连接地址
 # 3. 在本地终端执行该 SSH 命令即可连接
-# 4. SSH 连接建立后，workflow 会立即结束，但 tmate 会继续在后台运行
-# 5. 支持同一用户发起多个 SSH 连接
-# 6. 当所有 SSH 连接都断开后，tmate 会自动退出
+# 4. 支持同一用户发起多个 SSH 连接
+# 5. 当所有 SSH 连接都断开后，workflow 自动结束
+#
+# 超时说明：
+# - 5 分钟内无连接则超时退出
+# - 连接后无时间限制（最长 6 小时），直到所有客户端断开
 #
 # 安全说明：
 # - 只有仓库 owner 能触发此 workflow（通过 workflow 中的检查）
@@ -191,7 +194,7 @@ jobs:
     needs: [check-owner, check-sgx-runner]
     if: ${{ needs.check-owner.outputs.is_owner == 'true' && needs.check-sgx-runner.outputs.sgx_ready == 'true' }}
     runs-on: ${{ fromJSON(needs.check-sgx-runner.outputs.runs_on) }}
-    timeout-minutes: 10
+    timeout-minutes: 360  # 6 hours max, but workflow exits when all SSH clients disconnect
     
     steps:
       - name: Show runner info
@@ -372,21 +375,24 @@ jobs:
           echo "$MONITOR_PID" > "$MONITOR_PID_FILE"
           echo "Monitor started with PID: $MONITOR_PID"
           
-      - name: Wait for first SSH connection
+      - name: Wait for SSH connection and auto-exit on disconnect
         run: |
           TMATE_SOCK="/tmp/ssh-debug-tmate.sock"
-          TIMEOUT=300  # 5 minutes
+          TMATE_PID_FILE="/tmp/ssh-debug-tmate.pid"
+          INITIAL_TIMEOUT=300  # 5 minutes for initial connection
           ELAPSED=0
           
           echo "Waiting for SSH connection (5 minute timeout)..."
-          echo "Once connected, the workflow will exit but tmate will keep running."
-          echo "tmate will automatically exit when all SSH connections are closed."
+          echo "Once connected, workflow will wait until all SSH connections are closed."
           echo ""
           
-          while [ $ELAPSED -lt $TIMEOUT ]; do
+          # Phase 1: Wait for first connection (5 minute timeout)
+          CONNECTED=false
+          while [ "$CONNECTED" = "false" ] && [ $ELAPSED -lt $INITIAL_TIMEOUT ]; do
             if [ -S "$TMATE_SOCK" ]; then
               CLIENT_COUNT=$(tmate -S "$TMATE_SOCK" display -p '#{tmate_num_clients}' 2>/dev/null || echo "0")
               if [ "$CLIENT_COUNT" != "0" ] && [ -n "$CLIENT_COUNT" ]; then
+                CONNECTED=true
                 echo ""
                 echo "=============================================="
                 echo "SSH client connected!"
@@ -402,30 +408,59 @@ jobs:
                 fi
                 echo "=============================================="
                 echo ""
-                echo "Workflow will now exit. tmate continues running in background."
-                echo "tmate will automatically exit when all SSH connections are closed."
-                exit 0
+                echo "Workflow will wait until all SSH connections are closed."
+                echo "You can open multiple SSH connections. Workflow exits when ALL disconnect."
               fi
             else
               echo "Error: tmate socket not found"
               exit 1
             fi
             
-            sleep 5
-            ELAPSED=$((ELAPSED + 5))
-            if [ $((ELAPSED % 60)) -eq 0 ]; then
-              echo "Still waiting for SSH connection... ($((ELAPSED / 60)) minutes elapsed)"
+            if [ "$CONNECTED" = "false" ]; then
+              sleep 5
+              ELAPSED=$((ELAPSED + 5))
+              if [ $((ELAPSED % 60)) -eq 0 ]; then
+                echo "Still waiting for SSH connection... ($((ELAPSED / 60)) minutes elapsed)"
+              fi
             fi
           done
           
-          echo "Timeout: No SSH connection within 5 minutes."
-          echo "Cleaning up tmate..."
-          TMATE_PID_FILE="/tmp/ssh-debug-tmate.pid"
+          if [ "$CONNECTED" = "false" ]; then
+            echo "Timeout: No SSH connection within 5 minutes."
+            echo "Cleaning up tmate..."
+            if [ -f "$TMATE_PID_FILE" ]; then
+              TMATE_PID=$(cat "$TMATE_PID_FILE" 2>/dev/null || echo "")
+              if [ -n "$TMATE_PID" ]; then
+                kill "$TMATE_PID" 2>/dev/null || true
+              fi
+            fi
+            rm -f "$TMATE_SOCK" "$TMATE_PID_FILE" /tmp/ssh-debug-monitor.pid
+            exit 0
+          fi
+          
+          # Phase 2: Wait for all clients to disconnect (no timeout)
+          echo "SSH session active. Waiting for all clients to disconnect..."
+          while true; do
+            if [ -S "$TMATE_SOCK" ]; then
+              CLIENT_COUNT=$(tmate -S "$TMATE_SOCK" display -p '#{tmate_num_clients}' 2>/dev/null || echo "0")
+              if [ "$CLIENT_COUNT" = "0" ] || [ -z "$CLIENT_COUNT" ]; then
+                echo "All SSH clients disconnected. Ending workflow..."
+                break
+              fi
+            else
+              echo "tmate socket gone. Ending workflow..."
+              break
+            fi
+            sleep 2
+          done
+          
+          # Cleanup
+          echo "Cleaning up..."
           if [ -f "$TMATE_PID_FILE" ]; then
             TMATE_PID=$(cat "$TMATE_PID_FILE" 2>/dev/null || echo "")
-            if [ -n "$TMATE_PID" ]; then
+            if [ -n "$TMATE_PID" ] && kill -0 "$TMATE_PID" 2>/dev/null; then
               kill "$TMATE_PID" 2>/dev/null || true
             fi
           fi
-          rm -f "$TMATE_SOCK" "$TMATE_PID_FILE" /tmp/ssh-debug-monitor.pid
-          exit 0
+          rm -f "$TMATE_SOCK" "$TMATE_PID_FILE" /tmp/ssh-debug-monitor.pid /tmp/ssh-debug-monitor.sh
+          echo "Workflow completed."
