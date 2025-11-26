@@ -1454,10 +1454,10 @@ jobs:
           
           echo ""
           echo "=== Building RA-TLS server and client with EDMM ==="
-          export RA_TLS_ALLOW_DEBUG_ENCLAVE_INSECURE=1
-          export RA_TLS_ALLOW_OUTDATED_TCB_INSECURE=1
-          export RA_TLS_ALLOW_HW_CONFIG_NEEDED=1
-          export RA_TLS_ALLOW_SW_HARDENING_NEEDED=1
+          #export RA_TLS_ALLOW_DEBUG_ENCLAVE_INSECURE=1
+          #export RA_TLS_ALLOW_OUTDATED_TCB_INSECURE=1
+          #export RA_TLS_ALLOW_HW_CONFIG_NEEDED=1
+          #export RA_TLS_ALLOW_SW_HARDENING_NEEDED=1
           export GRAMINE_LD_PRELOAD=file:$(ldconfig -p | grep 'libratls-quote-verify.so ' | awk '{print $NF}' | head -1)
           EDMM=1 make
           
