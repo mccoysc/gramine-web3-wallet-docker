@@ -1,0 +1,241 @@
+variables:
+  # Global variables
+  REGISTRY_IMAGE: $CI_REGISTRY_IMAGE
+  # Use a python image for the check stage
+  PYTHON_IMAGE: "python:3.11-slim"
+  # Use ubuntu for builds
+  BUILD_IMAGE: "ubuntu:22.04"
+
+stages:
+  - check
+  - build-deps
+  - update
+  - build-image
+  - test
+
+# --- Stage 1: Check Versions ---
+check-versions:
+  stage: check
+  image: $PYTHON_IMAGE
+  script:
+    - apt-get update && apt-get install -y git
+    - python3 scripts/ci_check_versions.py
+    - cat build.env
+  artifacts:
+    reports:
+      dotenv: build.env
+  rules:
+    - if: $CI_PIPELINE_SOURCE == "merge_request_event"
+    - if: $CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH
+    - if: $CI_COMMIT_TAG
+
+# --- Stage 2: Build Dependencies ---
+
+.build-job:
+  stage: build-deps
+  image: $BUILD_IMAGE
+  before_script:
+    - apt-get update && apt-get install -y curl tar
+  script:
+    - echo "Building..."
+    # Logic to upload to Generic Package Registry
+    - |
+      curl --header "JOB-TOKEN: $CI_JOB_TOKEN" --upload-file $FILE_TO_UPLOAD "${CI_API_V4_URL}/projects/${CI_PROJECT_ID}/packages/generic/${PKG_NAME}/${PKG_VERSION}/${FILE_NAME}"
+
+build-openssl:
+  extends: .build-job
+  needs: [check-versions]
+  rules:
+    - if: $NEEDS_OPENSSL == "true"
+  script:
+    - apt-get update && apt-get install -y build-essential wget ca-certificates perl zlib1g-dev
+    - echo "Building OpenSSL $OPENSSL_VERSION"
+    - cd /tmp
+    - wget https://github.com/openssl/openssl/archive/refs/tags/${OPENSSL_VERSION}.tar.gz
+    - mkdir -p /tmp/openssl-src
+    - tar -xzf ${OPENSSL_VERSION}.tar.gz -C /tmp/openssl-src --strip-components=1
+    - cd /tmp/openssl-src
+    - ./config --prefix=/opt/openssl-install --openssldir=/opt/openssl-install/ssl shared zlib
+    - make -j$(nproc)
+    - make install_sw install_ssldirs
+    - cd /opt
+    - tar -czf $OPENSSL_FILENAME openssl-install/
+    - |
+      curl --header "JOB-TOKEN: $CI_JOB_TOKEN" --upload-file $OPENSSL_FILENAME "${CI_API_V4_URL}/projects/${CI_PROJECT_ID}/packages/generic/${OPENSSL_PKG_NAME}/${OPENSSL_PKG_VERSION}/${OPENSSL_FILENAME}"
+
+build-gramine:
+  extends: .build-job
+  needs: [check-versions]
+  rules:
+    - if: $NEEDS_GRAMINE == "true"
+  script:
+    - apt-get update && apt-get install -y build-essential autoconf bison gawk meson nasm pkg-config python3 python3-click python3-jinja2 python3-pyelftools python3-tomli python3-tomli-w python3-voluptuous wget curl git ca-certificates gnupg cmake libprotobuf-c-dev protobuf-c-compiler protobuf-compiler python3-cryptography python3-pip python3-protobuf libcurl4-openssl-dev
+    # Install SGX deps
+    - curl -fsSLo /etc/apt/keyrings/intel-sgx-deb.asc https://download.01.org/intel-sgx/sgx_repo/ubuntu/intel-sgx-deb.key
+    - echo "deb [arch=amd64 signed-by=/etc/apt/keyrings/intel-sgx-deb.asc] https://download.01.org/intel-sgx/sgx_repo/ubuntu jammy main" > /etc/apt/sources.list.d/intel-sgx.list
+    - apt-get update && apt-get install -y libsgx-dcap-quote-verify-dev libsgx-urts libsgx-enclave-common-dev
+    # Build Gramine
+    - echo "Building Gramine $GRAMINE_SHA from $GRAMINE_OWNER"
+    - cd /opt
+    - git clone https://github.com/${GRAMINE_OWNER}/gramine.git gramine
+    - cd gramine
+    - git checkout "$GRAMINE_SHA"
+    - meson setup build/ --buildtype=release -Ddirect=enabled -Dsgx=enabled -Ddcap=enabled -Dtests=disabled
+    - ninja -C build/
+    - DESTDIR=/opt/gramine-install ninja -C build/ install
+    - cd /opt
+    - tar -czf $GRAMINE_FILENAME gramine-install/
+    - |
+      curl --header "JOB-TOKEN: $CI_JOB_TOKEN" --upload-file $GRAMINE_FILENAME "${CI_API_V4_URL}/projects/${CI_PROJECT_ID}/packages/generic/${GRAMINE_PKG_NAME}/${GRAMINE_PKG_VERSION}/${GRAMINE_FILENAME}"
+
+build-node:
+  extends: .build-job
+  needs: [check-versions, build-openssl] # Note: build-openssl might be skipped, we handle that
+  rules:
+    - if: $NEEDS_NODE == "true"
+  script:
+    - apt-get update && apt-get install -y build-essential wget ca-certificates git python3 python3-pip curl libssl-dev zlib1g-dev
+    # Download OpenSSL
+    - echo "Downloading OpenSSL $OPENSSL_VERSION"
+    - |
+      curl --header "JOB-TOKEN: $CI_JOB_TOKEN" -o /tmp/${OPENSSL_FILENAME} "${CI_API_V4_URL}/projects/${CI_PROJECT_ID}/packages/generic/${OPENSSL_PKG_NAME}/${OPENSSL_PKG_VERSION}/${OPENSSL_FILENAME}"
+    - cd /opt && tar -xzf /tmp/${OPENSSL_FILENAME}
+    # Setup OpenSSL env
+    - OPENSSL_PREFIX=/opt/openssl-install
+    - if [ -d "$OPENSSL_PREFIX/lib64" ]; then OPENSSL_LIB_DIR="$OPENSSL_PREFIX/lib64"; else OPENSSL_LIB_DIR="$OPENSSL_PREFIX/lib"; fi
+    - export LD_LIBRARY_PATH="$OPENSSL_LIB_DIR:$LD_LIBRARY_PATH"
+    - export LIBRARY_PATH="$OPENSSL_LIB_DIR:$LIBRARY_PATH"
+    - export PKG_CONFIG_PATH="$OPENSSL_LIB_DIR/pkgconfig:$PKG_CONFIG_PATH"
+    - export CFLAGS="-I$OPENSSL_PREFIX/include $CFLAGS"
+    - export CXXFLAGS="-I$OPENSSL_PREFIX/include $CXXFLAGS"
+    - export LDFLAGS="-L$OPENSSL_LIB_DIR -Wl,-rpath,$OPENSSL_LIB_DIR $LDFLAGS"
+    # Build Node
+    - cd /tmp
+    - git clone --depth 1 --branch ${NODE_VERSION} https://github.com/nodejs/node.git
+    - cd node
+    - ./configure --prefix=/opt/node-install --shared-openssl --shared-openssl-includes="$OPENSSL_PREFIX/include" --shared-openssl-libpath="$OPENSSL_LIB_DIR" --with-intl=full-icu
+    - make -j$(nproc)
+    - make install
+    - cd /opt
+    - tar -czf $NODE_FILENAME node-install/
+    - |
+      curl --header "JOB-TOKEN: $CI_JOB_TOKEN" --upload-file $NODE_FILENAME "${CI_API_V4_URL}/projects/${CI_PROJECT_ID}/packages/generic/${NODE_PKG_NAME}/${NODE_PKG_VERSION}/${NODE_FILENAME}"
+
+# --- Stage 3: Update Versions ---
+update-versions:
+  stage: update
+  image: ubuntu:22.04
+  needs: [check-versions, build-gramine, build-openssl, build-node]
+  rules:
+    - if: $CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH && ($NEEDS_GRAMINE == "true" || $NEEDS_OPENSSL == "true" || $NEEDS_NODE == "true")
+  script:
+    - apt-get update && apt-get install -y git
+    - git config --global user.email "ci@gitlab.com"
+    - git config --global user.name "GitLab CI"
+    - git remote set-url origin "https://oauth2:${CI_JOB_TOKEN}@${CI_SERVER_HOST}/${CI_PROJECT_PATH}.git"
+    - git fetch origin $CI_DEFAULT_BRANCH
+    - git checkout $CI_DEFAULT_BRANCH
+    - |
+      if [ "$NEEDS_GRAMINE" == "true" ]; then
+        echo "$GRAMINE_SHA" > prebuilt/gramine/VERSION
+        echo "$GRAMINE_SHA" > .gramine-version
+      fi
+      if [ "$NEEDS_OPENSSL" == "true" ]; then
+        echo "$OPENSSL_VERSION" > prebuilt/openssl/VERSION
+      fi
+      if [ "$NEEDS_NODE" == "true" ]; then
+        echo "$NODE_VERSION" > prebuilt/nodejs/VERSION
+      fi
+    - git add .
+    - git commit -m "Update VERSION files [skip ci]" || echo "No changes to commit"
+    - git push origin $CI_DEFAULT_BRANCH
+
+# --- Stage 4: Build Docker Image ---
+build-docker:
+  stage: build-image
+  image: docker:24.0.5
+  services:
+    - docker:24.0.5-dind
+  needs: [check-versions, build-gramine, build-openssl, build-node]
+  rules:
+    - if: $NEEDS_IMAGE == "true"
+  script:
+    - apk add --no-cache curl
+    - mkdir -p prebuilt/gramine prebuilt/openssl prebuilt/nodejs
+    # Download prebuilts
+    - echo "Downloading Gramine $GRAMINE_SHA_SHORT"
+    - curl --header "JOB-TOKEN: $CI_JOB_TOKEN" -o prebuilt/gramine/gramine-install.tar.gz "${CI_API_V4_URL}/projects/${CI_PROJECT_ID}/packages/generic/${GRAMINE_PKG_NAME}/${GRAMINE_PKG_VERSION}/${GRAMINE_FILENAME}"
+    - echo "Downloading OpenSSL $OPENSSL_VERSION"
+    - curl --header "JOB-TOKEN: $CI_JOB_TOKEN" -o prebuilt/openssl/openssl-install.tar.gz "${CI_API_V4_URL}/projects/${CI_PROJECT_ID}/packages/generic/${OPENSSL_PKG_NAME}/${OPENSSL_PKG_VERSION}/${OPENSSL_FILENAME}"
+    - echo "Downloading Node.js $NODE_VERSION"
+    - curl --header "JOB-TOKEN: $CI_JOB_TOKEN" -o prebuilt/nodejs/node-install.tar.gz "${CI_API_V4_URL}/projects/${CI_PROJECT_ID}/packages/generic/${NODE_PKG_NAME}/${NODE_PKG_VERSION}/${NODE_FILENAME}"
+    # Build and Push
+    - docker login -u $CI_REGISTRY_USER -p $CI_REGISTRY_PASSWORD $CI_REGISTRY
+    - |
+      docker build \
+        --build-arg GRAMINE_OWNER=$GRAMINE_OWNER \
+        --build-arg GRAMINE_REF=$GRAMINE_SHA \
+        --build-arg USE_PREBUILT=true \
+        -t $REGISTRY_IMAGE:$CI_COMMIT_SHA \
+        -t $REGISTRY_IMAGE:latest \
+        .
+    - docker push $REGISTRY_IMAGE:$CI_COMMIT_SHA
+    - docker push $REGISTRY_IMAGE:latest
+
+# --- Stage 5: Test on SGX Runner ---
+sgx-test:
+  stage: test
+  needs: [build-docker]
+  tags:
+    - sgx
+  image: docker:24.0.5
+  services:
+    - docker:24.0.5-dind
+  variables:
+    DOCKER_DRIVER: overlay2
+    # Mount SGX devices into the dind container if needed, or run directly if shell runner
+    # Assuming shell runner or privileged runner with device access for 'sgx' tag
+  script:
+    - docker login -u $CI_REGISTRY_USER -p $CI_REGISTRY_PASSWORD $CI_REGISTRY
+    - docker pull $REGISTRY_IMAGE:$CI_COMMIT_SHA
+    - docker tag $REGISTRY_IMAGE:$CI_COMMIT_SHA test-image
+    - |
+      docker run --rm -i \
+        --device /dev/sgx_enclave \
+        --device /dev/sgx_provision \
+        --security-opt seccomp=unconfined \
+        -e PCCS_API_KEY="$PCCS_API_KEY" \
+        -e EDMM=1 \
+        -v /var/run/aesmd:/var/run/aesmd \
+        test-image \
+        bash -seuo pipefail <<'CONTAINER_SCRIPT'
+      
+      # (Paste the same script content from GHA here, simplified)
+      set -euo pipefail
+      echo "Starting RA-TLS Test..."
+      
+      # Check AESMD
+      if [ ! -S /var/run/aesmd/aesm.socket ]; then
+        echo "Error: AESMD socket missing"
+        exit 1
+      fi
+      
+      # Setup Key
+      mkdir -p ~/.config/gramine
+      gramine-sgx-gen-private-key ~/.config/gramine/enclave-key.pem
+      
+      # Build Example
+      cd /app/ra-tls-mbedtls
+      export GRAMINE_LD_PRELOAD=file:$(ldconfig -p | grep 'libratls-quote-verify.so ' | awk '{print $NF}' | head -1)
+      EDMM=1 make
+      
+      # Run Server
+      gramine-sgx server > /tmp/server.log 2>&1 &
+      SERVER_PID=$!
+      sleep 5
+      
+      # Run Client
+      gramine-sgx client_dcap dcap 0 0 0 0
+      
+      kill $SERVER_PID
+      CONTAINER_SCRIPT
