@@ -1,13 +1,21 @@
-# MySQL 8 with RA-TLS (Remote Attestation TLS) Support
+# MySQL 8 with RA-TLS (Remote Attestation TLS) Support in SGX Enclave
 #
-# This Dockerfile creates a MySQL 8 server image with transparent RA-TLS support
-# using the gramine-web3-wallet-docker base image.
+# This Dockerfile creates a MySQL 8 server image that runs inside an SGX enclave
+# with transparent RA-TLS support using the gramine-web3-wallet-docker base image.
+#
+# Architecture:
+# - A C launcher program runs inside the SGX enclave
+# - The launcher reads whitelist from smart contract (if configured)
+# - The launcher uses execve() to replace itself with mysqld (same enclave)
+# - RA-TLS is injected via LD_PRELOAD configured in the Gramine manifest
+# - DCAP attestation is enabled for remote verification
 #
 # Features:
 # - Mutual RA-TLS authentication (both client and server must be SGX-based)
 # - Certificate-only MySQL authentication (no passwords)
 # - Certificates generated at startup from SGX quotes using secp256k1 curve
 # - Optional whitelist from smart contract (via CONTRACT_ADDRESS env var)
+# - Pre-compiled Gramine manifest for immediate SGX execution
 #
 # Environment Variables:
 #   CONTRACT_ADDRESS - Smart contract address to read whitelist from (optional)
@@ -38,10 +46,11 @@ LABEL org.opencontainers.image.licenses=GPL-2.0
 # Avoid interactive prompts during package installation
 ENV DEBIAN_FRONTEND=noninteractive
 
-# Install MySQL 8 server
+# Install MySQL 8 server and development dependencies for launcher compilation
 RUN apt-get update && apt-get install -y --no-install-recommends \
     mysql-server \
     mysql-client \
+    libcurl4-openssl-dev \
     && rm -rf /var/lib/apt/lists/*
 
 # Create directories for MySQL data and SSL certificates
@@ -49,9 +58,22 @@ RUN mkdir -p /var/lib/mysql /var/lib/mysql-ssl /var/run/mysqld \
     && chown -R mysql:mysql /var/lib/mysql /var/lib/mysql-ssl /var/run/mysqld \
     && chmod 755 /var/run/mysqld
 
-# Copy the MySQL RA-TLS launcher script
-COPY mysql-launcher.sh /usr/local/bin/mysql-launcher.sh
-RUN chmod +x /usr/local/bin/mysql-launcher.sh
+# Copy the C launcher source code and build files
+COPY launcher/ /tmp/mysql-ratls-launcher/
+COPY mysql-ratls.manifest.template /tmp/mysql-ratls-launcher/
+COPY build-gramine-manifest.sh /tmp/mysql-ratls-launcher/
+
+# Compile the C launcher
+RUN cd /tmp/mysql-ratls-launcher && \
+    make clean || true && \
+    make && \
+    make install && \
+    rm -rf /tmp/mysql-ratls-launcher
+
+# Copy the manifest template and build script to the examples directory
+COPY mysql-ratls.manifest.template /opt/mysql-ratls/
+COPY build-gramine-manifest.sh /opt/mysql-ratls/
+RUN chmod +x /opt/mysql-ratls/build-gramine-manifest.sh
 
 # Configure MySQL for certificate-only authentication
 # This configuration enforces SSL/TLS and prepares for RA-TLS certificates
@@ -83,9 +105,11 @@ innodb_buffer_pool_size = 256M
 
 EOF
 
-# Install ethers.js for contract interaction
-# This is needed by the launcher script to read whitelist from smart contract
-RUN npm install -g ethers@6 && npm cache clean --force
+# Build the Gramine manifest (pre-compile during Docker build)
+# This generates the signed manifest so it's ready to run immediately
+RUN mkdir -p /var/lib/mysql /var/lib/mysql-ssl /var/run/mysqld /app/wallet/mysql-keys && \
+    cd /opt/mysql-ratls && \
+    ./build-gramine-manifest.sh
 
 # Set environment variables for RA-TLS
 # Use secp256k1 curve for Ethereum compatibility
@@ -112,6 +136,7 @@ HEALTHCHECK --interval=30s --timeout=10s --start-period=60s --retries=3 \
 WORKDIR /var/lib/mysql
 
 # The entrypoint runs the base image's entrypoint first (starts aesmd, PCCS, etc.)
-# Then runs the MySQL launcher which handles RA-TLS setup and starts mysqld
-ENTRYPOINT ["/usr/local/bin/entrypoint.sh", "/usr/local/bin/mysql-launcher.sh"]
+# Then runs gramine-sgx with the pre-compiled manifest to start the launcher in SGX enclave
+# The launcher (inside enclave) will then execve() to mysqld
+ENTRYPOINT ["/usr/local/bin/entrypoint.sh", "gramine-sgx", "mysql-ratls"]
 CMD []

@@ -1,0 +1,130 @@
+# Gramine manifest template for MySQL RA-TLS
+# This manifest runs the mysql-ratls-launcher which then execve() to mysqld
+# Both the launcher and mysqld run inside the same SGX enclave
+
+loader.entrypoint = "file:{{ gramine.libos }}"
+libos.entrypoint = "{{ entrypoint }}"
+
+loader.log_level = "{{ log_level }}"
+
+# Environment variables
+loader.env.LD_LIBRARY_PATH = "/lib:/usr/lib:/lib/x86_64-linux-gnu:/usr/lib/x86_64-linux-gnu:/usr/local/lib:/usr/local/lib/x86_64-linux-gnu"
+loader.env.PATH = "/usr/bin:/bin:/usr/sbin:/sbin:/usr/local/bin"
+loader.env.HOME = "/var/lib/mysql"
+
+# RA-TLS injection via LD_PRELOAD
+# This enables transparent RA-TLS for MySQL connections
+loader.env.LD_PRELOAD = "/usr/local/lib/x86_64-linux-gnu/libratls-quote-verify.so"
+
+# RA-TLS Configuration
+# Use secp256k1 curve for Ethereum compatibility
+loader.env.RA_TLS_CERT_ALGORITHM = "secp256k1"
+
+# Enable RA-TLS verification and require peer certificate for mutual TLS
+loader.env.RATLS_ENABLE_VERIFY = "1"
+loader.env.RATLS_REQUIRE_PEER_CERT = "1"
+
+# Default certificate and key paths (can be overridden by environment)
+loader.env.RATLS_CERT_PATH = { passthrough = true }
+loader.env.RATLS_KEY_PATH = { passthrough = true }
+
+# Contract configuration for whitelist (passthrough from host)
+loader.env.CONTRACT_ADDRESS = { passthrough = true }
+loader.env.RPC_URL = { passthrough = true }
+loader.env.RATLS_WHITELIST_CONFIG = { passthrough = true }
+
+# MySQL configuration (passthrough from host)
+loader.env.MYSQL_DATA_DIR = { passthrough = true }
+loader.env.MYSQL_ROOT_PASSWORD = { passthrough = true }
+
+# Filesystem mounts
+fs.mounts = [
+  # Gramine runtime libraries
+  { path = "/lib", uri = "file:{{ gramine.runtimedir() }}" },
+  
+  # System libraries
+  { path = "/usr/lib", uri = "file:/usr/lib" },
+  { path = "/usr/local/lib", uri = "file:/usr/local/lib" },
+  
+  # Binaries
+  { path = "/usr/bin", uri = "file:/usr/bin" },
+  { path = "/usr/sbin", uri = "file:/usr/sbin" },
+  { path = "/usr/local/bin", uri = "file:/usr/local/bin" },
+  { path = "/bin", uri = "file:/bin" },
+  { path = "/sbin", uri = "file:/sbin" },
+  
+  # System configuration
+  { path = "/etc", uri = "file:/etc" },
+  
+  # MySQL data directory (needs to be writable)
+  { path = "/var/lib/mysql", uri = "file:/var/lib/mysql" },
+  
+  # MySQL SSL certificate directory (writable for RA-TLS cert generation)
+  { path = "/var/lib/mysql-ssl", uri = "file:/var/lib/mysql-ssl" },
+  
+  # MySQL runtime directory (for socket file)
+  { path = "/var/run/mysqld", uri = "file:/var/run/mysqld" },
+  
+  # Encrypted storage for private keys
+  { type = "encrypted", path = "/app/wallet", uri = "file:/app/wallet", key_name = "wallet_key" },
+  
+  # Temporary directory
+  { type = "tmpfs", path = "/tmp" },
+]
+
+# SGX configuration
+sgx.debug = false
+sgx.nonpie_binary = true
+sgx.enclave_size = "4G"
+sgx.max_threads = 64
+sgx.edmm = 1
+
+# Enable DCAP attestation
+sgx.remote_attestation = "dcap"
+
+# Trusted files (integrity-checked at load time)
+sgx.trusted_files = [
+  # Gramine LibOS
+  "file:{{ gramine.libos }}",
+  "file:{{ gramine.runtimedir() }}/",
+  
+  # Launcher binary (entrypoint)
+  "file:{{ entrypoint }}",
+  
+  # MySQL server binary (target of execve)
+  "file:/usr/sbin/mysqld",
+  
+  # RA-TLS library for transparent RA-TLS injection
+  "file:/usr/local/lib/x86_64-linux-gnu/libratls-quote-verify.so",
+  
+  # System libraries needed by MySQL and launcher
+  "file:/usr/lib/",
+  "file:/usr/local/lib/",
+  
+  # MySQL configuration and support files
+  "file:/etc/mysql/",
+  "file:/usr/share/mysql/",
+]
+
+# Allowed files (can be modified at runtime, not integrity-checked)
+sgx.allowed_files = [
+  # MySQL data directory
+  "file:/var/lib/mysql/",
+  
+  # SSL certificates directory
+  "file:/var/lib/mysql-ssl/",
+  
+  # MySQL runtime directory (socket file)
+  "file:/var/run/mysqld/",
+  
+  # Temporary files
+  "file:/tmp/",
+  
+  # DNS resolution
+  "file:/etc/hosts",
+  "file:/etc/resolv.conf",
+  "file:/etc/nsswitch.conf",
+  
+  # MySQL logs (if configured)
+  "file:/var/log/mysql/",
+]
