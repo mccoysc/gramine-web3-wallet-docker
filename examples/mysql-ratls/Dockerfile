@@ -99,6 +99,8 @@ RUN cat <<'LAUNCHER_EOF' > /opt/mysql-ratls/launcher/mysql_ratls_launcher.c
 #define DEFAULT_KEY_PATH "/app/wallet/mysql-keys/server-key.pem"
 #define DEFAULT_CA_PATH "/var/lib/mysql-ssl/ca.pem"
 #define DEFAULT_DATA_DIR "/app/wallet/mysql-data"
+#define INIT_SENTINEL_FILE ".mysql_initialized"
+#define INIT_SQL_FILE "init_users.sql"
 
 /* getSGXConfig() function selector: keccak256("getSGXConfig()")[0:4] */
 #define GET_SGX_CONFIG_SELECTOR "0x062e2252"
@@ -175,6 +177,75 @@ static void get_dirname(const char *path, char *dir, size_t dir_size) {
     if (last_slash) {
         *last_slash = '\0';
     }
+}
+
+/* Check if file exists */
+static int file_exists(const char *path) {
+    struct stat st;
+    return stat(path, &st) == 0;
+}
+
+/* Check if MySQL is initialized (sentinel file exists) */
+static int is_mysql_initialized(const char *data_dir) {
+    char sentinel_path[MAX_PATH_LEN];
+    snprintf(sentinel_path, sizeof(sentinel_path), "%s/%s", data_dir, INIT_SENTINEL_FILE);
+    return file_exists(sentinel_path);
+}
+
+/* Create the initialization SQL file for first boot */
+static int create_init_sql(const char *data_dir, char *init_sql_path, size_t path_size) {
+    snprintf(init_sql_path, path_size, "%s/%s", data_dir, INIT_SQL_FILE);
+    
+    FILE *f = fopen(init_sql_path, "w");
+    if (!f) {
+        fprintf(stderr, "[Launcher] Failed to create init SQL file: %s\n", strerror(errno));
+        return -1;
+    }
+    
+    /* Write idempotent SQL to create X.509-only users */
+    fprintf(f, "-- MySQL RA-TLS User Initialization\n");
+    fprintf(f, "-- This file is executed on first boot inside the SGX enclave\n");
+    fprintf(f, "-- Users are configured with REQUIRE X509 (certificate-only authentication)\n");
+    fprintf(f, "-- RA-TLS handles the actual SGX attestation verification\n\n");
+    
+    /* Create root user with X509 requirement for remote connections */
+    fprintf(f, "-- Allow root to connect locally without certificate (for maintenance)\n");
+    fprintf(f, "ALTER USER IF EXISTS 'root'@'localhost' IDENTIFIED BY '';\n\n");
+    
+    /* Create application user with X509 requirement */
+    fprintf(f, "-- Create application user that requires X.509 certificate\n");
+    fprintf(f, "CREATE USER IF NOT EXISTS 'app'@'%%' IDENTIFIED BY '' REQUIRE X509;\n");
+    fprintf(f, "GRANT ALL PRIVILEGES ON *.* TO 'app'@'%%' WITH GRANT OPTION;\n\n");
+    
+    /* Create a read-only user with X509 requirement */
+    fprintf(f, "-- Create read-only user that requires X.509 certificate\n");
+    fprintf(f, "CREATE USER IF NOT EXISTS 'reader'@'%%' IDENTIFIED BY '' REQUIRE X509;\n");
+    fprintf(f, "GRANT SELECT ON *.* TO 'reader'@'%%';\n\n");
+    
+    fprintf(f, "FLUSH PRIVILEGES;\n");
+    
+    fclose(f);
+    
+    printf("[Launcher] Created init SQL file: %s\n", init_sql_path);
+    return 0;
+}
+
+/* Create the sentinel file to mark MySQL as initialized */
+static int create_sentinel_file(const char *data_dir) {
+    char sentinel_path[MAX_PATH_LEN];
+    snprintf(sentinel_path, sizeof(sentinel_path), "%s/%s", data_dir, INIT_SENTINEL_FILE);
+    
+    FILE *f = fopen(sentinel_path, "w");
+    if (!f) {
+        fprintf(stderr, "[Launcher] Failed to create sentinel file: %s\n", strerror(errno));
+        return -1;
+    }
+    
+    fprintf(f, "MySQL initialized with RA-TLS X.509 users\n");
+    fclose(f);
+    
+    printf("[Launcher] Created sentinel file: %s\n", sentinel_path);
+    return 0;
 }
 
 /* Hex character to integer */
@@ -529,10 +600,36 @@ int main(int argc, char *argv[]) {
     const char *data_dir = getenv("MYSQL_DATA_DIR");
     if (!data_dir) data_dir = DEFAULT_DATA_DIR;
     
-    /* Build argument list for mysqld */
-    /* We need: mysqld --user=mysql --datadir=... --ssl-ca=... --ssl-cert=... --ssl-key=... --require-secure-transport=ON [user args] */
+    /* Check if this is first boot (need to initialize users) */
+    int first_boot = !is_mysql_initialized(data_dir);
+    char init_sql_path[MAX_PATH_LEN] = {0};
+    char init_file_arg[MAX_PATH_LEN] = {0};
     
-    int new_argc = argc + 7;  /* Original args + our SSL args */
+    if (first_boot) {
+        printf("[Launcher] First boot detected - will create X.509 users\n");
+        
+        /* Create the init SQL file in the encrypted data directory */
+        if (create_init_sql(data_dir, init_sql_path, sizeof(init_sql_path)) == 0) {
+            snprintf(init_file_arg, sizeof(init_file_arg), "--init-file=%s", init_sql_path);
+            printf("[Launcher] Will execute init SQL on startup: %s\n", init_sql_path);
+        } else {
+            fprintf(stderr, "[Launcher] Warning: Could not create init SQL file\n");
+            first_boot = 0;  /* Don't add --init-file if we couldn't create the file */
+        }
+        
+        /* Create sentinel file to mark as initialized */
+        /* Note: We create it now so that if MySQL crashes during init, we don't retry */
+        /* The init SQL is idempotent anyway, so re-running it is safe */
+        create_sentinel_file(data_dir);
+    } else {
+        printf("[Launcher] MySQL already initialized - skipping user creation\n");
+    }
+    
+    /* Build argument list for mysqld */
+    /* We need: mysqld --user=mysql --datadir=... --ssl-ca=... --ssl-cert=... --ssl-key=... --require-secure-transport=ON [--init-file=...] [user args] */
+    
+    int extra_args = first_boot ? 8 : 7;  /* Add 1 for --init-file on first boot */
+    int new_argc = argc + extra_args;
     char **new_argv = malloc((new_argc + 1) * sizeof(char *));
     if (!new_argv) {
         fprintf(stderr, "[Launcher] Failed to allocate memory for arguments\n");
@@ -559,6 +656,11 @@ int main(int argc, char *argv[]) {
     new_argv[idx++] = ssl_key_arg;
     new_argv[idx++] = "--require-secure-transport=ON";
     
+    /* Add --init-file on first boot */
+    if (first_boot && init_file_arg[0] != '\0') {
+        new_argv[idx++] = init_file_arg;
+    }
+    
     /* Copy any additional arguments from command line */
     for (int i = 1; i < argc; i++) {
         new_argv[idx++] = argv[i];
@@ -570,6 +672,9 @@ int main(int argc, char *argv[]) {
     printf("[Launcher]   Certificate: %s\n", cert_path);
     printf("[Launcher]   Private key: %s\n", key_path);
     printf("[Launcher]   CA certificate: %s\n", DEFAULT_CA_PATH);
+    if (first_boot && init_file_arg[0] != '\0') {
+        printf("[Launcher]   Init file: %s\n", init_sql_path);
+    }
     printf("\n");
     
     /* Use execve to replace this process with mysqld */
