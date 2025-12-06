@@ -101,6 +101,7 @@ docker run -d \
 | `RATLS_WHITELIST_CONFIG` | No | Manual whitelist (Base64-encoded CSV) |
 | `MYSQL_DATA_DIR` | No | MySQL data directory (default: `/var/lib/mysql`) |
 | `MYSQL_SSL_DIR` | No | SSL certificate directory (default: `/var/lib/mysql-ssl`) |
+| `MYSQL_KEY_DIR` | No | Private key directory, must be encrypted partition (default: `/app/wallet/mysql-keys`) |
 
 ## Smart Contract Integration
 

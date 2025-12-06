@@ -15,6 +15,7 @@
 #   RATLS_WHITELIST_CONFIG - Manual whitelist override (optional, Base64-encoded CSV)
 #   MYSQL_DATA_DIR - MySQL data directory (default: /var/lib/mysql)
 #   MYSQL_SSL_DIR - Directory for SSL certificates (default: /var/lib/mysql-ssl)
+#   MYSQL_KEY_DIR - Directory for private keys, must be encrypted partition (default: /app/wallet/mysql-keys)
 #
 
 set -e
@@ -27,9 +28,15 @@ echo ""
 # Default paths
 MYSQL_DATA_DIR="${MYSQL_DATA_DIR:-/var/lib/mysql}"
 MYSQL_SSL_DIR="${MYSQL_SSL_DIR:-/var/lib/mysql-ssl}"
+# Private keys must be stored in encrypted partition for security
+# /app/wallet is the Gramine encrypted filesystem mount point
+MYSQL_KEY_DIR="${MYSQL_KEY_DIR:-/app/wallet/mysql-keys}"
 
-# Create SSL directory if it doesn't exist
+# Create directories if they don't exist
+# SSL directory for certificates (can be in normal filesystem)
 mkdir -p "$MYSQL_SSL_DIR"
+# Key directory for private keys (must be in encrypted partition)
+mkdir -p "$MYSQL_KEY_DIR"
 
 # RA-TLS Certificate Configuration
 # Use secp256k1 curve for Ethereum compatibility
@@ -40,13 +47,15 @@ export RATLS_ENABLE_VERIFY=1
 export RATLS_REQUIRE_PEER_CERT=1
 
 # Set certificate and key paths for RA-TLS
+# Certificate can be in normal directory
 export RATLS_CERT_PATH="${MYSQL_SSL_DIR}/server-cert.pem"
-export RATLS_KEY_PATH="${MYSQL_SSL_DIR}/server-key.pem"
+# Private key MUST be in encrypted partition for security
+export RATLS_KEY_PATH="${MYSQL_KEY_DIR}/server-key.pem"
 
 echo "RA-TLS Configuration:"
 echo "  Certificate Algorithm: secp256k1 (Ethereum compatible)"
-echo "  Certificate Path: $RATLS_CERT_PATH"
-echo "  Key Path: $RATLS_KEY_PATH"
+echo "  Certificate Path: $RATLS_CERT_PATH (normal directory)"
+echo "  Key Path: $RATLS_KEY_PATH (encrypted partition)"
 echo "  Verification Enabled: $RATLS_ENABLE_VERIFY"
 echo "  Require Peer Certificate: $RATLS_REQUIRE_PEER_CERT"
 echo ""
@@ -201,10 +210,11 @@ fi
 
 # MySQL configuration for certificate-only authentication
 # These will be passed to mysqld
+# Note: Certificate is in normal directory, but private key is in encrypted partition
 MYSQL_SSL_ARGS=(
     "--ssl-ca=${MYSQL_SSL_DIR}/ca.pem"
     "--ssl-cert=${MYSQL_SSL_DIR}/server-cert.pem"
-    "--ssl-key=${MYSQL_SSL_DIR}/server-key.pem"
+    "--ssl-key=${MYSQL_KEY_DIR}/server-key.pem"
     "--require-secure-transport=ON"
 )
 

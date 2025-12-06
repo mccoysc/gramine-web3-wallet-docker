@@ -63,9 +63,10 @@ RUN cat >> /etc/mysql/mysql.conf.d/mysqld.cnf <<'EOF'
 require_secure_transport = ON
 
 # SSL certificate paths (generated at runtime by RA-TLS)
+# Certificates are in normal directory, private key is in encrypted partition
 ssl_ca = /var/lib/mysql-ssl/ca.pem
 ssl_cert = /var/lib/mysql-ssl/server-cert.pem
-ssl_key = /var/lib/mysql-ssl/server-key.pem
+# Private key path is set via command line argument (from encrypted partition)
 
 # Require client certificates for authentication
 ssl_mode = VERIFY_IDENTITY
@@ -95,6 +96,8 @@ ENV RATLS_REQUIRE_PEER_CERT=1
 # MySQL data and SSL directories
 ENV MYSQL_DATA_DIR=/var/lib/mysql
 ENV MYSQL_SSL_DIR=/var/lib/mysql-ssl
+# Private key directory - must be in encrypted partition for security
+ENV MYSQL_KEY_DIR=/app/wallet/mysql-keys
 
 # Expose MySQL port
 EXPOSE 3306
