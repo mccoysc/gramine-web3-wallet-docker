@@ -83,6 +83,8 @@ sgx.edmm = 1
 sgx.remote_attestation = "dcap"
 
 # Trusted files (integrity-checked at load time)
+# Note: RA-TLS library (libratls-quote-verify.so) is automatically handled
+# by the manifest compiler when LD_PRELOAD is set
 sgx.trusted_files = [
   # Gramine LibOS
   "file:{{ gramine.libos }}",
@@ -93,9 +95,6 @@ sgx.trusted_files = [
   
   # MySQL server binary (target of execve)
   "file:/usr/sbin/mysqld",
-  
-  # RA-TLS library for transparent RA-TLS injection
-  "file:/usr/local/lib/x86_64-linux-gnu/libratls-quote-verify.so",
   
   # System libraries needed by MySQL and launcher
   "file:/usr/lib/",
