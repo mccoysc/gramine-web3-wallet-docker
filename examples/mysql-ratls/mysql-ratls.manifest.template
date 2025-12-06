@@ -104,23 +104,23 @@ sgx.trusted_files = [
 ]
 
 # Allowed files (can be modified at runtime, not integrity-checked)
-# Note: MySQL data directory is in encrypted partition (/app/wallet/mysql-data)
-# and does not need to be listed here as encrypted mounts handle their own files
+# Note: MySQL data directory and logs are in encrypted partition (/app/wallet/)
+# and do not need to be listed here as encrypted mounts handle their own files
 sgx.allowed_files = [
-  # SSL certificates directory
+  # SSL certificates directory (public certificates only, private keys in encrypted partition)
   "file:/var/lib/mysql-ssl/",
   
-  # MySQL runtime directory (socket file)
+  # MySQL runtime directory (for socket file)
   "file:/var/run/mysqld/",
   
   # Temporary files
   "file:/tmp/",
   
-  # DNS resolution
+  # DNS resolution (read-only system files)
   "file:/etc/hosts",
   "file:/etc/resolv.conf",
   "file:/etc/nsswitch.conf",
   
-  # MySQL logs (if configured)
-  "file:/var/log/mysql/",
+  # Note: MySQL logs are stored in encrypted partition at /app/wallet/mysql-logs
+  # to prevent data leakage through log files
 ]

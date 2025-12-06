@@ -103,12 +103,21 @@ skip-name-resolve
 max_connections = 100
 innodb_buffer_pool_size = 256M
 
+# Data and log directories in encrypted partition to prevent data leakage
+# All sensitive data MUST be stored in encrypted partition
+datadir = /app/wallet/mysql-data
+log_error = /app/wallet/mysql-logs/error.log
+general_log_file = /app/wallet/mysql-logs/general.log
+slow_query_log_file = /app/wallet/mysql-logs/slow.log
+
 EOF
 
 # Build the Gramine manifest (pre-compile during Docker build)
 # This generates the signed manifest so it's ready to run immediately
-# Note: MySQL data directory is in encrypted partition (/app/wallet/mysql-data)
-RUN mkdir -p /var/lib/mysql-ssl /var/run/mysqld /app/wallet/mysql-keys /app/wallet/mysql-data && \
+# Note: MySQL data, logs, and private keys are in encrypted partition (/app/wallet/)
+RUN mkdir -p /var/lib/mysql-ssl /var/run/mysqld \
+    /app/wallet/mysql-keys /app/wallet/mysql-data /app/wallet/mysql-logs && \
+    chown -R mysql:mysql /app/wallet/mysql-data /app/wallet/mysql-logs && \
     cd /opt/mysql-ratls && \
     ./build-gramine-manifest.sh
 
@@ -118,8 +127,9 @@ ENV RA_TLS_CERT_ALGORITHM=secp256k1
 ENV RATLS_ENABLE_VERIFY=1
 ENV RATLS_REQUIRE_PEER_CERT=1
 
-# MySQL data directory MUST be in encrypted partition to prevent data leakage
+# MySQL data and logs directories MUST be in encrypted partition to prevent data leakage
 ENV MYSQL_DATA_DIR=/app/wallet/mysql-data
+ENV MYSQL_LOG_DIR=/app/wallet/mysql-logs
 # RA-TLS certificate and key paths (used by libratls-quote-verify.so and MySQL)
 # Certificate can be in normal directory
 ENV RATLS_CERT_PATH=/var/lib/mysql-ssl/server-cert.pem
