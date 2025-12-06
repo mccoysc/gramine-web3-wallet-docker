@@ -93,11 +93,13 @@ ENV RA_TLS_CERT_ALGORITHM=secp256k1
 ENV RATLS_ENABLE_VERIFY=1
 ENV RATLS_REQUIRE_PEER_CERT=1
 
-# MySQL data and SSL directories
+# MySQL data directory
 ENV MYSQL_DATA_DIR=/var/lib/mysql
-ENV MYSQL_SSL_DIR=/var/lib/mysql-ssl
-# Private key directory - must be in encrypted partition for security
-ENV MYSQL_KEY_DIR=/app/wallet/mysql-keys
+# RA-TLS certificate and key paths (used by libratls-quote-verify.so and MySQL)
+# Certificate can be in normal directory
+ENV RATLS_CERT_PATH=/var/lib/mysql-ssl/server-cert.pem
+# Private key MUST be in encrypted partition for security
+ENV RATLS_KEY_PATH=/app/wallet/mysql-keys/server-key.pem
 
 # Expose MySQL port
 EXPOSE 3306

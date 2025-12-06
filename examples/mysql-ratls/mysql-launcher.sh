@@ -14,8 +14,8 @@
 #   RPC_URL - Ethereum RPC endpoint URL (required if CONTRACT_ADDRESS is set)
 #   RATLS_WHITELIST_CONFIG - Manual whitelist override (optional, Base64-encoded CSV)
 #   MYSQL_DATA_DIR - MySQL data directory (default: /var/lib/mysql)
-#   MYSQL_SSL_DIR - Directory for SSL certificates (default: /var/lib/mysql-ssl)
-#   MYSQL_KEY_DIR - Directory for private keys, must be encrypted partition (default: /app/wallet/mysql-keys)
+#   RATLS_CERT_PATH - Path to RA-TLS certificate (default: /var/lib/mysql-ssl/server-cert.pem)
+#   RATLS_KEY_PATH - Path to RA-TLS private key, must be in encrypted partition (default: /app/wallet/mysql-keys/server-key.pem)
 #
 
 set -e
@@ -27,16 +27,6 @@ echo ""
 
 # Default paths
 MYSQL_DATA_DIR="${MYSQL_DATA_DIR:-/var/lib/mysql}"
-MYSQL_SSL_DIR="${MYSQL_SSL_DIR:-/var/lib/mysql-ssl}"
-# Private keys must be stored in encrypted partition for security
-# /app/wallet is the Gramine encrypted filesystem mount point
-MYSQL_KEY_DIR="${MYSQL_KEY_DIR:-/app/wallet/mysql-keys}"
-
-# Create directories if they don't exist
-# SSL directory for certificates (can be in normal filesystem)
-mkdir -p "$MYSQL_SSL_DIR"
-# Key directory for private keys (must be in encrypted partition)
-mkdir -p "$MYSQL_KEY_DIR"
 
 # RA-TLS Certificate Configuration
 # Use secp256k1 curve for Ethereum compatibility
@@ -46,15 +36,21 @@ export RA_TLS_CERT_ALGORITHM="secp256k1"
 export RATLS_ENABLE_VERIFY=1
 export RATLS_REQUIRE_PEER_CERT=1
 
-# Set certificate and key paths for RA-TLS
+# Set certificate and key paths for RA-TLS (if not already set)
 # Certificate can be in normal directory
-export RATLS_CERT_PATH="${MYSQL_SSL_DIR}/server-cert.pem"
+export RATLS_CERT_PATH="${RATLS_CERT_PATH:-/var/lib/mysql-ssl/server-cert.pem}"
 # Private key MUST be in encrypted partition for security
-export RATLS_KEY_PATH="${MYSQL_KEY_DIR}/server-key.pem"
+export RATLS_KEY_PATH="${RATLS_KEY_PATH:-/app/wallet/mysql-keys/server-key.pem}"
+
+# Create directories for certificate and key if they don't exist
+CERT_DIR=$(dirname "$RATLS_CERT_PATH")
+KEY_DIR=$(dirname "$RATLS_KEY_PATH")
+mkdir -p "$CERT_DIR"
+mkdir -p "$KEY_DIR"
 
 echo "RA-TLS Configuration:"
 echo "  Certificate Algorithm: secp256k1 (Ethereum compatible)"
-echo "  Certificate Path: $RATLS_CERT_PATH (normal directory)"
+echo "  Certificate Path: $RATLS_CERT_PATH"
 echo "  Key Path: $RATLS_KEY_PATH (encrypted partition)"
 echo "  Verification Enabled: $RATLS_ENABLE_VERIFY"
 echo "  Require Peer Certificate: $RATLS_REQUIRE_PEER_CERT"
@@ -210,11 +206,13 @@ fi
 
 # MySQL configuration for certificate-only authentication
 # These will be passed to mysqld
-# Note: Certificate is in normal directory, but private key is in encrypted partition
+# Use RATLS_CERT_PATH and RATLS_KEY_PATH directly for consistency with RA-TLS injection library
+# CA certificate is in the same directory as the server certificate
+CA_CERT_PATH="${CERT_DIR}/ca.pem"
 MYSQL_SSL_ARGS=(
-    "--ssl-ca=${MYSQL_SSL_DIR}/ca.pem"
-    "--ssl-cert=${MYSQL_SSL_DIR}/server-cert.pem"
-    "--ssl-key=${MYSQL_KEY_DIR}/server-key.pem"
+    "--ssl-ca=${CA_CERT_PATH}"
+    "--ssl-cert=${RATLS_CERT_PATH}"
+    "--ssl-key=${RATLS_KEY_PATH}"
     "--require-secure-transport=ON"
 )
 
@@ -228,7 +226,8 @@ fi
 echo ""
 echo "Starting mysqld with RA-TLS..."
 echo "  Data directory: $MYSQL_DATA_DIR"
-echo "  SSL directory: $MYSQL_SSL_DIR"
+echo "  Certificate: $RATLS_CERT_PATH"
+echo "  Private key: $RATLS_KEY_PATH"
 echo ""
 
 # Use exec to replace this process with mysqld

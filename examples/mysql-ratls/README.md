@@ -100,8 +100,8 @@ docker run -d \
 | `RPC_URL` | No* | Ethereum RPC endpoint (*required if CONTRACT_ADDRESS is set) |
 | `RATLS_WHITELIST_CONFIG` | No | Manual whitelist (Base64-encoded CSV) |
 | `MYSQL_DATA_DIR` | No | MySQL data directory (default: `/var/lib/mysql`) |
-| `MYSQL_SSL_DIR` | No | SSL certificate directory (default: `/var/lib/mysql-ssl`) |
-| `MYSQL_KEY_DIR` | No | Private key directory, must be encrypted partition (default: `/app/wallet/mysql-keys`) |
+| `RATLS_CERT_PATH` | No | Path to RA-TLS certificate (default: `/var/lib/mysql-ssl/server-cert.pem`) |
+| `RATLS_KEY_PATH` | No | Path to RA-TLS private key, must be in encrypted partition (default: `/app/wallet/mysql-keys/server-key.pem`) |
 
 ## Smart Contract Integration
 
