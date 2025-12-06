@@ -208,9 +208,6 @@ static int create_init_sql(const char *data_dir, char *init_sql_path, size_t pat
     fprintf(f, "-- Users are configured with REQUIRE X509 (certificate-only authentication)\n");
     fprintf(f, "-- RA-TLS handles the actual SGX attestation verification\n\n");
     
-    /* Create root user with X509 requirement for remote connections */
-    fprintf(f, "-- Allow root to connect locally without certificate (for maintenance)\n");
-    fprintf(f, "ALTER USER IF EXISTS 'root'@'localhost' IDENTIFIED BY '';\n\n");
     
     /* Create application user with X509 requirement */
     fprintf(f, "-- Create application user that requires X.509 certificate\n");
