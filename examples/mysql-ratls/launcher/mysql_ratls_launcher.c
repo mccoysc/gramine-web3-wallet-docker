@@ -27,7 +27,7 @@
 #define DEFAULT_CERT_PATH "/var/lib/mysql-ssl/server-cert.pem"
 #define DEFAULT_KEY_PATH "/app/wallet/mysql-keys/server-key.pem"
 #define DEFAULT_CA_PATH "/var/lib/mysql-ssl/ca.pem"
-#define DEFAULT_DATA_DIR "/var/lib/mysql"
+#define DEFAULT_DATA_DIR "/app/wallet/mysql-data"
 
 /* getSGXConfig() function selector: keccak256("getSGXConfig()")[0:4] */
 #define GET_SGX_CONFIG_SELECTOR "0x062e2252"

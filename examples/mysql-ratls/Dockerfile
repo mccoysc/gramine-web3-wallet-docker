@@ -107,7 +107,8 @@ EOF
 
 # Build the Gramine manifest (pre-compile during Docker build)
 # This generates the signed manifest so it's ready to run immediately
-RUN mkdir -p /var/lib/mysql /var/lib/mysql-ssl /var/run/mysqld /app/wallet/mysql-keys && \
+# Note: MySQL data directory is in encrypted partition (/app/wallet/mysql-data)
+RUN mkdir -p /var/lib/mysql-ssl /var/run/mysqld /app/wallet/mysql-keys /app/wallet/mysql-data && \
     cd /opt/mysql-ratls && \
     ./build-gramine-manifest.sh
 
@@ -117,8 +118,8 @@ ENV RA_TLS_CERT_ALGORITHM=secp256k1
 ENV RATLS_ENABLE_VERIFY=1
 ENV RATLS_REQUIRE_PEER_CERT=1
 
-# MySQL data directory
-ENV MYSQL_DATA_DIR=/var/lib/mysql
+# MySQL data directory MUST be in encrypted partition to prevent data leakage
+ENV MYSQL_DATA_DIR=/app/wallet/mysql-data
 # RA-TLS certificate and key paths (used by libratls-quote-verify.so and MySQL)
 # Certificate can be in normal directory
 ENV RATLS_CERT_PATH=/var/lib/mysql-ssl/server-cert.pem
@@ -132,8 +133,8 @@ EXPOSE 3306
 HEALTHCHECK --interval=30s --timeout=10s --start-period=60s --retries=3 \
     CMD mysqladmin ping -h localhost --silent || exit 1
 
-# Set working directory
-WORKDIR /var/lib/mysql
+# Set working directory to encrypted MySQL data directory
+WORKDIR /app/wallet/mysql-data
 
 # The entrypoint runs the base image's entrypoint first (starts aesmd, PCCS, etc.)
 # Then runs gramine-sgx with the pre-compiled manifest to start the launcher in SGX enclave

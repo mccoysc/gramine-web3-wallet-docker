@@ -10,7 +10,7 @@ loader.log_level = "{{ log_level }}"
 # Environment variables
 loader.env.LD_LIBRARY_PATH = "/lib:/usr/lib:/lib/x86_64-linux-gnu:/usr/lib/x86_64-linux-gnu:/usr/local/lib:/usr/local/lib/x86_64-linux-gnu"
 loader.env.PATH = "/usr/bin:/bin:/usr/sbin:/sbin:/usr/local/bin"
-loader.env.HOME = "/var/lib/mysql"
+loader.env.HOME = "/app/wallet/mysql-data"
 
 # RA-TLS injection via LD_PRELOAD
 # This enables transparent RA-TLS for MySQL connections
@@ -56,16 +56,14 @@ fs.mounts = [
   # System configuration
   { path = "/etc", uri = "file:/etc" },
   
-  # MySQL data directory (needs to be writable)
-  { path = "/var/lib/mysql", uri = "file:/var/lib/mysql" },
-  
   # MySQL SSL certificate directory (writable for RA-TLS cert generation)
   { path = "/var/lib/mysql-ssl", uri = "file:/var/lib/mysql-ssl" },
   
   # MySQL runtime directory (for socket file)
   { path = "/var/run/mysqld", uri = "file:/var/run/mysqld" },
   
-  # Encrypted storage for private keys
+  # Encrypted storage for MySQL data, private keys, and sensitive files
+  # MySQL data directory MUST be in encrypted partition to prevent data leakage
   { type = "encrypted", path = "/app/wallet", uri = "file:/app/wallet", key_name = "wallet_key" },
   
   # Temporary directory
@@ -106,10 +104,9 @@ sgx.trusted_files = [
 ]
 
 # Allowed files (can be modified at runtime, not integrity-checked)
+# Note: MySQL data directory is in encrypted partition (/app/wallet/mysql-data)
+# and does not need to be listed here as encrypted mounts handle their own files
 sgx.allowed_files = [
-  # MySQL data directory
-  "file:/var/lib/mysql/",
-  
   # SSL certificates directory
   "file:/var/lib/mysql-ssl/",
   
