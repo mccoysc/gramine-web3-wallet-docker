@@ -2,6 +2,10 @@
 
 This example provides a MySQL 8 server image with transparent RA-TLS (Remote Attestation TLS) support for SGX-based mutual authentication.
 
+## Self-Contained Dockerfile
+
+This example uses a **self-contained Dockerfile** - no external files are needed. All source code (C launcher, Gramine manifest template, build scripts) is embedded directly in the Dockerfile using heredoc syntax. Simply run `docker build` to create the image.
+
 ## Features
 
 - **Mutual RA-TLS Authentication**: Both client and server must be running in SGX enclaves
@@ -9,6 +13,8 @@ This example provides a MySQL 8 server image with transparent RA-TLS (Remote Att
 - **SGX Quote-Based Certificates**: Certificates are generated at startup from SGX quotes
 - **Ethereum Compatible**: Uses secp256k1 curve for certificate generation
 - **Smart Contract Whitelist**: Optional whitelist configuration from Ethereum smart contract
+- **Pre-compiled Manifest**: Gramine manifest is pre-compiled and signed during Docker build
+- **Encrypted Data Storage**: MySQL data and logs are stored in encrypted partition
 
 ## How It Works
 
@@ -17,13 +23,16 @@ This example provides a MySQL 8 server image with transparent RA-TLS (Remote Att
    - PCCS for DCAP attestation
    - RA-TLS libraries (`libratls-quote-verify.so`)
 
-2. The MySQL launcher script:
+2. A C launcher program runs inside the SGX enclave:
+   - Reads whitelist configuration from smart contract (if CONTRACT_ADDRESS is set)
    - Sets up RA-TLS environment variables (secp256k1 curve, verification enabled)
-   - Optionally reads whitelist from smart contract
-   - Injects `libratls-quote-verify.so` via `LD_PRELOAD`
-   - Starts MySQL with certificate-only authentication
+   - Uses `execve()` to replace itself with mysqld (avoiding child process overhead in enclave)
 
-3. When a client connects:
+3. RA-TLS is injected via `LD_PRELOAD` configured in the Gramine manifest:
+   - Transparent TLS interception for MySQL connections
+   - Automatic SGX quote generation and verification
+
+4. When a client connects:
    - TLS handshake includes SGX attestation (RA-TLS)
    - Both parties verify each other's SGX quotes
    - If whitelist is configured, client measurements are checked
