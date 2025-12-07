@@ -777,8 +777,7 @@ loader.env.RPC_URL = { passthrough = true }
 
 # MySQL configuration (fixed in manifest for security)
 loader.env.MYSQL_DATA_DIR = "/app/wallet/mysql-data"
-# MySQL root password passthrough (needed for initial setup)
-loader.env.MYSQL_ROOT_PASSWORD = { passthrough = true }
+# Note: MYSQL_ROOT_PASSWORD is not needed because MySQL uses X.509 certificate authentication only
 
 # Filesystem mounts
 fs.mounts = [
