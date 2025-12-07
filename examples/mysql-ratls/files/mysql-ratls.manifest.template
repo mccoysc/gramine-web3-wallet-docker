@@ -86,6 +86,10 @@ fs.mounts = [
   # MySQL secure file operations directory (for LOAD DATA INFILE, etc.)
   { path = "/var/lib/mysql-files", uri = "file:/var/lib/mysql-files" },
   
+  # MySQL logs directory (outside encrypted partition for debugging visibility)
+  # Note: This is a trade-off - logs are readable but may contain sensitive query data
+  { path = "/var/log/mysql", uri = "file:/var/log/mysql" },
+  
   # Encrypted storage for MySQL data, private keys, and sensitive files
   # MySQL data directory MUST be in encrypted partition to prevent data leakage
   { type = "encrypted", path = "/app/wallet", uri = "file:/app/wallet", key_name = "_sgx_mrenclave" },
@@ -145,6 +149,7 @@ sgx.allowed_files = [
   # System configuration directory
   "file:/etc/",
   
-  # Note: MySQL logs are stored in encrypted partition at /app/wallet/mysql-logs
-  # to prevent data leakage through log files
+  # MySQL logs directory (outside encrypted partition for debugging visibility)
+  # Note: This is a trade-off - logs are readable but may contain sensitive query data
+  "file:/var/log/mysql/",
 ]

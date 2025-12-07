@@ -505,9 +505,10 @@ int main(int argc, char *argv[]) {
         fprintf(stderr, "[Launcher] Warning: Failed to create data directory: %s\n", strerror(errno));
     }
     
-    /* Create logs directory inside the encrypted partition */
-    printf("[Launcher] Creating logs directory: /app/wallet/mysql-logs\n");
-    if (mkdir_p("/app/wallet/mysql-logs") != 0) {
+    /* Create logs directory outside encrypted partition for debugging visibility */
+    /* Note: This is a trade-off - logs are readable but may contain sensitive query data */
+    printf("[Launcher] Creating logs directory: /var/log/mysql\n");
+    if (mkdir_p("/var/log/mysql") != 0) {
         fprintf(stderr, "[Launcher] Warning: Failed to create logs directory: %s\n", strerror(errno));
     }
     
