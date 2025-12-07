@@ -585,10 +585,11 @@ int main(int argc, char *argv[]) {
     }
     
     /* Build argument list for mysqld */
-    /* We need: mysqld --datadir=... --ssl-cert=... --ssl-key=... --require-secure-transport=ON --log-error=... [--init-file=...] [user args] */
+    /* We need: mysqld --datadir=... --ssl-cert=... --ssl-key=... --require-secure-transport=ON --console [--init-file=...] [user args] */
     /* Note: No --user=mysql since we run as root in container (user said it's not needed) */
+    /* Note: --console outputs logs to stderr for easier debugging in container environments */
     
-    int extra_args = first_boot ? 7 : 6;  /* Add 1 for --init-file on first boot, +1 for --log-error */
+    int extra_args = first_boot ? 7 : 6;  /* Add 1 for --init-file on first boot, +1 for --console */
     int new_argc = argc + extra_args;
     char **new_argv = malloc((new_argc + 1) * sizeof(char *));
     if (!new_argv) {
@@ -600,12 +601,10 @@ int main(int argc, char *argv[]) {
     char ssl_cert_arg[MAX_PATH_LEN];
     char ssl_key_arg[MAX_PATH_LEN];
     char datadir_arg[MAX_PATH_LEN];
-    char log_error_arg[MAX_PATH_LEN];
     
     snprintf(ssl_cert_arg, sizeof(ssl_cert_arg), "--ssl-cert=%s", cert_path);
     snprintf(ssl_key_arg, sizeof(ssl_key_arg), "--ssl-key=%s", key_path);
     snprintf(datadir_arg, sizeof(datadir_arg), "--datadir=%s", data_dir);
-    snprintf(log_error_arg, sizeof(log_error_arg), "--log-error=/var/log/mysql/error.log");
     
     int idx = 0;
     new_argv[idx++] = MYSQLD_PATH;
@@ -613,7 +612,7 @@ int main(int argc, char *argv[]) {
     new_argv[idx++] = ssl_cert_arg;
     new_argv[idx++] = ssl_key_arg;
     new_argv[idx++] = "--require-secure-transport=ON";
-    new_argv[idx++] = log_error_arg;
+    new_argv[idx++] = "--console";  /* Output logs to stderr for easier debugging */
     
     /* Add --init-file on first boot */
     if (first_boot && init_file_arg[0] != '\0') {
@@ -642,7 +641,7 @@ int main(int argc, char *argv[]) {
     printf("[Launcher]   Data directory: %s\n", data_dir);
     printf("[Launcher]   Certificate: %s\n", cert_path);
     printf("[Launcher]   Private key: %s\n", key_path);
-    printf("[Launcher]   Log error: /var/log/mysql/error.log\n");
+    printf("[Launcher]   Log output: console (stderr)\n");
     if (ratls_lib) {
         printf("[Launcher]   LD_PRELOAD: %s\n", ratls_lib);
     }
