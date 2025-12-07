@@ -18,6 +18,7 @@
 #include <errno.h>
 #include <sys/stat.h>
 #include <sys/types.h>
+#include <sys/wait.h>
 #include <curl/curl.h>
 
 #include "cJSON.h"
@@ -119,6 +120,87 @@ static void get_dirname(const char *path, char *dir, size_t dir_size) {
 static int file_exists(const char *path) {
     struct stat st;
     return stat(path, &st) == 0;
+}
+
+/* Check if directory is empty or doesn't exist */
+static int is_dir_empty(const char *path) {
+    struct stat st;
+    if (stat(path, &st) != 0) {
+        return 1;  /* Directory doesn't exist, treat as empty */
+    }
+    if (!S_ISDIR(st.st_mode)) {
+        return 1;  /* Not a directory */
+    }
+    
+    /* Check for MySQL system files that indicate initialization */
+    char ibdata_path[MAX_PATH_LEN];
+    snprintf(ibdata_path, sizeof(ibdata_path), "%s/ibdata1", path);
+    if (file_exists(ibdata_path)) {
+        return 0;  /* ibdata1 exists, not empty */
+    }
+    
+    return 1;  /* No MySQL system files found */
+}
+
+/* Check if MySQL data directory needs initialization */
+static int needs_mysql_init(const char *data_dir) {
+    /* Check if the data directory has MySQL system files (ibdata1) */
+    return is_dir_empty(data_dir);
+}
+
+/* Run MySQL initialization (mysqld --initialize-insecure) */
+static int run_mysql_init(const char *data_dir) {
+    printf("[Launcher] MySQL data directory is empty, running initialization...\n");
+    printf("[Launcher] Executing: %s --initialize-insecure --datadir=%s --console\n", MYSQLD_PATH, data_dir);
+    
+    pid_t pid = fork();
+    if (pid < 0) {
+        fprintf(stderr, "[Launcher] Failed to fork for MySQL initialization: %s\n", strerror(errno));
+        return -1;
+    }
+    
+    if (pid == 0) {
+        /* Child process - run mysqld --initialize-insecure */
+        char datadir_arg[MAX_PATH_LEN];
+        snprintf(datadir_arg, sizeof(datadir_arg), "--datadir=%s", data_dir);
+        
+        char *init_argv[] = {
+            MYSQLD_PATH,
+            "--initialize-insecure",
+            datadir_arg,
+            "--console",
+            NULL
+        };
+        
+        execv(MYSQLD_PATH, init_argv);
+        fprintf(stderr, "[Launcher] Failed to exec mysqld for initialization: %s\n", strerror(errno));
+        _exit(1);
+    }
+    
+    /* Parent process - wait for initialization to complete */
+    int status;
+    printf("[Launcher] Waiting for MySQL initialization to complete (PID: %d)...\n", pid);
+    
+    if (waitpid(pid, &status, 0) < 0) {
+        fprintf(stderr, "[Launcher] Failed to wait for MySQL initialization: %s\n", strerror(errno));
+        return -1;
+    }
+    
+    if (WIFEXITED(status)) {
+        int exit_code = WEXITSTATUS(status);
+        if (exit_code == 0) {
+            printf("[Launcher] MySQL initialization completed successfully\n");
+            return 0;
+        } else {
+            fprintf(stderr, "[Launcher] MySQL initialization failed with exit code: %d\n", exit_code);
+            return -1;
+        }
+    } else if (WIFSIGNALED(status)) {
+        fprintf(stderr, "[Launcher] MySQL initialization killed by signal: %d\n", WTERMSIG(status));
+        return -1;
+    }
+    
+    return -1;
 }
 
 /* Check if MySQL is initialized (sentinel file exists) */
@@ -512,6 +594,17 @@ int main(int argc, char *argv[]) {
         fprintf(stderr, "[Launcher] Warning: Failed to create logs directory: %s\n", strerror(errno));
     }
     
+    /* Check if MySQL data directory needs initialization */
+    if (needs_mysql_init(data_dir_to_create)) {
+        printf("[Launcher] MySQL data directory is empty or missing system files\n");
+        if (run_mysql_init(data_dir_to_create) != 0) {
+            fprintf(stderr, "[Launcher] ERROR: MySQL initialization failed, cannot continue\n");
+            return 1;
+        }
+    } else {
+        printf("[Launcher] MySQL data directory already initialized (ibdata1 exists)\n");
+    }
+    
     /* Handle whitelist configuration */
     printf("\n[Launcher] Whitelist Configuration:\n");
     
@@ -585,10 +678,11 @@ int main(int argc, char *argv[]) {
     }
     
     /* Build argument list for mysqld */
-    /* We need: mysqld --datadir=... --ssl-cert=... --ssl-key=... --require-secure-transport=ON --log-error=... [--init-file=...] [user args] */
+    /* We need: mysqld --datadir=... --ssl-cert=... --ssl-key=... --require-secure-transport=ON --console [--init-file=...] [user args] */
     /* Note: No --user=mysql since we run as root in container (user said it's not needed) */
+    /* Note: --console outputs logs to stderr for easier debugging in container environments */
     
-    int extra_args = first_boot ? 7 : 6;  /* Add 1 for --init-file on first boot, +1 for --log-error */
+    int extra_args = first_boot ? 7 : 6;  /* Add 1 for --init-file on first boot, +1 for --console */
     int new_argc = argc + extra_args;
     char **new_argv = malloc((new_argc + 1) * sizeof(char *));
     if (!new_argv) {
@@ -600,12 +694,10 @@ int main(int argc, char *argv[]) {
     char ssl_cert_arg[MAX_PATH_LEN];
     char ssl_key_arg[MAX_PATH_LEN];
     char datadir_arg[MAX_PATH_LEN];
-    char log_error_arg[MAX_PATH_LEN];
     
     snprintf(ssl_cert_arg, sizeof(ssl_cert_arg), "--ssl-cert=%s", cert_path);
     snprintf(ssl_key_arg, sizeof(ssl_key_arg), "--ssl-key=%s", key_path);
     snprintf(datadir_arg, sizeof(datadir_arg), "--datadir=%s", data_dir);
-    snprintf(log_error_arg, sizeof(log_error_arg), "--log-error=/var/log/mysql/error.log");
     
     int idx = 0;
     new_argv[idx++] = MYSQLD_PATH;
@@ -613,7 +705,7 @@ int main(int argc, char *argv[]) {
     new_argv[idx++] = ssl_cert_arg;
     new_argv[idx++] = ssl_key_arg;
     new_argv[idx++] = "--require-secure-transport=ON";
-    new_argv[idx++] = log_error_arg;
+    new_argv[idx++] = "--console";  /* Output logs to stderr for easier debugging */
     
     /* Add --init-file on first boot */
     if (first_boot && init_file_arg[0] != '\0') {
@@ -642,7 +734,7 @@ int main(int argc, char *argv[]) {
     printf("[Launcher]   Data directory: %s\n", data_dir);
     printf("[Launcher]   Certificate: %s\n", cert_path);
     printf("[Launcher]   Private key: %s\n", key_path);
-    printf("[Launcher]   Log error: /var/log/mysql/error.log\n");
+    printf("[Launcher]   Log output: console (stderr)\n");
     if (ratls_lib) {
         printf("[Launcher]   LD_PRELOAD: %s\n", ratls_lib);
     }
