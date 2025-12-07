@@ -163,5 +163,6 @@ WORKDIR /app/wallet/mysql-data
 # The entrypoint runs the base image's entrypoint first (starts aesmd, PCCS, etc.)
 # Then runs gramine-sgx with the pre-compiled manifest to start the launcher in SGX enclave
 # The launcher (inside enclave) will then execve() to mysqld
-ENTRYPOINT ["/usr/local/bin/entrypoint.sh", "gramine-sgx", "mysql-ratls"]
+# Note: Use full path to manifest because WORKDIR is /app/wallet/mysql-data (encrypted partition)
+ENTRYPOINT ["/usr/local/bin/entrypoint.sh", "gramine-sgx", "/var/lib/mysql/mysql-ratls"]
 CMD []
