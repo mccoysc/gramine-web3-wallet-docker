@@ -151,7 +151,7 @@ static int needs_mysql_init(const char *data_dir) {
 /* Run MySQL initialization (mysqld --initialize-insecure) */
 static int run_mysql_init(const char *data_dir) {
     printf("[Launcher] MySQL data directory is empty, running initialization...\n");
-    printf("[Launcher] Executing: %s --initialize-insecure --datadir=%s --console\n", MYSQLD_PATH, data_dir);
+    printf("[Launcher] Executing: %s --initialize-insecure --datadir=%s --log-error=/var/log/mysql/error.log --console\n", MYSQLD_PATH, data_dir);
     
     pid_t pid = fork();
     if (pid < 0) {
@@ -164,10 +164,13 @@ static int run_mysql_init(const char *data_dir) {
         char datadir_arg[MAX_PATH_LEN];
         snprintf(datadir_arg, sizeof(datadir_arg), "--datadir=%s", data_dir);
         
+        /* Note: --log-error is needed to override any config file setting that points to encrypted partition */
+        /* --console outputs to stderr for easier debugging */
         char *init_argv[] = {
             MYSQLD_PATH,
             "--initialize-insecure",
             datadir_arg,
+            "--log-error=/var/log/mysql/error.log",
             "--console",
             NULL
         };
@@ -678,11 +681,12 @@ int main(int argc, char *argv[]) {
     }
     
     /* Build argument list for mysqld */
-    /* We need: mysqld --datadir=... --ssl-cert=... --ssl-key=... --require-secure-transport=ON --console [--init-file=...] [user args] */
+    /* We need: mysqld --datadir=... --ssl-cert=... --ssl-key=... --require-secure-transport=ON --log-error=... --console [--init-file=...] [user args] */
     /* Note: No --user=mysql since we run as root in container (user said it's not needed) */
+    /* Note: --log-error is needed to override any config file setting that points to encrypted partition */
     /* Note: --console outputs logs to stderr for easier debugging in container environments */
     
-    int extra_args = first_boot ? 7 : 6;  /* Add 1 for --init-file on first boot, +1 for --console */
+    int extra_args = first_boot ? 8 : 7;  /* Add 1 for --init-file on first boot, +1 for --log-error, +1 for --console */
     int new_argc = argc + extra_args;
     char **new_argv = malloc((new_argc + 1) * sizeof(char *));
     if (!new_argv) {
@@ -705,6 +709,7 @@ int main(int argc, char *argv[]) {
     new_argv[idx++] = ssl_cert_arg;
     new_argv[idx++] = ssl_key_arg;
     new_argv[idx++] = "--require-secure-transport=ON";
+    new_argv[idx++] = "--log-error=/var/log/mysql/error.log";  /* Override config file setting */
     new_argv[idx++] = "--console";  /* Output logs to stderr for easier debugging */
     
     /* Add --init-file on first boot */
@@ -734,7 +739,8 @@ int main(int argc, char *argv[]) {
     printf("[Launcher]   Data directory: %s\n", data_dir);
     printf("[Launcher]   Certificate: %s\n", cert_path);
     printf("[Launcher]   Private key: %s\n", key_path);
-    printf("[Launcher]   Log output: console (stderr)\n");
+    printf("[Launcher]   Log file: /var/log/mysql/error.log\n");
+    printf("[Launcher]   Log output: console (stderr) + file\n");
     if (ratls_lib) {
         printf("[Launcher]   LD_PRELOAD: %s\n", ratls_lib);
     }
