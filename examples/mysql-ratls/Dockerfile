@@ -62,37 +62,6 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 # and remove policy-rc.d since we're done with apt installations
 RUN rm -rf /var/lib/mysql/* && rm -f /usr/sbin/policy-rc.d
 
-# Rebuild libratls-quote-verify.so from the upstream gramine repo which now includes
-# the fix to create parent directories before writing certificate/key files.
-# This fixes the issue where the LD_PRELOAD constructor runs before the launcher's
-# main() can create the directories.
-# The fix was merged in gramine PR #60: https://github.com/mccoysc/gramine/pull/60
-# Note: Base image already has gcc, so we just need to download the source and compile with gcc
-ARG GRAMINE_REPO=mccoysc/gramine
-RUN set -eux; \
-    cd /tmp; \
-    curl -fsSL "https://raw.githubusercontent.com/${GRAMINE_REPO}/master/tools/sgx/ra-tls/libratls-quote-verify.c" -o libratls-quote-verify.c; \
-    curl -fsSL "https://raw.githubusercontent.com/${GRAMINE_REPO}/master/tools/sgx/ra-tls/ra_tls.h" -o ra_tls.h; \
-    gcc -shared -fPIC -o libratls-quote-verify.so libratls-quote-verify.c \
-        -ldl -lpthread -lra_tls_attest -lra_tls_verify_dcap_gramine \
-        -I/usr/include/gramine -DHAVE_MBEDTLS_HEADERS=1;\
-    ldconfig; \
-    RATLS_LIB_DST=$(ldconfig -p | awk '/libratls-quote-verify\.so /{print $NF; exit}'); \
-    if [ -z "$RATLS_LIB_DST" ] || [ ! -f "$RATLS_LIB_DST" ]; then \
-        echo "Cannot locate installed libratls-quote-verify.so to replace"; exit 1; \
-    fi; \
-    echo "Replacing $RATLS_LIB_DST with rebuilt libratls-quote-verify.so"; \
-    cp libratls-quote-verify.so "$RATLS_LIB_DST"; \
-    RATLS_RUNTIME_LINK="/usr/local/lib/x86_64-linux-gnu/gramine/runtime/glibc/libratls-quote-verify.so"; \
-    if [ -L "$RATLS_RUNTIME_LINK" ]; then \
-        echo "Updating runtime symlink: $RATLS_RUNTIME_LINK"; \
-        rm -f "$RATLS_RUNTIME_LINK"; \
-        ln -sf "$RATLS_LIB_DST" "$RATLS_RUNTIME_LINK"; \
-    fi; \
-    ldconfig; \
-    rm -f /tmp/libratls-quote-verify.c /tmp/ra_tls.h /tmp/libratls-quote-verify.so; \
-    echo "Successfully rebuilt libratls-quote-verify.so with gcc"
-
 # Create directories for MySQL data and SSL certificates
 RUN mkdir -p /var/lib/mysql /var/lib/mysql-ssl /var/run/mysqld \
     && chown -R mysql:mysql /var/lib/mysql /var/lib/mysql-ssl /var/run/mysqld \
