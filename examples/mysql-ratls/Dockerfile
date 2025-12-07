@@ -763,18 +763,21 @@ loader.env.RA_TLS_CERT_ALGORITHM = "secp256k1"
 loader.env.RATLS_ENABLE_VERIFY = "1"
 loader.env.RATLS_REQUIRE_PEER_CERT = "1"
 
-# Default certificate and key paths (can be overridden by environment)
-loader.env.RATLS_CERT_PATH = { passthrough = true }
-loader.env.RATLS_KEY_PATH = { passthrough = true }
+# Certificate and key paths (fixed in manifest for security)
+# Certificate can be in normal directory
+loader.env.RATLS_CERT_PATH = "/var/lib/mysql-ssl/server-cert.pem"
+# Private key MUST be in encrypted partition
+loader.env.RATLS_KEY_PATH = "/app/wallet/mysql-keys/server-key.pem"
 
-# Contract configuration for whitelist (passthrough from host)
+# Contract configuration for whitelist (passthrough from host for deployment flexibility)
 loader.env.CONTRACT_ADDRESS = { passthrough = true }
 loader.env.RPC_URL = { passthrough = true }
-loader.env.RATLS_WHITELIST_CONFIG = { passthrough = true }
+# Note: RATLS_WHITELIST_CONFIG is read from contract, not from host env
+# The launcher reads it from the contract and sets it internally
 
-# MySQL configuration (passthrough from host)
-loader.env.MYSQL_DATA_DIR = { passthrough = true }
-loader.env.MYSQL_ROOT_PASSWORD = { passthrough = true }
+# MySQL configuration (fixed in manifest for security)
+loader.env.MYSQL_DATA_DIR = "/app/wallet/mysql-data"
+# Note: MYSQL_ROOT_PASSWORD is not needed because MySQL uses X.509 certificate authentication only
 
 # Filesystem mounts
 fs.mounts = [
@@ -944,20 +947,15 @@ RUN rm -rf /opt/mysql-ratls/launcher/*.c \
     /opt/mysql-ratls/launcher/Makefile \
     /opt/mysql-ratls/launcher/mysql-ratls-launcher
 
-# Set environment variables for RA-TLS
-# Use secp256k1 curve for Ethereum compatibility
-ENV RA_TLS_CERT_ALGORITHM=secp256k1
-ENV RATLS_ENABLE_VERIFY=1
-ENV RATLS_REQUIRE_PEER_CERT=1
-
-# MySQL data and logs directories MUST be in encrypted partition to prevent data leakage
-ENV MYSQL_DATA_DIR=/app/wallet/mysql-data
-ENV MYSQL_LOG_DIR=/app/wallet/mysql-logs
-# RA-TLS certificate and key paths (used by libratls-quote-verify.so and MySQL)
-# Certificate can be in normal directory
-ENV RATLS_CERT_PATH=/var/lib/mysql-ssl/server-cert.pem
-# Private key MUST be in encrypted partition for security
-ENV RATLS_KEY_PATH=/app/wallet/mysql-keys/server-key.pem
+# Note: All RA-TLS environment variables are configured in the Gramine manifest
+# (loader.env.*) and are NOT set here because host environment variables are
+# isolated from the SGX enclave. The manifest directly sets:
+# - RA_TLS_CERT_ALGORITHM=secp256k1
+# - RATLS_ENABLE_VERIFY=1
+# - RATLS_REQUIRE_PEER_CERT=1
+# - RATLS_CERT_PATH=/var/lib/mysql-ssl/server-cert.pem
+# - RATLS_KEY_PATH=/app/wallet/mysql-keys/server-key.pem
+# - MYSQL_DATA_DIR=/app/wallet/mysql-data
 
 # Expose MySQL port
 EXPOSE 3306
