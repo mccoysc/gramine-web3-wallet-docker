@@ -67,42 +67,22 @@ RUN rm -rf /var/lib/mysql/* && rm -f /usr/sbin/policy-rc.d
 # This fixes the issue where the LD_PRELOAD constructor runs before the launcher's
 # main() can create the directories.
 # The fix was merged in gramine PR #60: https://github.com/mccoysc/gramine/pull/60
+# Note: Base image already has gcc, so we just need to download the source and compile with gcc
 ARG GRAMINE_REPO=mccoysc/gramine
 RUN set -eux; \
-    apt-get update && apt-get install -y --no-install-recommends \
-        git ninja-build meson pkg-config cmake nasm \
-        python3 python3-pip python3-dev \
-        libprotobuf-c-dev protobuf-c-compiler \
-        libcurl4-openssl-dev \
-        && rm -rf /var/lib/apt/lists/*; \
-    curl -fsSL https://download.01.org/intel-sgx/sgx_repo/ubuntu/intel-sgx-deb.key | gpg --dearmor -o /usr/share/keyrings/intel-sgx.gpg; \
-    echo 'deb [arch=amd64 signed-by=/usr/share/keyrings/intel-sgx.gpg] https://download.01.org/intel-sgx/sgx_repo/ubuntu jammy main' > /etc/apt/sources.list.d/intel-sgx.list; \
-    apt-get update && apt-get install -y --no-install-recommends \
-        libsgx-dcap-ql-dev \
-        libsgx-dcap-quote-verify-dev \
-        libsgx-headers \
-        libsgx-urts \
-        && rm -rf /var/lib/apt/lists/*; \
     cd /tmp; \
-    git clone --depth 1 https://github.com/${GRAMINE_REPO}.git gramine-src; \
-    cd gramine-src; \
-    meson setup build/ \
-        --buildtype=release \
-        -Dsgx=enabled \
-        -Ddirect=disabled \
-        -Dlibc=none \
-        -Dtests=disabled \
-        -Ddcap=enabled; \
-    ninja -C build/ tools/sgx/ra-tls/libratls-quote-verify.so; \
-    RATLS_LIB_SRC=$(find build -name 'libratls-quote-verify.so' -print -quit); \
-    if [ -z "$RATLS_LIB_SRC" ]; then echo "Failed to find rebuilt libratls-quote-verify.so"; exit 1; fi; \
+    curl -fsSL "https://raw.githubusercontent.com/${GRAMINE_REPO}/master/tools/sgx/ra-tls/libratls-quote-verify.c" -o libratls-quote-verify.c; \
+    curl -fsSL "https://raw.githubusercontent.com/${GRAMINE_REPO}/master/tools/sgx/ra-tls/ra_tls.h" -o ra_tls.h; \
+    gcc -shared -fPIC -o libratls-quote-verify.so libratls-quote-verify.c \
+        -ldl -lpthread -lra_tls_attest -lra_tls_verify_dcap_gramine \
+        -I/usr/include/gramine -DHAVE_MBEDTLS_HEADERS=1;\
     ldconfig; \
     RATLS_LIB_DST=$(ldconfig -p | awk '/libratls-quote-verify\.so /{print $NF; exit}'); \
     if [ -z "$RATLS_LIB_DST" ] || [ ! -f "$RATLS_LIB_DST" ]; then \
         echo "Cannot locate installed libratls-quote-verify.so to replace"; exit 1; \
     fi; \
-    echo "Replacing $RATLS_LIB_DST with rebuilt $RATLS_LIB_SRC"; \
-    cp "$RATLS_LIB_SRC" "$RATLS_LIB_DST"; \
+    echo "Replacing $RATLS_LIB_DST with rebuilt libratls-quote-verify.so"; \
+    cp libratls-quote-verify.so "$RATLS_LIB_DST"; \
     RATLS_RUNTIME_LINK="/usr/local/lib/x86_64-linux-gnu/gramine/runtime/glibc/libratls-quote-verify.so"; \
     if [ -L "$RATLS_RUNTIME_LINK" ]; then \
         echo "Updating runtime symlink: $RATLS_RUNTIME_LINK"; \
@@ -110,8 +90,8 @@ RUN set -eux; \
         ln -sf "$RATLS_LIB_DST" "$RATLS_RUNTIME_LINK"; \
     fi; \
     ldconfig; \
-    cd /tmp && rm -rf gramine-src; \
-    echo "Successfully rebuilt libratls-quote-verify.so from upstream gramine repo"
+    rm -f /tmp/libratls-quote-verify.c /tmp/ra_tls.h /tmp/libratls-quote-verify.so; \
+    echo "Successfully rebuilt libratls-quote-verify.so with gcc"
 
 # Create directories for MySQL data and SSL certificates
 RUN mkdir -p /var/lib/mysql /var/lib/mysql-ssl /var/run/mysqld \
