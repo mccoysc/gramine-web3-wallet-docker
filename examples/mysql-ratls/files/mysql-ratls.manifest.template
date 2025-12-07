@@ -89,25 +89,23 @@ sgx.remote_attestation = "dcap"
 # Trusted files (integrity-checked at load time)
 # Note: RA-TLS library (libratls-quote-verify.so) is automatically handled
 # by the manifest compiler when GRAMINE_LD_PRELOAD is set
-sgx.trusted_files = [
-  # Gramine LibOS
-  "file:{{ gramine.libos }}",
-  "file:{{ gramine.runtimedir() }}/",
-  
-  # Launcher binary (entrypoint)
-  "file:{{ entrypoint }}",
-  
-  # MySQL server binary (target of execve)
-  "file:/usr/sbin/mysqld",
-  
-  # System libraries needed by MySQL and launcher
-  "file:/usr/lib/",
-  "file:/usr/local/lib/",
-  
-  # MySQL configuration and support files
-  "file:/etc/mysql/",
-  "file:/usr/share/mysql/",
-]
+#
+# IMPORTANT: The trusted_files section below is dynamically generated during
+# Docker build by the generate-trusted-files.sh script. This ensures only
+# the minimal set of required files are included, improving startup time.
+#
+# The script analyzes dependencies using ldd and includes:
+# - Gramine LibOS and runtime libraries
+# - MySQL server binary and its dependencies
+# - Launcher binary and its dependencies (including libcurl)
+# - MySQL plugins, configuration files, and support files
+# - NSS libraries for DNS resolution
+# - SGX DCAP libraries for attestation
+#
+# DO NOT manually edit the trusted_files section - it will be overwritten
+# during the Docker build process.
+
+# __TRUSTED_FILES_PLACEHOLDER__
 
 # Allowed files (can be modified at runtime, not integrity-checked)
 # Note: MySQL data directory and logs are in encrypted partition (/app/wallet/)
