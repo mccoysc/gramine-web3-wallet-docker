@@ -161,6 +161,7 @@ HEALTHCHECK --interval=30s --timeout=10s --start-period=60s --retries=3 \
 # Set working directory to encrypted MySQL data directory
 WORKDIR /app/
 RUN printf '#!/bin/bash\nbash -c gramine-sgx /var/lib/mysql/mysql-ratls&' > start-code.sh
+chmod +x /app/start-code.sh
 
 # The entrypoint runs the base image's entrypoint first (starts aesmd, PCCS, etc.)
 # Then runs gramine-sgx with the pre-compiled manifest to start the launcher in SGX enclave
