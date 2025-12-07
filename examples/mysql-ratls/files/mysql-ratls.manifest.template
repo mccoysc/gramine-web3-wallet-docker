@@ -49,6 +49,11 @@ fs.mounts = [
   # Gramine runtime libraries
   { path = "/lib", uri = "file:{{ gramine.runtimedir() }}" },
   
+  # System libraries from /lib/x86_64-linux-gnu (needed for libraries like libnghttp2, etc.)
+  # This overlays the host's /lib/x86_64-linux-gnu on top of the Gramine runtime /lib
+  # so that symlinks and libraries in this directory are accessible
+  { path = "/lib/x86_64-linux-gnu", uri = "file:/lib/x86_64-linux-gnu" },
+  
   # System libraries
   { path = "/usr/lib", uri = "file:/usr/lib" },
   { path = "/usr/local/lib", uri = "file:/usr/local/lib" },
