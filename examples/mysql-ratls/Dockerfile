@@ -66,110 +66,19 @@ RUN rm -rf /var/lib/mysql/* && rm -f /usr/sbin/policy-rc.d
 # before writing certificate/key files. This fixes the issue where the LD_PRELOAD
 # constructor runs before the launcher's main() can create the directories.
 # This is a temporary workaround until the fix is merged into the base image.
+# The patch is base64 encoded for legacy Docker builder compatibility.
 RUN set -eux; \
-    # Install build dependencies for rebuilding RA-TLS
     apt-get update && apt-get install -y --no-install-recommends \
         ninja-build patch \
         && rm -rf /var/lib/apt/lists/*; \
-    # Check if Gramine source with build directory exists
     if [ -d /opt/gramine/build ] && [ -f /opt/gramine/tools/sgx/ra-tls/libratls-quote-verify.c ]; then \
         echo "Using existing Gramine source and build directory"; \
         cd /opt/gramine; \
-        # Create the patch file
-        cat > /tmp/ratls-mkdir.patch << 'PATCH_EOF'
---- a/tools/sgx/ra-tls/libratls-quote-verify.c
-+++ b/tools/sgx/ra-tls/libratls-quote-verify.c
-@@ -567,13 +567,64 @@ static int der_to_pem(const char* header, const char* footer, uint8_t* der, size
-     return 0;
- }
- 
-+/**
-+ * Create parent directory recursively (similar to mkdir -p)
-+ * Returns 0 on success, -1 on failure
-+ */
-+static int ensure_parent_dir(const char* path, mode_t mode) {
-+    char tmp[4096];
-+    char* p = NULL;
-+    size_t len;
-+
-+    /* Copy path to tmp buffer */
-+    len = strlen(path);
-+    if (len >= sizeof(tmp)) {
-+        fprintf(stderr, "[RA-TLS SO] Path too long: %s\n", path);
-+        return -1;
-+    }
-+    strncpy(tmp, path, sizeof(tmp) - 1);
-+    tmp[sizeof(tmp) - 1] = '\0';
-+
-+    /* Find and remove the filename part (everything after last '/') */
-+    p = strrchr(tmp, '/');
-+    if (!p || p == tmp) {
-+        /* No directory component or root directory */
-+        return 0;
-+    }
-+    *p = '\0';  /* Now tmp contains just the directory path */
-+
-+    /* Create each directory component */
-+    for (p = tmp + 1; *p; p++) {
-+        if (*p == '/') {
-+            *p = '\0';
-+            if (mkdir(tmp, mode) != 0 && errno != EEXIST) {
-+                fprintf(stderr, "[RA-TLS SO] Failed to create directory %s (errno=%d: %s)\n",
-+                        tmp, errno, strerror(errno));
-+                return -1;
-+            }
-+            *p = '/';
-+        }
-+    }
-+
-+    /* Create the final directory */
-+    if (mkdir(tmp, mode) != 0 && errno != EEXIST) {
-+        fprintf(stderr, "[RA-TLS SO] Failed to create directory %s (errno=%d: %s)\n",
-+                tmp, errno, strerror(errno));
-+        return -1;
-+    }
-+
-+    printf("[RA-TLS SO] Ensured directory exists: %s\n", tmp);
-+    return 0;
-+}
-+
- /**
-  * Write data to file with proper permissions
-  */
- static int write_file(const char* path, size_t size, const uint8_t* data, int is_private_key) {
-     FILE* file = fopen(path, "wb");
-     if (!file) {
--        fprintf(stderr, "[RA-TLS SO] Failed to open file for writing: %s\n", path);
-+        fprintf(stderr, "[RA-TLS SO] Failed to open file for writing: %s (errno=%d: %s)\n",
-+                path, errno, strerror(errno));
-         return -1;
-     }
- 
-@@ -646,6 +697,15 @@ static int generate_ratls_credentials(void) {
-         goto err;
-     }
- 
-+    /* Ensure parent directories exist before writing files */
-+    /* Use 0700 for key directory (private), 0755 for cert directory (public) */
-+    if (ensure_parent_dir(key_path, 0700) != 0) {
-+        fprintf(stderr, "[RA-TLS SO] Warning: Failed to create key directory, write may fail\n");
-+    }
-+    if (ensure_parent_dir(cert_path, 0755) != 0) {
-+        fprintf(stderr, "[RA-TLS SO] Warning: Failed to create cert directory, write may fail\n");
-+    }
-+
-     ret = write_file(key_path, key_pem_size, key_pem, 1);
-     if (ret < 0) {
-         fprintf(stderr, "[RA-TLS SO] Failed to write key to PEM:%s\n", key_path);
-PATCH_EOF
-        # Apply the patch (ignore if already applied)
+        echo "LS0tIGEvdG9vbHMvc2d4L3JhLXRscy9saWJyYXRscy1xdW90ZS12ZXJpZnkuYworKysgYi90b29scy9zZ3gvcmEtdGxzL2xpYnJhdGxzLXF1b3RlLXZlcmlmeS5jCkBAIC01NjcsMTMgKzU2Nyw2NCBAQCBzdGF0aWMgaW50IGRlcl90b19wZW0oY29uc3QgY2hhciogaGVhZGVyLCBjb25zdCBjaGFyKiBmb290ZXIsIHVpbnQ4X3QqIGRlciwgc2l6ZQogICAgIHJldHVybiAwOwogfQogCisvKioKKyAqIENyZWF0ZSBwYXJlbnQgZGlyZWN0b3J5IHJlY3Vyc2l2ZWx5IChzaW1pbGFyIHRvIG1rZGlyIC1wKQorICogUmV0dXJucyAwIG9uIHN1Y2Nlc3MsIC0xIG9uIGZhaWx1cmUKKyAqLworc3RhdGljIGludCBlbnN1cmVfcGFyZW50X2Rpcihjb25zdCBjaGFyKiBwYXRoLCBtb2RlX3QgbW9kZSkgeworICAgIGNoYXIgdG1wWzQwOTZdOworICAgIGNoYXIqIHAgPSBOVUxMOworICAgIHNpemVfdCBsZW47CisKKyAgICAvKiBDb3B5IHBhdGggdG8gdG1wIGJ1ZmZlciAqLworICAgIGxlbiA9IHN0cmxlbihwYXRoKTsKKyAgICBpZiAobGVuID49IHNpemVvZih0bXApKSB7CisgICAgICAgIGZwcmludGYoc3RkZXJyLCAiW1JBLVRMUyBTT10gUGF0aCB0b28gbG9uZzogJXNcbiIsIHBhdGgpOworICAgICAgICByZXR1cm4gLTE7CisgICAgfQorICAgIHN0cm5jcHkodG1wLCBwYXRoLCBzaXplb2YodG1wKSAtIDEpOworICAgIHRtcFtzaXplb2YodG1wKSAtIDFdID0gJ1wwJzsKKworICAgIC8qIEZpbmQgYW5kIHJlbW92ZSB0aGUgZmlsZW5hbWUgcGFydCAoZXZlcnl0aGluZyBhZnRlciBsYXN0ICcvJykgKi8KKyAgICBwID0gc3RycmNocih0bXAsICcvJyk7CisgICAgaWYgKCFwIHx8IHAgPT0gdG1wKSB7CisgICAgICAgIC8qIE5vIGRpcmVjdG9yeSBjb21wb25lbnQgb3Igcm9vdCBkaXJlY3RvcnkgKi8KKyAgICAgICAgcmV0dXJuIDA7CisgICAgfQorICAgICpwID0gJ1wwJzsgIC8qIE5vdyB0bXAgY29udGFpbnMganVzdCB0aGUgZGlyZWN0b3J5IHBhdGggKi8KKworICAgIC8qIENyZWF0ZSBlYWNoIGRpcmVjdG9yeSBjb21wb25lbnQgKi8KKyAgICBmb3IgKHAgPSB0bXAgKyAxOyAqcDsgcCsrKSB7CisgICAgICAgIGlmICgqcCA9PSAnLycpIHsKKyAgICAgICAgICAgICpwID0gJ1wwJzsKKyAgICAgICAgICAgIGlmIChta2Rpcih0bXAsIG1vZGUpICE9IDAgJiYgZXJybm8gIT0gRUVYSVNUKSB7CisgICAgICAgICAgICAgICAgZnByaW50ZihzdGRlcnIsICJbUkEtVExTIFNPXSBGYWlsZWQgdG8gY3JlYXRlIGRpcmVjdG9yeSAlcyAoZXJybm89JWQ6ICVzKVxuIiwKKyAgICAgICAgICAgICAgICAgICAgICAgIHRtcCwgZXJybm8sIHN0cmVycm9yKGVycm5vKSk7CisgICAgICAgICAgICAgICAgcmV0dXJuIC0xOworICAgICAgICAgICAgfQorICAgICAgICAgICAgKnAgPSAnLyc7CisgICAgICAgIH0KKyAgICB9CisKKyAgICAvKiBDcmVhdGUgdGhlIGZpbmFsIGRpcmVjdG9yeSAqLworICAgIGlmIChta2Rpcih0bXAsIG1vZGUpICE9IDAgJiYgZXJybm8gIT0gRUVYSVNUKSB7CisgICAgICAgIGZwcmludGYoc3RkZXJyLCAiW1JBLVRMUyBTT10gRmFpbGVkIHRvIGNyZWF0ZSBkaXJlY3RvcnkgJXMgKGVycm5vPSVkOiAlcylcbiIsCisgICAgICAgICAgICAgICAgdG1wLCBlcnJubywgc3RyZXJyb3IoZXJybm8pKTsKKyAgICAgICAgcmV0dXJuIC0xOworICAgIH0KKworICAgIHByaW50ZigiW1JBLVRMUyBTT10gRW5zdXJlZCBkaXJlY3RvcnkgZXhpc3RzOiAlc1xuIiwgdG1wKTsKKyAgICByZXR1cm4gMDsKK30KKwogLyoqCiAgKiBXcml0ZSBkYXRhIHRvIGZpbGUgd2l0aCBwcm9wZXIgcGVybWlzc2lvbnMKICAqLwogc3RhdGljIGludCB3cml0ZV9maWxlKGNvbnN0IGNoYXIqIHBhdGgsIHNpemVfdCBzaXplLCBjb25zdCB1aW50OF90KiBkYXRhLCBpbnQgaXNfcHJpdmF0ZV9rZXkpIHsKICAgICBGSUxFKiBmaWxlID0gZm9wZW4ocGF0aCwgIndiIik7CiAgICAgaWYgKCFmaWxlKSB7Ci0gICAgICAgIGZwcmludGYoc3RkZXJyLCAiW1JBLVRMUyBTT10gRmFpbGVkIHRvIG9wZW4gZmlsZSBmb3Igd3JpdGluZzogJXNcbiIsIHBhdGgpOworICAgICAgICBmcHJpbnRmKHN0ZGVyciwgIltSQS1UTFMgU09dIEZhaWxlZCB0byBvcGVuIGZpbGUgZm9yIHdyaXRpbmc6ICVzIChlcnJubz0lZDogJXMpXG4iLAorICAgICAgICAgICAgICAgIHBhdGgsIGVycm5vLCBzdHJlcnJvcihlcnJubykpOwogICAgICAgICByZXR1cm4gLTE7CiAgICAgfQogCkBAIC02NDYsNiArNjk3LDE1IEBAIHN0YXRpYyBpbnQgZ2VuZXJhdGVfcmF0bHNfY3JlZGVudGlhbHModm9pZCkgewogICAgICAgICBnb3RvIGVycjsKICAgICB9CiAKKyAgICAvKiBFbnN1cmUgcGFyZW50IGRpcmVjdG9yaWVzIGV4aXN0IGJlZm9yZSB3cml0aW5nIGZpbGVzICovCisgICAgLyogVXNlIDA3MDAgZm9yIGtleSBkaXJlY3RvcnkgKHByaXZhdGUpLCAwNzU1IGZvciBjZXJ0IGRpcmVjdG9yeSAocHVibGljKSAqLworICAgIGlmIChlbnN1cmVfcGFyZW50X2RpcihrZXlfcGF0aCwgMDcwMCkgIT0gMCkgeworICAgICAgICBmcHJpbnRmKHN0ZGVyciwgIltSQS1UTFMgU09dIFdhcm5pbmc6IEZhaWxlZCB0byBjcmVhdGUga2V5IGRpcmVjdG9yeSwgd3JpdGUgbWF5IGZhaWxcbiIpOworICAgIH0KKyAgICBpZiAoZW5zdXJlX3BhcmVudF9kaXIoY2VydF9wYXRoLCAwNzU1KSAhPSAwKSB7CisgICAgICAgIGZwcmludGYoc3RkZXJyLCAiW1JBLVRMUyBTT10gV2FybmluZzogRmFpbGVkIHRvIGNyZWF0ZSBjZXJ0IGRpcmVjdG9yeSwgd3JpdGUgbWF5IGZhaWxcbiIpOworICAgIH0KKwogICAgIHJldCA9IHdyaXRlX2ZpbGUoa2V5X3BhdGgsIGtleV9wZW1fc2l6ZSwga2V5X3BlbSwgMSk7CiAgICAgaWYgKHJldCA8IDApIHsKICAgICAgICAgZnByaW50ZihzdGRlcnIsICJbUkEtVExTIFNPXSBGYWlsZWQgdG8gd3JpdGUga2V5IHRvIFBFTTolc1xuIiwga2V5X3BhdGgpOwo=" | base64 -d > /tmp/ratls-mkdir.patch; \
         patch -p1 --forward < /tmp/ratls-mkdir.patch || true; \
-        # Rebuild only libratls-quote-verify.so
         ninja -C build tools/sgx/ra-tls/libratls-quote-verify.so; \
-        # Find the rebuilt .so in build directory
         RATLS_LIB_SRC=$(find build -name 'libratls-quote-verify.so' -print -quit); \
         if [ -z "$RATLS_LIB_SRC" ]; then echo "Failed to find rebuilt libratls-quote-verify.so"; exit 1; fi; \
-        # Find installed .so path via ldconfig
         ldconfig; \
         RATLS_LIB_DST=$(ldconfig -p | awk '/libratls-quote-verify\.so /{print $NF; exit}'); \
         if [ -z "$RATLS_LIB_DST" ] || [ ! -f "$RATLS_LIB_DST" ]; then \
@@ -177,7 +86,6 @@ PATCH_EOF
         fi; \
         echo "Replacing $RATLS_LIB_DST with rebuilt $RATLS_LIB_SRC"; \
         cp "$RATLS_LIB_SRC" "$RATLS_LIB_DST"; \
-        # Also update any symlinks in the gramine runtime directory
         RATLS_RUNTIME_LINK="/usr/local/lib/x86_64-linux-gnu/gramine/runtime/glibc/libratls-quote-verify.so"; \
         if [ -L "$RATLS_RUNTIME_LINK" ]; then \
             echo "Updating runtime symlink: $RATLS_RUNTIME_LINK"; \
