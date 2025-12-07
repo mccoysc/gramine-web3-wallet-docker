@@ -74,10 +74,8 @@ RUN set -eux; \
     curl -fsSL "https://raw.githubusercontent.com/${GRAMINE_REPO}/master/tools/sgx/ra-tls/libratls-quote-verify.c" -o libratls-quote-verify.c; \
     curl -fsSL "https://raw.githubusercontent.com/${GRAMINE_REPO}/master/tools/sgx/ra-tls/ra_tls.h" -o ra_tls.h; \
     gcc -shared -fPIC -o libratls-quote-verify.so libratls-quote-verify.c \
-        -I/usr/local/include/gramine -I/usr/include/mbedtls -I. \
-        -L/usr/local/lib/x86_64-linux-gnu \
-        -lra_tls_attest -lra_tls_verify_dcap_gramine \
-        -ldl -lpthread; \
+        -ldl -lpthread -lra_tls_attest -lra_tls_verify_dcap_gramine \
+        -I/usr/include/gramine -DHAVE_MBEDTLS_HEADERS=1;\
     ldconfig; \
     RATLS_LIB_DST=$(ldconfig -p | awk '/libratls-quote-verify\.so /{print $NF; exit}'); \
     if [ -z "$RATLS_LIB_DST" ] || [ ! -f "$RATLS_LIB_DST" ]; then \
