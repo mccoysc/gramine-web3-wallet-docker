@@ -172,21 +172,32 @@ for nss_lib in /lib/x86_64-linux-gnu/libnss_*.so* /usr/lib/x86_64-linux-gnu/libn
     fi
 done
 
-# Add MySQL plugins directory (commonly needed plugins) - recursively
+# Add MySQL plugins directory (ALL plugins) - recursively
 echo "# Adding MySQL plugins (recursive)..." >&2
-MYSQL_PLUGIN_DIR="/usr/lib/mysql/plugin"
-if [ -d "$MYSQL_PLUGIN_DIR" ]; then
-    # Add essential plugins and their dependencies
-    for plugin in \
-        "$MYSQL_PLUGIN_DIR/mysql_native_password.so" \
-        "$MYSQL_PLUGIN_DIR/caching_sha2_password.so" \
-        "$MYSQL_PLUGIN_DIR/sha256_password.so" \
-        "$MYSQL_PLUGIN_DIR/auth_socket.so"; do
-        if [ -f "$plugin" ]; then
-            add_dep_recursive "$plugin"
-        fi
-    done
-fi
+# Check multiple possible MySQL plugin directories
+for MYSQL_PLUGIN_DIR in /usr/lib/mysql/plugin /usr/lib/x86_64-linux-gnu/mysql/plugin; do
+    if [ -d "$MYSQL_PLUGIN_DIR" ]; then
+        echo "# Found MySQL plugin directory: $MYSQL_PLUGIN_DIR" >&2
+        # Add ALL plugins in the directory and their dependencies
+        for plugin in "$MYSQL_PLUGIN_DIR"/*.so; do
+            if [ -f "$plugin" ]; then
+                add_dep_recursive "$plugin"
+            fi
+        done
+    fi
+done
+
+# Add MySQL components (component_*.so files are loaded dynamically)
+echo "# Adding MySQL components..." >&2
+for MYSQL_PLUGIN_DIR in /usr/lib/mysql/plugin /usr/lib/x86_64-linux-gnu/mysql/plugin; do
+    if [ -d "$MYSQL_PLUGIN_DIR" ]; then
+        for component in "$MYSQL_PLUGIN_DIR"/component_*.so; do
+            if [ -f "$component" ]; then
+                add_dep_recursive "$component"
+            fi
+        done
+    fi
+done
 
 # Add libcurl dependencies (for launcher HTTP requests) - recursively
 echo "# Adding libcurl and dependencies (recursive)..." >&2
@@ -249,6 +260,12 @@ generate_output() {
     echo '  "file:/etc/mysql/mysql.cnf",'
     echo '  "file:/etc/mysql/mysql.conf.d/",'
     echo '  "file:/etc/mysql/conf.d/",'
+    echo ""
+    echo "  # MySQL plugin directories (entire directories for dynamically loaded plugins/components)"
+    echo '  "file:/usr/lib/mysql/plugin/",'
+    if [ -d "/usr/lib/x86_64-linux-gnu/mysql/plugin" ]; then
+        echo '  "file:/usr/lib/x86_64-linux-gnu/mysql/plugin/",'
+    fi
     echo ""
     echo "  # MySQL support files (charsets, error messages)"
     echo '  "file:/usr/share/mysql/charsets/",'
