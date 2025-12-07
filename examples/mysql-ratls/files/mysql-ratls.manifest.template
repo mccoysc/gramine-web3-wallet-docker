@@ -76,7 +76,7 @@ fs.mounts = [
   
   # Encrypted storage for MySQL data, private keys, and sensitive files
   # MySQL data directory MUST be in encrypted partition to prevent data leakage
-  { type = "encrypted", path = "/app/wallet", uri = "file:/app/wallet" },
+  { type = "encrypted", path = "/app/wallet", uri = "file:/app/wallet",key_name = "_sgx_mrenclave" },
   
   # Temporary directory
   { type = "tmpfs", path = "/tmp" },
