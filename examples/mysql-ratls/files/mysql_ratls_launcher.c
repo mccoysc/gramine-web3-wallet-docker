@@ -18,6 +18,9 @@
 #include <errno.h>
 #include <sys/stat.h>
 #include <sys/types.h>
+#include <sys/wait.h>
+#include <dirent.h>
+#include <fcntl.h>
 #include <curl/curl.h>
 
 #include "cJSON.h"
@@ -119,6 +122,184 @@ static void get_dirname(const char *path, char *dir, size_t dir_size) {
 static int file_exists(const char *path) {
     struct stat st;
     return stat(path, &st) == 0;
+}
+
+/* Check if directory is empty or doesn't exist */
+static int is_dir_empty(const char *path) {
+    struct stat st;
+    if (stat(path, &st) != 0) {
+        return 1;  /* Directory doesn't exist, treat as empty */
+    }
+    if (!S_ISDIR(st.st_mode)) {
+        return 1;  /* Not a directory */
+    }
+    
+    /* Check for MySQL system files that indicate initialization */
+    char ibdata_path[MAX_PATH_LEN];
+    snprintf(ibdata_path, sizeof(ibdata_path), "%s/ibdata1", path);
+    if (file_exists(ibdata_path)) {
+        return 0;  /* ibdata1 exists, not empty */
+    }
+    
+    return 1;  /* No MySQL system files found */
+}
+
+/* Check if MySQL data directory needs initialization */
+static int needs_mysql_init(const char *data_dir) {
+    /* Check if the data directory has MySQL system files (ibdata1) */
+    return is_dir_empty(data_dir);
+}
+
+/* Pre-initialized MySQL data template directory */
+#define MYSQL_TEMPLATE_DIR "/app/mysql-init-data"
+
+/* Copy a single file from src to dst, preserving mode */
+static int copy_file(const char *src, const char *dst, mode_t mode) {
+    int src_fd = -1, dst_fd = -1;
+    char buf[8192];
+    ssize_t nread;
+    int ret = -1;
+    
+    src_fd = open(src, O_RDONLY);
+    if (src_fd < 0) {
+        fprintf(stderr, "[Launcher] Failed to open source file %s: %s\n", src, strerror(errno));
+        goto cleanup;
+    }
+    
+    dst_fd = open(dst, O_WRONLY | O_CREAT | O_TRUNC, mode & 0777);
+    if (dst_fd < 0) {
+        fprintf(stderr, "[Launcher] Failed to create destination file %s: %s\n", dst, strerror(errno));
+        goto cleanup;
+    }
+    
+    while ((nread = read(src_fd, buf, sizeof(buf))) > 0) {
+        ssize_t nwritten = 0;
+        while (nwritten < nread) {
+            ssize_t n = write(dst_fd, buf + nwritten, nread - nwritten);
+            if (n < 0) {
+                fprintf(stderr, "[Launcher] Failed to write to %s: %s\n", dst, strerror(errno));
+                goto cleanup;
+            }
+            nwritten += n;
+        }
+    }
+    
+    if (nread < 0) {
+        fprintf(stderr, "[Launcher] Failed to read from %s: %s\n", src, strerror(errno));
+        goto cleanup;
+    }
+    
+    ret = 0;
+    
+cleanup:
+    if (src_fd >= 0) close(src_fd);
+    if (dst_fd >= 0) close(dst_fd);
+    return ret;
+}
+
+/* Recursively copy directory tree from src_root to dst_root */
+static int copy_tree(const char *src_root, const char *dst_root) {
+    DIR *dir = NULL;
+    struct dirent *entry;
+    struct stat st;
+    char src_path[MAX_PATH_LEN];
+    char dst_path[MAX_PATH_LEN];
+    int ret = -1;
+    
+    dir = opendir(src_root);
+    if (!dir) {
+        fprintf(stderr, "[Launcher] Failed to open directory %s: %s\n", src_root, strerror(errno));
+        return -1;
+    }
+    
+    /* Create destination directory if it doesn't exist */
+    if (mkdir(dst_root, 0755) != 0 && errno != EEXIST) {
+        fprintf(stderr, "[Launcher] Failed to create directory %s: %s\n", dst_root, strerror(errno));
+        goto cleanup;
+    }
+    
+    while ((entry = readdir(dir)) != NULL) {
+        /* Skip . and .. */
+        if (strcmp(entry->d_name, ".") == 0 || strcmp(entry->d_name, "..") == 0) {
+            continue;
+        }
+        
+        snprintf(src_path, sizeof(src_path), "%s/%s", src_root, entry->d_name);
+        snprintf(dst_path, sizeof(dst_path), "%s/%s", dst_root, entry->d_name);
+        
+        if (lstat(src_path, &st) != 0) {
+            fprintf(stderr, "[Launcher] Failed to stat %s: %s\n", src_path, strerror(errno));
+            goto cleanup;
+        }
+        
+        if (S_ISDIR(st.st_mode)) {
+            /* Recursively copy subdirectory */
+            if (copy_tree(src_path, dst_path) != 0) {
+                goto cleanup;
+            }
+        } else if (S_ISREG(st.st_mode)) {
+            /* Copy regular file */
+            if (copy_file(src_path, dst_path, st.st_mode) != 0) {
+                goto cleanup;
+            }
+        } else if (S_ISLNK(st.st_mode)) {
+            /* Handle symlinks - read link target and create new symlink */
+            char link_target[MAX_PATH_LEN];
+            ssize_t len = readlink(src_path, link_target, sizeof(link_target) - 1);
+            if (len < 0) {
+                fprintf(stderr, "[Launcher] Failed to read symlink %s: %s\n", src_path, strerror(errno));
+                goto cleanup;
+            }
+            link_target[len] = '\0';
+            
+            /* Remove existing symlink if any */
+            unlink(dst_path);
+            
+            if (symlink(link_target, dst_path) != 0) {
+                fprintf(stderr, "[Launcher] Failed to create symlink %s -> %s: %s\n", dst_path, link_target, strerror(errno));
+                goto cleanup;
+            }
+        } else {
+            fprintf(stderr, "[Launcher] Skipping unsupported file type: %s\n", src_path);
+        }
+    }
+    
+    ret = 0;
+    
+cleanup:
+    if (dir) closedir(dir);
+    return ret;
+}
+
+/* Copy pre-initialized MySQL data from template to encrypted partition */
+static int copy_mysql_template_data(const char *data_dir) {
+    printf("[Launcher] Copying MySQL template data from %s to %s\n", MYSQL_TEMPLATE_DIR, data_dir);
+    
+    /* Check if template directory exists */
+    struct stat st;
+    if (stat(MYSQL_TEMPLATE_DIR, &st) != 0 || !S_ISDIR(st.st_mode)) {
+        fprintf(stderr, "[Launcher] ERROR: MySQL template directory not found: %s\n", MYSQL_TEMPLATE_DIR);
+        fprintf(stderr, "[Launcher] This directory should be created during Docker build\n");
+        return -1;
+    }
+    
+    /* Check if template has ibdata1 (indicates valid initialization) */
+    char ibdata_path[MAX_PATH_LEN];
+    snprintf(ibdata_path, sizeof(ibdata_path), "%s/ibdata1", MYSQL_TEMPLATE_DIR);
+    if (!file_exists(ibdata_path)) {
+        fprintf(stderr, "[Launcher] ERROR: MySQL template directory is not properly initialized\n");
+        fprintf(stderr, "[Launcher] Missing: %s\n", ibdata_path);
+        return -1;
+    }
+    
+    /* Copy the entire template directory to the data directory */
+    if (copy_tree(MYSQL_TEMPLATE_DIR, data_dir) != 0) {
+        fprintf(stderr, "[Launcher] ERROR: Failed to copy MySQL template data\n");
+        return -1;
+    }
+    
+    printf("[Launcher] MySQL template data copied successfully\n");
+    return 0;
 }
 
 /* Check if MySQL is initialized (sentinel file exists) */
@@ -512,6 +693,24 @@ int main(int argc, char *argv[]) {
         fprintf(stderr, "[Launcher] Warning: Failed to create logs directory: %s\n", strerror(errno));
     }
     
+    /* Check if MySQL data directory needs initialization */
+    /* Instead of running mysqld --initialize-insecure inside the enclave (which was failing),
+     * we copy pre-initialized data from a template directory that was created during Docker build.
+     * This approach:
+     * 1. Avoids running initialization inside the enclave (more reliable)
+     * 2. Avoids forking child processes inside the enclave (better performance)
+     * 3. The copied data gets automatically encrypted by Gramine's encrypted filesystem
+     */
+    if (needs_mysql_init(data_dir_to_create)) {
+        printf("[Launcher] MySQL data directory is empty or missing system files\n");
+        if (copy_mysql_template_data(data_dir_to_create) != 0) {
+            fprintf(stderr, "[Launcher] ERROR: Failed to copy MySQL template data, cannot continue\n");
+            return 1;
+        }
+    } else {
+        printf("[Launcher] MySQL data directory already initialized (ibdata1 exists)\n");
+    }
+    
     /* Handle whitelist configuration */
     printf("\n[Launcher] Whitelist Configuration:\n");
     
@@ -585,11 +784,12 @@ int main(int argc, char *argv[]) {
     }
     
     /* Build argument list for mysqld */
-    /* We need: mysqld --datadir=... --ssl-cert=... --ssl-key=... --require-secure-transport=ON --console [--init-file=...] [user args] */
+    /* We need: mysqld --datadir=... --ssl-cert=... --ssl-key=... --require-secure-transport=ON --log-error=... --console [--init-file=...] [user args] */
     /* Note: No --user=mysql since we run as root in container (user said it's not needed) */
+    /* Note: --log-error is needed to override any config file setting that points to encrypted partition */
     /* Note: --console outputs logs to stderr for easier debugging in container environments */
     
-    int extra_args = first_boot ? 7 : 6;  /* Add 1 for --init-file on first boot, +1 for --console */
+    int extra_args = first_boot ? 8 : 7;  /* Add 1 for --init-file on first boot, +1 for --log-error, +1 for --console */
     int new_argc = argc + extra_args;
     char **new_argv = malloc((new_argc + 1) * sizeof(char *));
     if (!new_argv) {
@@ -612,6 +812,7 @@ int main(int argc, char *argv[]) {
     new_argv[idx++] = ssl_cert_arg;
     new_argv[idx++] = ssl_key_arg;
     new_argv[idx++] = "--require-secure-transport=ON";
+    new_argv[idx++] = "--log-error=/var/log/mysql/error.log";  /* Override config file setting */
     new_argv[idx++] = "--console";  /* Output logs to stderr for easier debugging */
     
     /* Add --init-file on first boot */
@@ -631,7 +832,7 @@ int main(int argc, char *argv[]) {
     const char *ratls_lib = find_ratls_library();
     if (ratls_lib) {
         printf("[Launcher] Found RA-TLS library: %s\n", ratls_lib);
-        /* set_env("LD_PRELOAD", ratls_lib, 1); */
+        set_env("LD_PRELOAD", ratls_lib, 1); 
     } else {
         fprintf(stderr, "[Launcher] Warning: RA-TLS library not found in any candidate path\n");
         fprintf(stderr, "[Launcher] MySQL will start without RA-TLS injection\n");
@@ -641,7 +842,8 @@ int main(int argc, char *argv[]) {
     printf("[Launcher]   Data directory: %s\n", data_dir);
     printf("[Launcher]   Certificate: %s\n", cert_path);
     printf("[Launcher]   Private key: %s\n", key_path);
-    printf("[Launcher]   Log output: console (stderr)\n");
+    printf("[Launcher]   Log file: /var/log/mysql/error.log\n");
+    printf("[Launcher]   Log output: console (stderr) + file\n");
     if (ratls_lib) {
         printf("[Launcher]   LD_PRELOAD: %s\n", ratls_lib);
     }
