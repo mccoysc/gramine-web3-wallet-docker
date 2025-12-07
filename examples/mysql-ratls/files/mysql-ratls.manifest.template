@@ -1,0 +1,132 @@
+# Gramine manifest template for MySQL RA-TLS
+# This manifest runs the mysql-ratls-launcher which then execve() to mysqld
+# Both the launcher and mysqld run inside the same SGX enclave
+
+# Note: loader.entrypoint is automatically set by gramine-manifest to the LibOS
+# libos.entrypoint specifies the actual application to run inside the enclave
+libos.entrypoint = "{{ entrypoint }}"
+
+loader.log_level = "{{ log_level }}"
+
+# Allow command line arguments from gramine-sgx invocation
+loader.insecure__use_cmdline_argv = true
+
+# Environment variables
+loader.env.LD_LIBRARY_PATH = "/lib:/usr/lib:/lib/x86_64-linux-gnu:/usr/lib/x86_64-linux-gnu:/usr/local/lib:/usr/local/lib/x86_64-linux-gnu"
+loader.env.PATH = "/usr/bin:/bin:/usr/sbin:/sbin:/usr/local/bin"
+loader.env.HOME = "/app/wallet/mysql-data"
+
+# Note: RA-TLS injection via LD_PRELOAD is handled by GRAMINE_LD_PRELOAD environment variable
+# during manifest generation (standard approach). Do NOT hardcode loader.env.LD_PRELOAD here
+# as it will cause duplication.
+
+# RA-TLS Configuration
+# Use secp256k1 curve for Ethereum compatibility
+loader.env.RA_TLS_CERT_ALGORITHM = "secp256k1"
+
+# Enable RA-TLS verification and require peer certificate for mutual TLS
+loader.env.RATLS_ENABLE_VERIFY = "1"
+loader.env.RATLS_REQUIRE_PEER_CERT = "1"
+
+# Certificate and key paths (fixed in manifest for security)
+# Certificate can be in normal directory
+loader.env.RATLS_CERT_PATH = "/var/lib/mysql-ssl/server-cert.pem"
+# Private key MUST be in encrypted partition
+loader.env.RATLS_KEY_PATH = "/app/wallet/mysql-keys/server-key.pem"
+
+# Contract configuration for whitelist (passthrough from host for deployment flexibility)
+loader.env.CONTRACT_ADDRESS = { passthrough = true }
+loader.env.RPC_URL = { passthrough = true }
+# Note: RATLS_WHITELIST_CONFIG is read from contract, not from host env
+# The launcher reads it from the contract and sets it internally
+
+# MySQL configuration (fixed in manifest for security)
+loader.env.MYSQL_DATA_DIR = "/app/wallet/mysql-data"
+# Note: MYSQL_ROOT_PASSWORD is not needed because MySQL uses X.509 certificate authentication only
+
+# Filesystem mounts
+fs.mounts = [
+  # Gramine runtime libraries
+  { path = "/lib", uri = "file:{{ gramine.runtimedir() }}" },
+  
+  # System libraries
+  { path = "/usr/lib", uri = "file:/usr/lib" },
+  { path = "/usr/local/lib", uri = "file:/usr/local/lib" },
+  
+  # Binaries
+  { path = "/usr/bin", uri = "file:/usr/bin" },
+  { path = "/usr/sbin", uri = "file:/usr/sbin" },
+  { path = "/usr/local/bin", uri = "file:/usr/local/bin" },
+  { path = "/bin", uri = "file:/bin" },
+  { path = "/sbin", uri = "file:/sbin" },
+  
+  # System configuration
+  { path = "/etc", uri = "file:/etc" },
+  
+  # MySQL SSL certificate directory (writable for RA-TLS cert generation)
+  { path = "/var/lib/mysql-ssl", uri = "file:/var/lib/mysql-ssl" },
+  
+  # MySQL runtime directory (for socket file)
+  { path = "/var/run/mysqld", uri = "file:/var/run/mysqld" },
+  
+  # Encrypted storage for MySQL data, private keys, and sensitive files
+  # MySQL data directory MUST be in encrypted partition to prevent data leakage
+  { type = "encrypted", path = "/app/wallet", uri = "file:/app/wallet" },
+  
+  # Temporary directory
+  { type = "tmpfs", path = "/tmp" },
+]
+
+# SGX configuration
+sgx.debug = false
+sgx.enclave_size = "4G"
+sgx.max_threads = 64
+sgx.edmm_enable = true
+
+# Enable DCAP attestation
+sgx.remote_attestation = "dcap"
+
+# Trusted files (integrity-checked at load time)
+# Note: RA-TLS library (libratls-quote-verify.so) is automatically handled
+# by the manifest compiler when GRAMINE_LD_PRELOAD is set
+sgx.trusted_files = [
+  # Gramine LibOS
+  "file:{{ gramine.libos }}",
+  "file:{{ gramine.runtimedir() }}/",
+  
+  # Launcher binary (entrypoint)
+  "file:{{ entrypoint }}",
+  
+  # MySQL server binary (target of execve)
+  "file:/usr/sbin/mysqld",
+  
+  # System libraries needed by MySQL and launcher
+  "file:/usr/lib/",
+  "file:/usr/local/lib/",
+  
+  # MySQL configuration and support files
+  "file:/etc/mysql/",
+  "file:/usr/share/mysql/",
+]
+
+# Allowed files (can be modified at runtime, not integrity-checked)
+# Note: MySQL data directory and logs are in encrypted partition (/app/wallet/)
+# and do not need to be listed here as encrypted mounts handle their own files
+sgx.allowed_files = [
+  # SSL certificates directory (public certificates only, private keys in encrypted partition)
+  "file:/var/lib/mysql-ssl/",
+  
+  # MySQL runtime directory (for socket file)
+  "file:/var/run/mysqld/",
+  
+  # Temporary files
+  "file:/tmp/",
+  
+  # DNS resolution (read-only system files)
+  "file:/etc/hosts",
+  "file:/etc/resolv.conf",
+  "file:/etc/nsswitch.conf",
+  
+  # Note: MySQL logs are stored in encrypted partition at /app/wallet/mysql-logs
+  # to prevent data leakage through log files
+]
