@@ -126,13 +126,14 @@ sgx.allowed_files = [
   # MySQL runtime directory (for socket file)
   "file:/var/run/mysqld/",
   
+  # MySQL secure file operations directory
+  "file:/var/lib/mysql-files/",
+  
   # Temporary files
   "file:/tmp/",
   
-  # DNS resolution (read-only system files)
-  "file:/etc/hosts",
-  "file:/etc/resolv.conf",
-  "file:/etc/nsswitch.conf",
+  # System configuration directory
+  "file:/etc/",
   
   # Note: MySQL logs are stored in encrypted partition at /app/wallet/mysql-logs
   # to prevent data leakage through log files

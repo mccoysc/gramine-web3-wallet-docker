@@ -59,10 +59,10 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 # and remove policy-rc.d since we're done with apt installations
 RUN rm -rf /var/lib/mysql/* && rm -f /usr/sbin/policy-rc.d
 
-# Create directories for MySQL data and SSL certificates
-RUN mkdir -p /var/lib/mysql /var/lib/mysql-ssl /var/run/mysqld \
-    && chown -R mysql:mysql /var/lib/mysql /var/lib/mysql-ssl /var/run/mysqld \
-    && chmod 755 /var/run/mysqld
+# Create directories for MySQL data, SSL certificates, and secure file operations
+RUN mkdir -p /var/lib/mysql /var/lib/mysql-ssl /var/run/mysqld /var/lib/mysql-files \
+    && chown -R mysql:mysql /var/lib/mysql /var/lib/mysql-ssl /var/run/mysqld /var/lib/mysql-files \
+    && chmod 755 /var/run/mysqld /var/lib/mysql-files
 
 # Create launcher directory
 RUN mkdir -p /opt/mysql-ratls/launcher
