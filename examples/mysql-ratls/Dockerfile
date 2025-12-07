@@ -102,7 +102,7 @@ RUN printf '\n# RA-TLS Configuration\n[mysqld]\n# Require secure transport (SSL/
 # This generates the signed manifest so it's ready to run immediately
 RUN mkdir -p /var/lib/mysql-ssl /var/run/mysqld \
     /app/wallet/mysql-keys /app/wallet/mysql-data /app/wallet/mysql-logs && \
-    chown -R mysql:mysql /app/wallet/mysql-keys /app/wallet/mysql-data /app/wallet/mysql-logs && \
+    chown -R mysql:mysql /app/wallet/mysql-data /app/wallet/mysql-logs /app/wallet/mysql-keys && \
     chmod 700 /app/wallet/mysql-keys && \
     # Generate signing key for manifest
     mkdir -p /root/.config/gramine && \
