@@ -6,8 +6,9 @@
 # Architecture:
 # - A C launcher program runs inside the SGX enclave
 # - The launcher reads whitelist from smart contract (if configured)
+# - The launcher sets LD_PRELOAD to inject RA-TLS library for mysqld
 # - The launcher uses execve() to replace itself with mysqld (same enclave)
-# - RA-TLS is injected via LD_PRELOAD configured in the Gramine manifest
+# - Only mysqld gets RA-TLS hooks (launcher runs without them)
 # - DCAP attestation is enabled for remote verification
 #
 # Features:
@@ -115,22 +116,17 @@ RUN printf '\n# RA-TLS Configuration\n[mysqld]\n# Require secure transport (SSL/
 # Note: Directories in /app/wallet/ are created by the launcher inside the enclave
 # (encrypted partition), so we only create non-encrypted directories here.
 # No chown/chmod needed since we run as root in container.
+#
+# IMPORTANT: We do NOT set GRAMINE_LD_PRELOAD here. Instead, the launcher sets
+# LD_PRELOAD before execve() to mysqld. This means:
+# - The launcher runs WITHOUT RA-TLS hooks (no LD_PRELOAD for launcher)
+# - Only mysqld gets the RA-TLS library injected via LD_PRELOAD
+# - The RA-TLS library is already in trusted_files via generate-trusted-files.sh
 RUN mkdir -p /var/lib/mysql-ssl /var/run/mysqld && \
     # Generate signing key for manifest
     mkdir -p /root/.config/gramine && \
     gramine-sgx-gen-private-key && \
-    # Find RA-TLS library path
-    RATLS_LIB_PATH=""; \
-    for path in /usr/local/lib/x86_64-linux-gnu/libratls-quote-verify.so \
-                /usr/local/lib/libratls-quote-verify.so \
-                /usr/lib/x86_64-linux-gnu/libratls-quote-verify.so; do \
-        if [ -f "$path" ]; then RATLS_LIB_PATH="$path"; break; fi; \
-    done; \
-    if [ -n "$RATLS_LIB_PATH" ]; then \
-        export GRAMINE_LD_PRELOAD="file:${RATLS_LIB_PATH}"; \
-        echo "Set GRAMINE_LD_PRELOAD=${GRAMINE_LD_PRELOAD}"; \
-    fi; \
-    # Generate manifest
+    # Generate manifest (no GRAMINE_LD_PRELOAD - launcher handles LD_PRELOAD)
     mkdir -p /var/lib/mysql && \
     cd /var/lib/mysql && \
     gramine-manifest \

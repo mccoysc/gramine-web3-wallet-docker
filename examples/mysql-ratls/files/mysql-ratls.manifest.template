@@ -16,9 +16,11 @@ loader.env.LD_LIBRARY_PATH = "/lib:/usr/lib:/lib/x86_64-linux-gnu:/usr/lib/x86_6
 loader.env.PATH = "/usr/bin:/bin:/usr/sbin:/sbin:/usr/local/bin"
 loader.env.HOME = "/app/wallet/mysql-data"
 
-# Note: RA-TLS injection via LD_PRELOAD is handled by GRAMINE_LD_PRELOAD environment variable
-# during manifest generation (standard approach). Do NOT hardcode loader.env.LD_PRELOAD here
-# as it will cause duplication.
+# Note: RA-TLS injection via LD_PRELOAD is handled by the launcher, NOT by GRAMINE_LD_PRELOAD.
+# The launcher sets LD_PRELOAD before execve() to mysqld, so:
+# - The launcher runs WITHOUT RA-TLS hooks
+# - Only mysqld gets the RA-TLS library injected
+# Do NOT set loader.env.LD_PRELOAD here - the launcher handles it dynamically.
 
 # RA-TLS Configuration
 # Use secp256k1 curve for Ethereum compatibility
@@ -92,8 +94,9 @@ sgx.edmm_enable = true
 sgx.remote_attestation = "dcap"
 
 # Trusted files (integrity-checked at load time)
-# Note: RA-TLS library (libratls-quote-verify.so) is automatically handled
-# by the manifest compiler when GRAMINE_LD_PRELOAD is set
+# Note: RA-TLS library (libratls-quote-verify.so) is included in trusted_files
+# by the generate-trusted-files.sh script. The launcher sets LD_PRELOAD at runtime
+# before execve() to mysqld, so the library must be trusted.
 #
 # IMPORTANT: The trusted_files section below is dynamically generated during
 # Docker build by the generate-trusted-files.sh script. This ensures only
@@ -103,6 +106,7 @@ sgx.remote_attestation = "dcap"
 # - Gramine LibOS and runtime libraries
 # - MySQL server binary and its dependencies
 # - Launcher binary and its dependencies (including libcurl)
+# - RA-TLS library and its dependencies (for LD_PRELOAD injection)
 # - MySQL plugins, configuration files, and support files
 # - NSS libraries for DNS resolution
 # - SGX DCAP libraries for attestation
