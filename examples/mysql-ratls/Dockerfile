@@ -62,6 +62,136 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 # and remove policy-rc.d since we're done with apt installations
 RUN rm -rf /var/lib/mysql/* && rm -f /usr/sbin/policy-rc.d
 
+# Patch and rebuild libratls-quote-verify.so to ensure parent directories are created
+# before writing certificate/key files. This fixes the issue where the LD_PRELOAD
+# constructor runs before the launcher's main() can create the directories.
+# This is a temporary workaround until the fix is merged into the base image.
+RUN set -eux; \
+    # Install build dependencies for rebuilding RA-TLS
+    apt-get update && apt-get install -y --no-install-recommends \
+        ninja-build patch \
+        && rm -rf /var/lib/apt/lists/*; \
+    # Check if Gramine source with build directory exists
+    if [ -d /opt/gramine/build ] && [ -f /opt/gramine/tools/sgx/ra-tls/libratls-quote-verify.c ]; then \
+        echo "Using existing Gramine source and build directory"; \
+        cd /opt/gramine; \
+        # Create the patch file
+        cat > /tmp/ratls-mkdir.patch << 'PATCH_EOF'
+--- a/tools/sgx/ra-tls/libratls-quote-verify.c
++++ b/tools/sgx/ra-tls/libratls-quote-verify.c
+@@ -567,13 +567,64 @@ static int der_to_pem(const char* header, const char* footer, uint8_t* der, size
+     return 0;
+ }
+ 
++/**
++ * Create parent directory recursively (similar to mkdir -p)
++ * Returns 0 on success, -1 on failure
++ */
++static int ensure_parent_dir(const char* path, mode_t mode) {
++    char tmp[4096];
++    char* p = NULL;
++    size_t len;
++
++    /* Copy path to tmp buffer */
++    len = strlen(path);
++    if (len >= sizeof(tmp)) {
++        fprintf(stderr, "[RA-TLS SO] Path too long: %s\n", path);
++        return -1;
++    }
++    strncpy(tmp, path, sizeof(tmp) - 1);
++    tmp[sizeof(tmp) - 1] = '\0';
++
++    /* Find and remove the filename part (everything after last '/') */
++    p = strrchr(tmp, '/');
++    if (!p || p == tmp) {
++        /* No directory component or root directory */
++        return 0;
++    }
++    *p = '\0';  /* Now tmp contains just the directory path */
++
++    /* Create each directory component */
++    for (p = tmp + 1; *p; p++) {
++        if (*p == '/') {
++            *p = '\0';
++            if (mkdir(tmp, mode) != 0 && errno != EEXIST) {
++                fprintf(stderr, "[RA-TLS SO] Failed to create directory %s (errno=%d: %s)\n",
++                        tmp, errno, strerror(errno));
++                return -1;
++            }
++            *p = '/';
++        }
++    }
++
++    /* Create the final directory */
++    if (mkdir(tmp, mode) != 0 && errno != EEXIST) {
++        fprintf(stderr, "[RA-TLS SO] Failed to create directory %s (errno=%d: %s)\n",
++                tmp, errno, strerror(errno));
++        return -1;
++    }
++
++    printf("[RA-TLS SO] Ensured directory exists: %s\n", tmp);
++    return 0;
++}
++
+ /**
+  * Write data to file with proper permissions
+  */
+ static int write_file(const char* path, size_t size, const uint8_t* data, int is_private_key) {
+     FILE* file = fopen(path, "wb");
+     if (!file) {
+-        fprintf(stderr, "[RA-TLS SO] Failed to open file for writing: %s\n", path);
++        fprintf(stderr, "[RA-TLS SO] Failed to open file for writing: %s (errno=%d: %s)\n",
++                path, errno, strerror(errno));
+         return -1;
+     }
+ 
+@@ -646,6 +697,15 @@ static int generate_ratls_credentials(void) {
+         goto err;
+     }
+ 
++    /* Ensure parent directories exist before writing files */
++    /* Use 0700 for key directory (private), 0755 for cert directory (public) */
++    if (ensure_parent_dir(key_path, 0700) != 0) {
++        fprintf(stderr, "[RA-TLS SO] Warning: Failed to create key directory, write may fail\n");
++    }
++    if (ensure_parent_dir(cert_path, 0755) != 0) {
++        fprintf(stderr, "[RA-TLS SO] Warning: Failed to create cert directory, write may fail\n");
++    }
++
+     ret = write_file(key_path, key_pem_size, key_pem, 1);
+     if (ret < 0) {
+         fprintf(stderr, "[RA-TLS SO] Failed to write key to PEM:%s\n", key_path);
+PATCH_EOF
+        # Apply the patch (ignore if already applied)
+        patch -p1 --forward < /tmp/ratls-mkdir.patch || true; \
+        # Rebuild only libratls-quote-verify.so
+        ninja -C build tools/sgx/ra-tls/libratls-quote-verify.so; \
+        # Find the rebuilt .so in build directory
+        RATLS_LIB_SRC=$(find build -name 'libratls-quote-verify.so' -print -quit); \
+        if [ -z "$RATLS_LIB_SRC" ]; then echo "Failed to find rebuilt libratls-quote-verify.so"; exit 1; fi; \
+        # Find installed .so path via ldconfig
+        ldconfig; \
+        RATLS_LIB_DST=$(ldconfig -p | awk '/libratls-quote-verify\.so /{print $NF; exit}'); \
+        if [ -z "$RATLS_LIB_DST" ] || [ ! -f "$RATLS_LIB_DST" ]; then \
+            echo "Cannot locate installed libratls-quote-verify.so to replace"; exit 1; \
+        fi; \
+        echo "Replacing $RATLS_LIB_DST with rebuilt $RATLS_LIB_SRC"; \
+        cp "$RATLS_LIB_SRC" "$RATLS_LIB_DST"; \
+        # Also update any symlinks in the gramine runtime directory
+        RATLS_RUNTIME_LINK="/usr/local/lib/x86_64-linux-gnu/gramine/runtime/glibc/libratls-quote-verify.so"; \
+        if [ -L "$RATLS_RUNTIME_LINK" ]; then \
+            echo "Updating runtime symlink: $RATLS_RUNTIME_LINK"; \
+            rm -f "$RATLS_RUNTIME_LINK"; \
+            ln -sf "$RATLS_LIB_DST" "$RATLS_RUNTIME_LINK"; \
+        fi; \
+        ldconfig; \
+        rm -f /tmp/ratls-mkdir.patch; \
+        echo "Successfully patched and rebuilt libratls-quote-verify.so"; \
+    else \
+        echo "WARNING: Gramine source/build not found, skipping libratls-quote-verify.so patch"; \
+        echo "The base image should already have the fix, or you need to rebuild the base image"; \
+    fi
+
 # Create directories for MySQL data and SSL certificates
 RUN mkdir -p /var/lib/mysql /var/lib/mysql-ssl /var/run/mysqld \
     && chown -R mysql:mysql /var/lib/mysql /var/lib/mysql-ssl /var/run/mysqld \
