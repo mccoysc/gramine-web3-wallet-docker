@@ -62,43 +62,56 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 # and remove policy-rc.d since we're done with apt installations
 RUN rm -rf /var/lib/mysql/* && rm -f /usr/sbin/policy-rc.d
 
-# Patch and rebuild libratls-quote-verify.so to ensure parent directories are created
-# before writing certificate/key files. This fixes the issue where the LD_PRELOAD
-# constructor runs before the launcher's main() can create the directories.
-# This is a temporary workaround until the fix is merged into the base image.
-# The patch is base64 encoded for legacy Docker builder compatibility.
+# Rebuild libratls-quote-verify.so from the upstream gramine repo which now includes
+# the fix to create parent directories before writing certificate/key files.
+# This fixes the issue where the LD_PRELOAD constructor runs before the launcher's
+# main() can create the directories.
+# The fix was merged in gramine PR #60: https://github.com/mccoysc/gramine/pull/60
+ARG GRAMINE_REPO=mccoysc/gramine
 RUN set -eux; \
     apt-get update && apt-get install -y --no-install-recommends \
-        ninja-build patch \
+        git ninja-build meson pkg-config cmake nasm \
+        python3 python3-pip python3-dev \
+        libprotobuf-c-dev protobuf-c-compiler \
+        libcurl4-openssl-dev \
         && rm -rf /var/lib/apt/lists/*; \
-    if [ -d /opt/gramine/build ] && [ -f /opt/gramine/tools/sgx/ra-tls/libratls-quote-verify.c ]; then \
-        echo "Using existing Gramine source and build directory"; \
-        cd /opt/gramine; \
-        echo "LS0tIGEvdG9vbHMvc2d4L3JhLXRscy9saWJyYXRscy1xdW90ZS12ZXJpZnkuYworKysgYi90b29scy9zZ3gvcmEtdGxzL2xpYnJhdGxzLXF1b3RlLXZlcmlmeS5jCkBAIC01NjcsMTMgKzU2Nyw2NCBAQCBzdGF0aWMgaW50IGRlcl90b19wZW0oY29uc3QgY2hhciogaGVhZGVyLCBjb25zdCBjaGFyKiBmb290ZXIsIHVpbnQ4X3QqIGRlciwgc2l6ZQogICAgIHJldHVybiAwOwogfQogCisvKioKKyAqIENyZWF0ZSBwYXJlbnQgZGlyZWN0b3J5IHJlY3Vyc2l2ZWx5IChzaW1pbGFyIHRvIG1rZGlyIC1wKQorICogUmV0dXJucyAwIG9uIHN1Y2Nlc3MsIC0xIG9uIGZhaWx1cmUKKyAqLworc3RhdGljIGludCBlbnN1cmVfcGFyZW50X2Rpcihjb25zdCBjaGFyKiBwYXRoLCBtb2RlX3QgbW9kZSkgeworICAgIGNoYXIgdG1wWzQwOTZdOworICAgIGNoYXIqIHAgPSBOVUxMOworICAgIHNpemVfdCBsZW47CisKKyAgICAvKiBDb3B5IHBhdGggdG8gdG1wIGJ1ZmZlciAqLworICAgIGxlbiA9IHN0cmxlbihwYXRoKTsKKyAgICBpZiAobGVuID49IHNpemVvZih0bXApKSB7CisgICAgICAgIGZwcmludGYoc3RkZXJyLCAiW1JBLVRMUyBTT10gUGF0aCB0b28gbG9uZzogJXNcbiIsIHBhdGgpOworICAgICAgICByZXR1cm4gLTE7CisgICAgfQorICAgIHN0cm5jcHkodG1wLCBwYXRoLCBzaXplb2YodG1wKSAtIDEpOworICAgIHRtcFtzaXplb2YodG1wKSAtIDFdID0gJ1wwJzsKKworICAgIC8qIEZpbmQgYW5kIHJlbW92ZSB0aGUgZmlsZW5hbWUgcGFydCAoZXZlcnl0aGluZyBhZnRlciBsYXN0ICcvJykgKi8KKyAgICBwID0gc3RycmNocih0bXAsICcvJyk7CisgICAgaWYgKCFwIHx8IHAgPT0gdG1wKSB7CisgICAgICAgIC8qIE5vIGRpcmVjdG9yeSBjb21wb25lbnQgb3Igcm9vdCBkaXJlY3RvcnkgKi8KKyAgICAgICAgcmV0dXJuIDA7CisgICAgfQorICAgICpwID0gJ1wwJzsgIC8qIE5vdyB0bXAgY29udGFpbnMganVzdCB0aGUgZGlyZWN0b3J5IHBhdGggKi8KKworICAgIC8qIENyZWF0ZSBlYWNoIGRpcmVjdG9yeSBjb21wb25lbnQgKi8KKyAgICBmb3IgKHAgPSB0bXAgKyAxOyAqcDsgcCsrKSB7CisgICAgICAgIGlmICgqcCA9PSAnLycpIHsKKyAgICAgICAgICAgICpwID0gJ1wwJzsKKyAgICAgICAgICAgIGlmIChta2Rpcih0bXAsIG1vZGUpICE9IDAgJiYgZXJybm8gIT0gRUVYSVNUKSB7CisgICAgICAgICAgICAgICAgZnByaW50ZihzdGRlcnIsICJbUkEtVExTIFNPXSBGYWlsZWQgdG8gY3JlYXRlIGRpcmVjdG9yeSAlcyAoZXJybm89JWQ6ICVzKVxuIiwKKyAgICAgICAgICAgICAgICAgICAgICAgIHRtcCwgZXJybm8sIHN0cmVycm9yKGVycm5vKSk7CisgICAgICAgICAgICAgICAgcmV0dXJuIC0xOworICAgICAgICAgICAgfQorICAgICAgICAgICAgKnAgPSAnLyc7CisgICAgICAgIH0KKyAgICB9CisKKyAgICAvKiBDcmVhdGUgdGhlIGZpbmFsIGRpcmVjdG9yeSAqLworICAgIGlmIChta2Rpcih0bXAsIG1vZGUpICE9IDAgJiYgZXJybm8gIT0gRUVYSVNUKSB7CisgICAgICAgIGZwcmludGYoc3RkZXJyLCAiW1JBLVRMUyBTT10gRmFpbGVkIHRvIGNyZWF0ZSBkaXJlY3RvcnkgJXMgKGVycm5vPSVkOiAlcylcbiIsCisgICAgICAgICAgICAgICAgdG1wLCBlcnJubywgc3RyZXJyb3IoZXJybm8pKTsKKyAgICAgICAgcmV0dXJuIC0xOworICAgIH0KKworICAgIHByaW50ZigiW1JBLVRMUyBTT10gRW5zdXJlZCBkaXJlY3RvcnkgZXhpc3RzOiAlc1xuIiwgdG1wKTsKKyAgICByZXR1cm4gMDsKK30KKwogLyoqCiAgKiBXcml0ZSBkYXRhIHRvIGZpbGUgd2l0aCBwcm9wZXIgcGVybWlzc2lvbnMKICAqLwogc3RhdGljIGludCB3cml0ZV9maWxlKGNvbnN0IGNoYXIqIHBhdGgsIHNpemVfdCBzaXplLCBjb25zdCB1aW50OF90KiBkYXRhLCBpbnQgaXNfcHJpdmF0ZV9rZXkpIHsKICAgICBGSUxFKiBmaWxlID0gZm9wZW4ocGF0aCwgIndiIik7CiAgICAgaWYgKCFmaWxlKSB7Ci0gICAgICAgIGZwcmludGYoc3RkZXJyLCAiW1JBLVRMUyBTT10gRmFpbGVkIHRvIG9wZW4gZmlsZSBmb3Igd3JpdGluZzogJXNcbiIsIHBhdGgpOworICAgICAgICBmcHJpbnRmKHN0ZGVyciwgIltSQS1UTFMgU09dIEZhaWxlZCB0byBvcGVuIGZpbGUgZm9yIHdyaXRpbmc6ICVzIChlcnJubz0lZDogJXMpXG4iLAorICAgICAgICAgICAgICAgIHBhdGgsIGVycm5vLCBzdHJlcnJvcihlcnJubykpOwogICAgICAgICByZXR1cm4gLTE7CiAgICAgfQogCkBAIC02NDYsNiArNjk3LDE1IEBAIHN0YXRpYyBpbnQgZ2VuZXJhdGVfcmF0bHNfY3JlZGVudGlhbHModm9pZCkgewogICAgICAgICBnb3RvIGVycjsKICAgICB9CiAKKyAgICAvKiBFbnN1cmUgcGFyZW50IGRpcmVjdG9yaWVzIGV4aXN0IGJlZm9yZSB3cml0aW5nIGZpbGVzICovCisgICAgLyogVXNlIDA3MDAgZm9yIGtleSBkaXJlY3RvcnkgKHByaXZhdGUpLCAwNzU1IGZvciBjZXJ0IGRpcmVjdG9yeSAocHVibGljKSAqLworICAgIGlmIChlbnN1cmVfcGFyZW50X2RpcihrZXlfcGF0aCwgMDcwMCkgIT0gMCkgeworICAgICAgICBmcHJpbnRmKHN0ZGVyciwgIltSQS1UTFMgU09dIFdhcm5pbmc6IEZhaWxlZCB0byBjcmVhdGUga2V5IGRpcmVjdG9yeSwgd3JpdGUgbWF5IGZhaWxcbiIpOworICAgIH0KKyAgICBpZiAoZW5zdXJlX3BhcmVudF9kaXIoY2VydF9wYXRoLCAwNzU1KSAhPSAwKSB7CisgICAgICAgIGZwcmludGYoc3RkZXJyLCAiW1JBLVRMUyBTT10gV2FybmluZzogRmFpbGVkIHRvIGNyZWF0ZSBjZXJ0IGRpcmVjdG9yeSwgd3JpdGUgbWF5IGZhaWxcbiIpOworICAgIH0KKwogICAgIHJldCA9IHdyaXRlX2ZpbGUoa2V5X3BhdGgsIGtleV9wZW1fc2l6ZSwga2V5X3BlbSwgMSk7CiAgICAgaWYgKHJldCA8IDApIHsKICAgICAgICAgZnByaW50ZihzdGRlcnIsICJbUkEtVExTIFNPXSBGYWlsZWQgdG8gd3JpdGUga2V5IHRvIFBFTTolc1xuIiwga2V5X3BhdGgpOwo=" | base64 -d > /tmp/ratls-mkdir.patch; \
-        patch -p1 --forward < /tmp/ratls-mkdir.patch || true; \
-        ninja -C build tools/sgx/ra-tls/libratls-quote-verify.so; \
-        RATLS_LIB_SRC=$(find build -name 'libratls-quote-verify.so' -print -quit); \
-        if [ -z "$RATLS_LIB_SRC" ]; then echo "Failed to find rebuilt libratls-quote-verify.so"; exit 1; fi; \
-        ldconfig; \
-        RATLS_LIB_DST=$(ldconfig -p | awk '/libratls-quote-verify\.so /{print $NF; exit}'); \
-        if [ -z "$RATLS_LIB_DST" ] || [ ! -f "$RATLS_LIB_DST" ]; then \
-            echo "Cannot locate installed libratls-quote-verify.so to replace"; exit 1; \
-        fi; \
-        echo "Replacing $RATLS_LIB_DST with rebuilt $RATLS_LIB_SRC"; \
-        cp "$RATLS_LIB_SRC" "$RATLS_LIB_DST"; \
-        RATLS_RUNTIME_LINK="/usr/local/lib/x86_64-linux-gnu/gramine/runtime/glibc/libratls-quote-verify.so"; \
-        if [ -L "$RATLS_RUNTIME_LINK" ]; then \
-            echo "Updating runtime symlink: $RATLS_RUNTIME_LINK"; \
-            rm -f "$RATLS_RUNTIME_LINK"; \
-            ln -sf "$RATLS_LIB_DST" "$RATLS_RUNTIME_LINK"; \
-        fi; \
-        ldconfig; \
-        rm -f /tmp/ratls-mkdir.patch; \
-        echo "Successfully patched and rebuilt libratls-quote-verify.so"; \
-    else \
-        echo "WARNING: Gramine source/build not found, skipping libratls-quote-verify.so patch"; \
-        echo "The base image should already have the fix, or you need to rebuild the base image"; \
-    fi
+    curl -fsSL https://download.01.org/intel-sgx/sgx_repo/ubuntu/intel-sgx-deb.key | gpg --dearmor -o /usr/share/keyrings/intel-sgx.gpg; \
+    echo 'deb [arch=amd64 signed-by=/usr/share/keyrings/intel-sgx.gpg] https://download.01.org/intel-sgx/sgx_repo/ubuntu jammy main' > /etc/apt/sources.list.d/intel-sgx.list; \
+    apt-get update && apt-get install -y --no-install-recommends \
+        libsgx-dcap-ql-dev \
+        libsgx-dcap-quote-verify-dev \
+        libsgx-headers \
+        libsgx-urts \
+        && rm -rf /var/lib/apt/lists/*; \
+    cd /tmp; \
+    git clone --depth 1 https://github.com/${GRAMINE_REPO}.git gramine-src; \
+    cd gramine-src; \
+    meson setup build/ \
+        --buildtype=release \
+        -Dsgx=enabled \
+        -Ddirect=disabled \
+        -Dlibc=none \
+        -Dtests=disabled \
+        -Ddcap=enabled; \
+    ninja -C build/ tools/sgx/ra-tls/libratls-quote-verify.so; \
+    RATLS_LIB_SRC=$(find build -name 'libratls-quote-verify.so' -print -quit); \
+    if [ -z "$RATLS_LIB_SRC" ]; then echo "Failed to find rebuilt libratls-quote-verify.so"; exit 1; fi; \
+    ldconfig; \
+    RATLS_LIB_DST=$(ldconfig -p | awk '/libratls-quote-verify\.so /{print $NF; exit}'); \
+    if [ -z "$RATLS_LIB_DST" ] || [ ! -f "$RATLS_LIB_DST" ]; then \
+        echo "Cannot locate installed libratls-quote-verify.so to replace"; exit 1; \
+    fi; \
+    echo "Replacing $RATLS_LIB_DST with rebuilt $RATLS_LIB_SRC"; \
+    cp "$RATLS_LIB_SRC" "$RATLS_LIB_DST"; \
+    RATLS_RUNTIME_LINK="/usr/local/lib/x86_64-linux-gnu/gramine/runtime/glibc/libratls-quote-verify.so"; \
+    if [ -L "$RATLS_RUNTIME_LINK" ]; then \
+        echo "Updating runtime symlink: $RATLS_RUNTIME_LINK"; \
+        rm -f "$RATLS_RUNTIME_LINK"; \
+        ln -sf "$RATLS_LIB_DST" "$RATLS_RUNTIME_LINK"; \
+    fi; \
+    ldconfig; \
+    cd /tmp && rm -rf gramine-src; \
+    echo "Successfully rebuilt libratls-quote-verify.so from upstream gramine repo"
 
 # Create directories for MySQL data and SSL certificates
 RUN mkdir -p /var/lib/mysql /var/lib/mysql-ssl /var/run/mysqld \
