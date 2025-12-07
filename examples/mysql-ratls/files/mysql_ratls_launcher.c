@@ -30,6 +30,14 @@
 #define INIT_SENTINEL_FILE ".mysql_initialized"
 #define INIT_SQL_FILE "init_users.sql"
 
+/* RA-TLS library candidate paths (searched in order) */
+static const char *RATLS_LIB_PATHS[] = {
+    "/usr/local/lib/x86_64-linux-gnu/libratls-quote-verify.so",
+    "/usr/local/lib/libratls-quote-verify.so",
+    "/usr/lib/x86_64-linux-gnu/libratls-quote-verify.so",
+    NULL
+};
+
 /* getSGXConfig() function selector: keccak256("getSGXConfig()")[0:4] */
 #define GET_SGX_CONFIG_SELECTOR "0x062e2252"
 
@@ -427,6 +435,16 @@ static void set_env_default(const char *name, const char *default_value) {
     }
 }
 
+/* Find the RA-TLS library by searching candidate paths */
+static const char *find_ratls_library(void) {
+    for (int i = 0; RATLS_LIB_PATHS[i] != NULL; i++) {
+        if (file_exists(RATLS_LIB_PATHS[i])) {
+            return RATLS_LIB_PATHS[i];
+        }
+    }
+    return NULL;
+}
+
 int main(int argc, char *argv[]) {
     printf("==========================================\n");
     printf("MySQL RA-TLS Launcher (SGX Enclave)\n");
@@ -604,17 +622,32 @@ int main(int argc, char *argv[]) {
     }
     new_argv[idx] = NULL;
     
+    /* Set LD_PRELOAD for mysqld to load the RA-TLS library */
+    /* The launcher does NOT use LD_PRELOAD itself; only mysqld needs it */
+    /* This allows the launcher to run without RA-TLS hooks, while mysqld gets them */
+    const char *ratls_lib = find_ratls_library();
+    if (ratls_lib) {
+        printf("[Launcher] Found RA-TLS library: %s\n", ratls_lib);
+        set_env("LD_PRELOAD", ratls_lib, 1);
+    } else {
+        fprintf(stderr, "[Launcher] Warning: RA-TLS library not found in any candidate path\n");
+        fprintf(stderr, "[Launcher] MySQL will start without RA-TLS injection\n");
+    }
+    
     printf("[Launcher] Executing: %s\n", MYSQLD_PATH);
     printf("[Launcher]   Data directory: %s\n", data_dir);
     printf("[Launcher]   Certificate: %s\n", cert_path);
     printf("[Launcher]   Private key: %s\n", key_path);
+    if (ratls_lib) {
+        printf("[Launcher]   LD_PRELOAD: %s\n", ratls_lib);
+    }
     if (first_boot && init_file_arg[0] != '\0') {
         printf("[Launcher]   Init file: %s\n", init_sql_path);
     }
     printf("\n");
     
-    /* Use execve to replace this process with mysqld */
-    /* This preserves the environment variables we set */
+    /* Use execv to replace this process with mysqld */
+    /* execv preserves the environment variables we set (including LD_PRELOAD) */
     execv(MYSQLD_PATH, new_argv);
     
     /* If we get here, execve failed */
