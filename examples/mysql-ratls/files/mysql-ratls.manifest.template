@@ -30,6 +30,13 @@ loader.env.RA_TLS_CERT_ALGORITHM = "secp256k1"
 loader.env.RATLS_ENABLE_VERIFY = "1"
 loader.env.RATLS_REQUIRE_PEER_CERT = "1"
 
+# Allow platforms with out-of-date TCB or configuration needed status
+# These are INSECURE settings that accept platforms that haven't been updated
+# to the latest microcode/firmware. Use only when necessary for compatibility.
+loader.env.RA_TLS_ALLOW_OUTDATED_TCB_INSECURE = "1"
+loader.env.RA_TLS_ALLOW_HW_CONFIG_NEEDED = "1"
+loader.env.RA_TLS_ALLOW_SW_HARDENING_NEEDED = "1"
+
 # Certificate and key paths (fixed in manifest for security)
 # Certificate can be in normal directory
 loader.env.RATLS_CERT_PATH = "/var/lib/mysql-ssl/server-cert.pem"
@@ -76,9 +83,12 @@ fs.mounts = [
   # MySQL runtime directory (for socket file)
   { path = "/var/run/mysqld", uri = "file:/var/run/mysqld" },
   
+  # MySQL secure file operations directory (for LOAD DATA INFILE, etc.)
+  { path = "/var/lib/mysql-files", uri = "file:/var/lib/mysql-files" },
+  
   # Encrypted storage for MySQL data, private keys, and sensitive files
   # MySQL data directory MUST be in encrypted partition to prevent data leakage
-  { type = "encrypted", path = "/app/wallet", uri = "file:/app/wallet",key_name = "_sgx_mrenclave" },
+  { type = "encrypted", path = "/app/wallet", uri = "file:/app/wallet", key_name = "_sgx_mrenclave" },
   
   # Temporary directory
   { type = "tmpfs", path = "/tmp" },
