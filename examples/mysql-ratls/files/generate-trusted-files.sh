@@ -267,9 +267,8 @@ generate_output() {
         echo '  "file:/usr/lib/x86_64-linux-gnu/mysql/plugin/",'
     fi
     echo ""
-    echo "  # MySQL support files (charsets, error messages)"
-    echo '  "file:/usr/share/mysql/charsets/",'
-    echo '  "file:/usr/share/mysql/english/",'
+    echo "  # MySQL support files (charsets, error messages, etc.)"
+    echo '  "file:/usr/share/mysql/",'
     echo "]"
 }
 
