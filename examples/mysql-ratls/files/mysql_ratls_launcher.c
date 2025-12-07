@@ -628,7 +628,7 @@ int main(int argc, char *argv[]) {
     const char *ratls_lib = find_ratls_library();
     if (ratls_lib) {
         printf("[Launcher] Found RA-TLS library: %s\n", ratls_lib);
-        set_env("LD_PRELOAD", ratls_lib, 1);
+        /* set_env("LD_PRELOAD", ratls_lib, 1); */
     } else {
         fprintf(stderr, "[Launcher] Warning: RA-TLS library not found in any candidate path\n");
         fprintf(stderr, "[Launcher] MySQL will start without RA-TLS injection\n");
