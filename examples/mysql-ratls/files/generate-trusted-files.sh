@@ -269,6 +269,10 @@ generate_output() {
     echo ""
     echo "  # MySQL support files (charsets, error messages, etc.)"
     echo '  "file:/usr/share/mysql/",'
+    echo ""
+    echo "  # Pre-initialized MySQL data directory (template for first boot)"
+    echo "  # This is copied to the encrypted partition at runtime"
+    echo '  "file:/app/mysql-init-data/",'
     echo "]"
 }
 

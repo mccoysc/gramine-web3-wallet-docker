@@ -77,6 +77,10 @@ fs.mounts = [
   # MySQL support files (error messages, charsets, etc.)
   { path = "/usr/share/mysql", uri = "file:/usr/share/mysql" },
   
+  # Pre-initialized MySQL data directory (template for first boot)
+  # This is read-only and copied to the encrypted partition at runtime
+  { path = "/app/mysql-init-data", uri = "file:/app/mysql-init-data" },
+  
   # System configuration
   { path = "/etc", uri = "file:/etc" },
   

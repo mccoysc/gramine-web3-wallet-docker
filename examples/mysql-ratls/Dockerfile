@@ -64,6 +64,21 @@ RUN mkdir -p /var/lib/mysql /var/lib/mysql-ssl /var/run/mysqld /var/lib/mysql-fi
     && chown -R mysql:mysql /var/lib/mysql /var/lib/mysql-ssl /var/run/mysqld /var/lib/mysql-files \
     && chmod 755 /var/run/mysqld /var/lib/mysql-files
 
+# Pre-initialize MySQL data directory during build
+# This creates the system tables and initial data files that MySQL needs
+# At runtime, the launcher will copy these files to the encrypted partition
+# Benefits:
+# - Initialization happens outside the SGX enclave (more reliable)
+# - No need to fork child processes inside the enclave
+# - Pre-initialized data can be added to trusted_files for integrity protection
+RUN mkdir -p /app/mysql-init-data /var/log/mysql && \
+    /usr/sbin/mysqld --initialize-insecure \
+        --datadir=/app/mysql-init-data \
+        --log-error=/var/log/mysql/init-error.log \
+        --console && \
+    echo "MySQL pre-initialization completed successfully" && \
+    ls -la /app/mysql-init-data/
+
 # Create launcher directory
 RUN mkdir -p /opt/mysql-ratls/launcher
 
