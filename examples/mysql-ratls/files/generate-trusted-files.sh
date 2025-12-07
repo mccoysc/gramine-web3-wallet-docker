@@ -7,12 +7,15 @@
 # If output_file is not specified, outputs to stdout
 #
 # The script:
-# 1. Uses ldd to find direct dependencies of mysqld and launcher
-# 2. Adds Gramine runtime libraries and their dependencies
-# 3. Adds MySQL plugins that are commonly needed
-# 4. Adds NSS libraries for DNS resolution
+# 1. Uses ldd to RECURSIVELY find all dependencies of mysqld and launcher
+# 2. Adds Gramine runtime libraries and their dependencies (recursively)
+# 3. Adds MySQL plugins that are commonly needed (and their dependencies)
+# 4. Adds NSS libraries for DNS resolution (and their dependencies)
 # 5. Adds MySQL configuration files
 # 6. Outputs in Gramine manifest format
+#
+# IMPORTANT: This script recursively resolves ALL transitive dependencies
+# to ensure no libraries are missing at runtime.
 
 set -e
 
@@ -39,9 +42,10 @@ for dir in /usr/local/lib/x86_64-linux-gnu/gramine/runtime/glibc /usr/lib/x86_64
     fi
 done
 
-# Temporary file for collecting dependencies
-DEPS_FILE=$(mktemp)
-trap "rm -f $DEPS_FILE" EXIT
+# Temporary files for collecting dependencies
+ALL_DEPS=$(mktemp)
+SEEN_FILE=$(mktemp)
+trap "rm -f $ALL_DEPS $SEEN_FILE" EXIT
 
 # Function to extract library paths from ldd output
 extract_ldd_deps() {
@@ -52,6 +56,44 @@ extract_ldd_deps() {
             awk '{print $3}' | \
             sort -u
     fi
+}
+
+# Function to check if a file has already been processed
+already_seen() {
+    local f="$1"
+    grep -Fxq "$f" "$SEEN_FILE" 2>/dev/null
+}
+
+# Function to recursively add a dependency and all its transitive dependencies
+# This ensures we don't miss any libraries that are dependencies of dependencies
+add_dep_recursive() {
+    local obj="$1"
+    [ -z "$obj" ] && return 0
+    [ ! -f "$obj" ] && return 0
+
+    # Skip if already processed (prevents infinite loops and duplicate work)
+    if already_seen "$obj"; then
+        return 0
+    fi
+
+    # Mark as seen
+    echo "$obj" >> "$SEEN_FILE"
+    
+    # Add to final deps list
+    echo "$obj" >> "$ALL_DEPS"
+
+    # Recursively process this object's dependencies
+    local deps
+    deps=$(extract_ldd_deps "$obj")
+    if [ -n "$deps" ]; then
+        echo "$deps" | while read -r dep; do
+            if [ -n "$dep" ] && [ -f "$dep" ]; then
+                add_dep_recursive "$dep"
+            fi
+        done
+    fi
+    
+    return 0
 }
 
 # Function to resolve symlinks to get the actual file
@@ -73,33 +115,31 @@ add_dir_files() {
     fi
 }
 
-echo "# Analyzing dependencies..." >&2
+echo "# Analyzing dependencies (with recursive resolution)..." >&2
 
-# Collect dependencies from mysqld
-echo "# Analyzing $MYSQLD_PATH..." >&2
+# Collect dependencies from mysqld (recursively)
+echo "# Analyzing $MYSQLD_PATH (recursive)..." >&2
 if [ -f "$MYSQLD_PATH" ]; then
-    extract_ldd_deps "$MYSQLD_PATH" >> "$DEPS_FILE"
+    add_dep_recursive "$MYSQLD_PATH"
 else
     echo "# Warning: $MYSQLD_PATH not found" >&2
 fi
 
-# Collect dependencies from launcher
-echo "# Analyzing $LAUNCHER_PATH..." >&2
+# Collect dependencies from launcher (recursively)
+echo "# Analyzing $LAUNCHER_PATH (recursive)..." >&2
 if [ -f "$LAUNCHER_PATH" ]; then
-    extract_ldd_deps "$LAUNCHER_PATH" >> "$DEPS_FILE"
+    add_dep_recursive "$LAUNCHER_PATH"
 else
     echo "# Warning: $LAUNCHER_PATH not found" >&2
 fi
 
-# Add Gramine runtime libraries and their dependencies
-echo "# Adding Gramine runtime libraries..." >&2
+# Add Gramine runtime libraries and their dependencies (recursively)
+echo "# Adding Gramine runtime libraries (recursive)..." >&2
 if [ -n "$GRAMINE_RUNTIME_DIR" ] && [ -d "$GRAMINE_RUNTIME_DIR" ]; then
     # Add all libraries in the Gramine runtime directory
     for lib in "$GRAMINE_RUNTIME_DIR"/*.so*; do
         if [ -f "$lib" ]; then
-            echo "$lib" >> "$DEPS_FILE"
-            # Also get dependencies of each Gramine runtime library
-            extract_ldd_deps "$lib" >> "$DEPS_FILE"
+            add_dep_recursive "$lib"
         fi
     done
 else
@@ -111,66 +151,73 @@ echo "# Adding Gramine direct libraries..." >&2
 if [ -n "$GRAMINE_LIBDIR" ] && [ -d "$GRAMINE_LIBDIR" ]; then
     for lib in "$GRAMINE_LIBDIR"/direct/*.so* "$GRAMINE_LIBDIR"/sgx/*.so*; do
         if [ -f "$lib" ]; then
-            echo "$lib" >> "$DEPS_FILE"
+            add_dep_recursive "$lib"
         fi
     done
 fi
 
-# Add RA-TLS library and its dependencies
-echo "# Adding RA-TLS libraries..." >&2
+# Add RA-TLS library and its dependencies (recursively)
+echo "# Adding RA-TLS libraries (recursive)..." >&2
 for ratls_lib in /usr/local/lib/x86_64-linux-gnu/libratls*.so* /usr/local/lib/libratls*.so* /usr/lib/x86_64-linux-gnu/libratls*.so*; do
     if [ -f "$ratls_lib" ]; then
-        echo "$ratls_lib" >> "$DEPS_FILE"
-        extract_ldd_deps "$ratls_lib" >> "$DEPS_FILE"
+        add_dep_recursive "$ratls_lib"
     fi
 done
 
-# Add NSS libraries for DNS resolution (loaded via dlopen)
-echo "# Adding NSS libraries..." >&2
+# Add NSS libraries for DNS resolution (loaded via dlopen) - recursively
+echo "# Adding NSS libraries (recursive)..." >&2
 for nss_lib in /lib/x86_64-linux-gnu/libnss_*.so* /usr/lib/x86_64-linux-gnu/libnss_*.so*; do
     if [ -f "$nss_lib" ]; then
-        echo "$nss_lib" >> "$DEPS_FILE"
+        add_dep_recursive "$nss_lib"
     fi
 done
 
-# Add MySQL plugins directory (commonly needed plugins)
-echo "# Adding MySQL plugins..." >&2
-MYSQL_PLUGIN_DIR="/usr/lib/mysql/plugin"
-if [ -d "$MYSQL_PLUGIN_DIR" ]; then
-    # Add essential plugins
-    for plugin in \
-        "$MYSQL_PLUGIN_DIR/mysql_native_password.so" \
-        "$MYSQL_PLUGIN_DIR/caching_sha2_password.so" \
-        "$MYSQL_PLUGIN_DIR/sha256_password.so" \
-        "$MYSQL_PLUGIN_DIR/auth_socket.so"; do
-        if [ -f "$plugin" ]; then
-            echo "$plugin" >> "$DEPS_FILE"
-        fi
-    done
-fi
+# Add MySQL plugins directory (ALL plugins) - recursively
+echo "# Adding MySQL plugins (recursive)..." >&2
+# Check multiple possible MySQL plugin directories
+for MYSQL_PLUGIN_DIR in /usr/lib/mysql/plugin /usr/lib/x86_64-linux-gnu/mysql/plugin; do
+    if [ -d "$MYSQL_PLUGIN_DIR" ]; then
+        echo "# Found MySQL plugin directory: $MYSQL_PLUGIN_DIR" >&2
+        # Add ALL plugins in the directory and their dependencies
+        for plugin in "$MYSQL_PLUGIN_DIR"/*.so; do
+            if [ -f "$plugin" ]; then
+                add_dep_recursive "$plugin"
+            fi
+        done
+    fi
+done
 
-# Add libcurl dependencies (for launcher HTTP requests)
-echo "# Adding libcurl and dependencies..." >&2
+# Add MySQL components (component_*.so files are loaded dynamically)
+echo "# Adding MySQL components..." >&2
+for MYSQL_PLUGIN_DIR in /usr/lib/mysql/plugin /usr/lib/x86_64-linux-gnu/mysql/plugin; do
+    if [ -d "$MYSQL_PLUGIN_DIR" ]; then
+        for component in "$MYSQL_PLUGIN_DIR"/component_*.so; do
+            if [ -f "$component" ]; then
+                add_dep_recursive "$component"
+            fi
+        done
+    fi
+done
+
+# Add libcurl dependencies (for launcher HTTP requests) - recursively
+echo "# Adding libcurl and dependencies (recursive)..." >&2
 for curl_lib in /usr/lib/x86_64-linux-gnu/libcurl*.so*; do
     if [ -f "$curl_lib" ]; then
-        echo "$curl_lib" >> "$DEPS_FILE"
-        # Also get libcurl's dependencies
-        extract_ldd_deps "$curl_lib" >> "$DEPS_FILE"
+        add_dep_recursive "$curl_lib"
     fi
 done
 
-# Add SGX DCAP libraries (for attestation)
-echo "# Adding SGX DCAP libraries..." >&2
+# Add SGX DCAP libraries (for attestation) - recursively
+echo "# Adding SGX DCAP libraries (recursive)..." >&2
 for sgx_lib in /usr/lib/x86_64-linux-gnu/libsgx*.so* /usr/lib/x86_64-linux-gnu/libdcap*.so*; do
     if [ -f "$sgx_lib" ]; then
-        echo "$sgx_lib" >> "$DEPS_FILE"
-        extract_ldd_deps "$sgx_lib" >> "$DEPS_FILE"
+        add_dep_recursive "$sgx_lib"
     fi
 done
 
 # Sort and deduplicate, then resolve symlinks
 echo "# Deduplicating and resolving symlinks..." >&2
-UNIQUE_DEPS=$(sort -u "$DEPS_FILE" | while read -r dep; do
+UNIQUE_DEPS=$(sort -u "$ALL_DEPS" | while read -r dep; do
     if [ -n "$dep" ] && [ -f "$dep" ]; then
         # Output both the symlink and the resolved path
         echo "$dep"
@@ -214,9 +261,18 @@ generate_output() {
     echo '  "file:/etc/mysql/mysql.conf.d/",'
     echo '  "file:/etc/mysql/conf.d/",'
     echo ""
-    echo "  # MySQL support files (charsets, error messages)"
-    echo '  "file:/usr/share/mysql/charsets/",'
-    echo '  "file:/usr/share/mysql/english/",'
+    echo "  # MySQL plugin directories (entire directories for dynamically loaded plugins/components)"
+    echo '  "file:/usr/lib/mysql/plugin/",'
+    if [ -d "/usr/lib/x86_64-linux-gnu/mysql/plugin" ]; then
+        echo '  "file:/usr/lib/x86_64-linux-gnu/mysql/plugin/",'
+    fi
+    echo ""
+    echo "  # MySQL support files (charsets, error messages, etc.)"
+    echo '  "file:/usr/share/mysql/",'
+    echo ""
+    echo "  # Pre-initialized MySQL data directory (template for first boot)"
+    echo "  # This is copied to the encrypted partition at runtime"
+    echo '  "file:/app/mysql-init-data/",'
     echo "]"
 }
 

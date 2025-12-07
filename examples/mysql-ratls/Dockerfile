@@ -6,8 +6,9 @@
 # Architecture:
 # - A C launcher program runs inside the SGX enclave
 # - The launcher reads whitelist from smart contract (if configured)
+# - The launcher sets LD_PRELOAD to inject RA-TLS library for mysqld
 # - The launcher uses execve() to replace itself with mysqld (same enclave)
-# - RA-TLS is injected via LD_PRELOAD configured in the Gramine manifest
+# - Only mysqld gets RA-TLS hooks (launcher runs without them)
 # - DCAP attestation is enabled for remote verification
 #
 # Features:
@@ -58,10 +59,25 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 # and remove policy-rc.d since we're done with apt installations
 RUN rm -rf /var/lib/mysql/* && rm -f /usr/sbin/policy-rc.d
 
-# Create directories for MySQL data and SSL certificates
-RUN mkdir -p /var/lib/mysql /var/lib/mysql-ssl /var/run/mysqld \
-    && chown -R mysql:mysql /var/lib/mysql /var/lib/mysql-ssl /var/run/mysqld \
-    && chmod 755 /var/run/mysqld
+# Create directories for MySQL data, SSL certificates, and secure file operations
+RUN mkdir -p /var/lib/mysql /var/lib/mysql-ssl /var/run/mysqld /var/lib/mysql-files \
+    && chown -R mysql:mysql /var/lib/mysql /var/lib/mysql-ssl /var/run/mysqld /var/lib/mysql-files \
+    && chmod 755 /var/run/mysqld /var/lib/mysql-files
+
+# Pre-initialize MySQL data directory during build
+# This creates the system tables and initial data files that MySQL needs
+# At runtime, the launcher will copy these files to the encrypted partition
+# Benefits:
+# - Initialization happens outside the SGX enclave (more reliable)
+# - No need to fork child processes inside the enclave
+# - Pre-initialized data can be added to trusted_files for integrity protection
+RUN mkdir -p /app/mysql-init-data /var/log/mysql && \
+    /usr/sbin/mysqld --initialize-insecure \
+        --datadir=/app/mysql-init-data \
+        --log-error=/var/log/mysql/init-error.log \
+        --console && \
+    echo "MySQL pre-initialization completed successfully" && \
+    ls -la /app/mysql-init-data/
 
 # Create launcher directory
 RUN mkdir -p /opt/mysql-ratls/launcher
@@ -108,29 +124,26 @@ RUN /opt/mysql-ratls/generate-trusted-files.sh /opt/mysql-ratls/trusted_files.to
 
 # Configure MySQL for certificate-only authentication
 # This configuration enforces SSL/TLS and prepares for RA-TLS certificates
-RUN printf '\n# RA-TLS Configuration\n[mysqld]\n# Require secure transport (SSL/TLS)\nrequire_secure_transport = ON\n\n# SSL certificate paths (generated at runtime by RA-TLS)\n# Certificates are in normal directory, private key is in encrypted partition\nssl_ca = /var/lib/mysql-ssl/ca.pem\nssl_cert = /var/lib/mysql-ssl/server-cert.pem\n# Private key path is set via command line argument (from encrypted partition)\n\n# Require client certificates for authentication\nssl_mode = VERIFY_IDENTITY\n\n# Bind to all interfaces\nbind-address = 0.0.0.0\n\n# Skip name resolution for faster connections\nskip-name-resolve\n\n# Performance settings\nmax_connections = 100\ninnodb_buffer_pool_size = 256M\n\n# Data and log directories in encrypted partition to prevent data leakage\n# All sensitive data MUST be stored in encrypted partition\ndatadir = /app/wallet/mysql-data\nlog_error = /app/wallet/mysql-logs/error.log\ngeneral_log_file = /app/wallet/mysql-logs/general.log\nslow_query_log_file = /app/wallet/mysql-logs/slow.log\n\n' >> /etc/mysql/mysql.conf.d/mysqld.cnf
+# Note: ssl_mode is a CLIENT-side option, not valid for [mysqld] server config
+# Note: ssl_ca is not set because RA-TLS uses self-signed certificates without a CA
+RUN printf '\n# RA-TLS Configuration\n[mysqld]\n# Require secure transport (SSL/TLS)\nrequire_secure_transport = ON\n\n# SSL certificate path (generated at runtime by RA-TLS)\n# Certificate is in normal directory, private key is in encrypted partition\nssl_cert = /var/lib/mysql-ssl/server-cert.pem\n# Private key path is set via command line argument (from encrypted partition)\n# Note: ssl_ca is NOT set because RA-TLS uses self-signed certificates\n# Note: ssl_mode is a CLIENT option, not valid for server config\n\n# Bind to all interfaces\nbind-address = 0.0.0.0\n\n# Skip name resolution for faster connections\nskip-name-resolve\n\n# Performance settings\nmax_connections = 100\ninnodb_buffer_pool_size = 256M\n\n# Data directory in encrypted partition to prevent data leakage\ndatadir = /app/wallet/mysql-data\n\n# Log files outside encrypted partition for debugging visibility\n# Note: This is overridden by --log-error command line argument from launcher\nlog_error = /var/log/mysql/error.log\ngeneral_log_file = /var/log/mysql/general.log\nslow_query_log_file = /var/log/mysql/slow.log\n\n' >> /etc/mysql/mysql.conf.d/mysqld.cnf
 
 # Create necessary directories and build the Gramine manifest
 # This generates the signed manifest so it's ready to run immediately
 # Note: Directories in /app/wallet/ are created by the launcher inside the enclave
 # (encrypted partition), so we only create non-encrypted directories here.
 # No chown/chmod needed since we run as root in container.
+#
+# IMPORTANT: We do NOT set GRAMINE_LD_PRELOAD here. Instead, the launcher sets
+# LD_PRELOAD before execve() to mysqld. This means:
+# - The launcher runs WITHOUT RA-TLS hooks (no LD_PRELOAD for launcher)
+# - Only mysqld gets the RA-TLS library injected via LD_PRELOAD
+# - The RA-TLS library is already in trusted_files via generate-trusted-files.sh
 RUN mkdir -p /var/lib/mysql-ssl /var/run/mysqld && \
     # Generate signing key for manifest
     mkdir -p /root/.config/gramine && \
     gramine-sgx-gen-private-key && \
-    # Find RA-TLS library path
-    RATLS_LIB_PATH=""; \
-    for path in /usr/local/lib/x86_64-linux-gnu/libratls-quote-verify.so \
-                /usr/local/lib/libratls-quote-verify.so \
-                /usr/lib/x86_64-linux-gnu/libratls-quote-verify.so; do \
-        if [ -f "$path" ]; then RATLS_LIB_PATH="$path"; break; fi; \
-    done; \
-    if [ -n "$RATLS_LIB_PATH" ]; then \
-        export GRAMINE_LD_PRELOAD="file:${RATLS_LIB_PATH}"; \
-        echo "Set GRAMINE_LD_PRELOAD=${GRAMINE_LD_PRELOAD}"; \
-    fi; \
-    # Generate manifest
+    # Generate manifest (no GRAMINE_LD_PRELOAD - launcher handles LD_PRELOAD)
     mkdir -p /var/lib/mysql && \
     cd /var/lib/mysql && \
     gramine-manifest \
