@@ -88,7 +88,23 @@ RUN cd /opt/mysql-ratls/launcher && \
 
 # Download the Gramine manifest template from repository
 RUN curl -fsSL https://raw.githubusercontent.com/mccoysc/gramine-web3-wallet-docker/main/examples/mysql-ratls/files/mysql-ratls.manifest.template \
-      -o /opt/mysql-ratls/mysql-ratls.manifest.template
+      -o /opt/mysql-ratls/mysql-ratls.manifest.template.base
+
+# Download the trusted_files generator script from repository
+RUN curl -fsSL https://raw.githubusercontent.com/mccoysc/gramine-web3-wallet-docker/main/examples/mysql-ratls/files/generate-trusted-files.sh \
+      -o /opt/mysql-ratls/generate-trusted-files.sh && \
+    chmod +x /opt/mysql-ratls/generate-trusted-files.sh
+
+# Generate trusted_files dynamically and inject into manifest template
+# This ensures only the minimal set of required files are included
+RUN /opt/mysql-ratls/generate-trusted-files.sh /opt/mysql-ratls/trusted_files.toml && \
+    # Replace the placeholder in the manifest template with the generated trusted_files
+    sed -e '/^# __TRUSTED_FILES_PLACEHOLDER__$/r /opt/mysql-ratls/trusted_files.toml' \
+        -e '/^# __TRUSTED_FILES_PLACEHOLDER__$/d' \
+        /opt/mysql-ratls/mysql-ratls.manifest.template.base > /opt/mysql-ratls/mysql-ratls.manifest.template && \
+    # Clean up temporary files
+    rm -f /opt/mysql-ratls/mysql-ratls.manifest.template.base /opt/mysql-ratls/trusted_files.toml && \
+    echo "Trusted files generated and injected into manifest template"
 
 # Configure MySQL for certificate-only authentication
 # This configuration enforces SSL/TLS and prepares for RA-TLS certificates
