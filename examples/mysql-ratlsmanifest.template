@@ -14,7 +14,7 @@ loader.insecure__use_cmdline_argv = true
 # Environment variables
 loader.env.LD_LIBRARY_PATH = "/lib:/usr/lib:/lib/x86_64-linux-gnu:/usr/lib/x86_64-linux-gnu:/usr/local/lib:/usr/local/lib/x86_64-linux-gnu"
 loader.env.PATH = "/usr/bin:/bin:/usr/sbin:/sbin:/usr/local/bin"
-loader.env.HOME = "/app/wallet/mysql-data"
+loader.env.HOME = "/app/wallet"
 
 # Note: RA-TLS injection via LD_PRELOAD is handled by GRAMINE_LD_PRELOAD environment variable
 # during manifest generation (standard approach). Do NOT hardcode loader.env.LD_PRELOAD here
@@ -30,9 +30,9 @@ loader.env.RATLS_REQUIRE_PEER_CERT = "1"
 
 # Certificate and key paths (fixed in manifest for security)
 # Certificate can be in normal directory
-loader.env.RATLS_CERT_PATH = "/var/lib/mysql-ssl/server-cert.pem"
+loader.env.RATLS_CERT_PATH = "/app/wallet/server-cert.pem"
 # Private key MUST be in encrypted partition
-loader.env.RATLS_KEY_PATH = "/app/wallet/mysql-keys/server-key.pem"
+loader.env.RATLS_KEY_PATH = "/app/wallet/server-key.pem"
 
 # Contract configuration for whitelist (passthrough from host for deployment flexibility)
 loader.env.CONTRACT_ADDRESS = { passthrough = true }
