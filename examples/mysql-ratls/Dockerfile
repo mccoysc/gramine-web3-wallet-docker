@@ -46,12 +46,21 @@ LABEL org.opencontainers.image.licenses=GPL-2.0
 # Avoid interactive prompts during package installation
 ENV DEBIAN_FRONTEND=noninteractive
 
+# Prevent services from starting during package installation
+# This is standard practice for Docker builds - we don't want MySQL to start during apt-get install
+RUN printf '#!/bin/sh\nexit 101\n' > /usr/sbin/policy-rc.d && \
+    chmod +x /usr/sbin/policy-rc.d
+
 # Install MySQL 8 server and development dependencies for launcher compilation
 RUN apt-get update && apt-get install -y --no-install-recommends \
     mysql-server \
     mysql-client \
     libcurl4-openssl-dev \
     && rm -rf /var/lib/apt/lists/*
+
+# Clean up default MySQL data directory (we use encrypted partition at runtime)
+# and remove policy-rc.d since we're done with apt installations
+RUN rm -rf /var/lib/mysql/* && rm -f /usr/sbin/policy-rc.d
 
 # Create directories for MySQL data and SSL certificates
 RUN mkdir -p /var/lib/mysql /var/lib/mysql-ssl /var/run/mysqld \
