@@ -15,7 +15,6 @@ loader.insecure__use_cmdline_argv = true
 loader.env.LD_LIBRARY_PATH = "/lib:/usr/lib:/lib/x86_64-linux-gnu:/usr/lib/x86_64-linux-gnu:/usr/local/lib:/usr/local/lib/x86_64-linux-gnu"
 loader.env.PATH = "/usr/bin:/bin:/usr/sbin:/sbin:/usr/local/bin"
 loader.env.HOME = "/app/wallet"
-loader.env.NODE_PATH = "/app/node_modules:/usr/local/lib/node_modules:/usr/lib/node_modules"
 
 # Note: RA-TLS injection via LD_PRELOAD is handled by the launcher, NOT by this manifest.
 # The launcher sets LD_PRELOAD before execve() to Node.js, so:
@@ -74,10 +73,6 @@ fs.mounts = [
   { path = "/usr/local/bin", uri = "file:/usr/local/bin" },
   { path = "/bin", uri = "file:/bin" },
   { path = "/sbin", uri = "file:/sbin" },
-  
-  # Node.js modules
-  { path = "/app/node_modules", uri = "file:/app/node_modules" },
-  { path = "/usr/local/lib/node_modules", uri = "file:/usr/local/lib/node_modules" },
   
   # Application directory
   { path = "/app", uri = "file:/app" },

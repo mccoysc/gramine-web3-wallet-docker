@@ -251,7 +251,7 @@ generate_output() {
     done
     
     echo ""
-    echo "  # Node.js modules directory"
+    echo "  # Node.js modules directory (installed during Docker build)"
     echo '  "file:/app/node_modules/",'
     echo ""
     echo "  # System configuration files"
