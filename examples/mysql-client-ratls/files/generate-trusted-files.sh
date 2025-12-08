@@ -33,7 +33,7 @@ VISITED_EXEC=""
 REQUIRED_MOUNTS=""
 
 # Known mounts from manifest template (these don't need to be added)
-KNOWN_MOUNTS="/lib /lib/x86_64-linux-gnu /usr/lib /usr/local/lib /usr/bin /usr/sbin /usr/local/bin /bin /sbin /opt/node-install /opt/openssl-install /app /etc /var/lib/mysql-client-ssl /tmp"
+KNOWN_MOUNTS="/lib /lib/x86_64-linux-gnu /usr/lib /usr/local/lib /usr/bin /usr/sbin /usr/local/bin /bin /sbin /app /etc /var/lib/mysql-client-ssl /tmp"
 
 # Check if a path is covered by known mounts
 is_path_covered() {
