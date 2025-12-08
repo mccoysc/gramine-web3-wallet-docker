@@ -12,17 +12,11 @@ loader.log_level = "{{ log_level }}"
 loader.insecure__use_cmdline_argv = true
 
 # Environment variables
-# Note: LD_LIBRARY_PATH includes /opt/openssl-install paths for custom OpenSSL libraries
-# The launcher also sets this dynamically before execve() to Node.js
-loader.env.LD_LIBRARY_PATH = "/opt/openssl-install/lib64:/opt/openssl-install/lib:/lib:/usr/lib:/lib/x86_64-linux-gnu:/usr/lib/x86_64-linux-gnu:/usr/local/lib:/usr/local/lib/x86_64-linux-gnu"
-loader.env.PATH = "/usr/bin:/bin:/usr/sbin:/sbin:/usr/local/bin"
-loader.env.HOME = "/app/wallet"
-
-# Note: RA-TLS injection via LD_PRELOAD is handled by the launcher, NOT by this manifest.
+# Inherit all environment variables from the host system
 # The launcher sets LD_PRELOAD before execve() to Node.js, so:
 # - The launcher runs WITHOUT RA-TLS hooks
 # - Only Node.js gets the RA-TLS library injected
-# Do NOT set loader.env.LD_PRELOAD here - the launcher handles it dynamically.
+loader.insecure__use_host_env = true
 
 # RA-TLS Configuration
 # Use secp256k1 curve for Ethereum compatibility
@@ -76,15 +70,6 @@ fs.mounts = [
   { path = "/bin", uri = "file:/bin" },
   { path = "/sbin", uri = "file:/sbin" },
   
-  # Prebuilt Node.js installation (actual binary, not the wrapper script)
-  # IMPORTANT: /usr/local/bin/node is a shell script wrapper that we cannot execve() in SGX
-  # The actual Node.js ELF binary is at /opt/node-install/bin/node
-  { path = "/opt/node-install", uri = "file:/opt/node-install" },
-  
-  # Custom OpenSSL installation (Node.js is dynamically linked against this)
-  # The launcher sets LD_LIBRARY_PATH to include these paths before execve()
-  { path = "/opt/openssl-install", uri = "file:/opt/openssl-install" },
-  
   # Application directory
   { path = "/app", uri = "file:/app" },
   
@@ -99,6 +84,8 @@ fs.mounts = [
   
   # Temporary directory
   { type = "tmpfs", path = "/tmp" },
+  
+  # __AUTO_MOUNTS_PLACEHOLDER__
 ]
 
 # SGX configuration
