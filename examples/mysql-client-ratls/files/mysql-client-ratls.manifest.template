@@ -76,11 +76,6 @@ fs.mounts = [
   { path = "/bin", uri = "file:/bin" },
   { path = "/sbin", uri = "file:/sbin" },
   
-  # Prebuilt Node.js installation (actual binary, not the wrapper script)
-  # IMPORTANT: /usr/local/bin/node is a shell script wrapper that we cannot execve() in SGX
-  # The actual Node.js ELF binary is at /opt/node-install/bin/node
-  { path = "/opt/node-install", uri = "file:/opt/node-install" },
-  
   # Custom OpenSSL installation (Node.js is dynamically linked against this)
   # The launcher sets LD_LIBRARY_PATH to include these paths before execve()
   { path = "/opt/openssl-install", uri = "file:/opt/openssl-install" },
