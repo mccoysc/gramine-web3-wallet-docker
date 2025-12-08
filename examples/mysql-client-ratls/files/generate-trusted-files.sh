@@ -211,13 +211,27 @@ SEEN_FILE=$(mktemp)
 trap "rm -f $ALL_DEPS $SEEN_FILE" EXIT
 
 # Function to extract library paths from ldd output
+# Handles various ldd output formats:
+#   libfoo.so.1 => /path/to/libfoo.so.1 (0x...)
+#   /lib64/ld-linux-x86-64.so.2 (0x...)
 extract_ldd_deps() {
     local binary="$1"
     if [ -f "$binary" ]; then
-        ldd "$binary" 2>/dev/null | \
-            grep -E '^\s+.+ => .+ \(0x' | \
-            awk '{print $3}' | \
-            sort -u
+        ldd "$binary" 2>/dev/null | while read -r line; do
+            # Handle "libname => /path (addr)" format
+            if echo "$line" | grep -qE '=>.*\(0x'; then
+                path=$(echo "$line" | sed -E 's/.*=> ([^ ]+) \(0x.*/\1/')
+                if [ -f "$path" ]; then
+                    echo "$path"
+                fi
+            # Handle "/path (addr)" format (e.g., ld-linux)
+            elif echo "$line" | grep -qE '^\s*/.*\(0x'; then
+                path=$(echo "$line" | sed -E 's/^\s*([^ ]+) \(0x.*/\1/')
+                if [ -f "$path" ]; then
+                    echo "$path"
+                fi
+            fi
+        done | sort -u
     fi
 }
 
@@ -344,10 +358,33 @@ for nss_lib in /lib/x86_64-linux-gnu/libnss_*.so* /usr/lib/x86_64-linux-gnu/libn
 done
 
 # Add libcurl dependencies (for launcher HTTP requests) - recursively
+# Check both /usr/lib and /lib directories as libcurl location varies by system
 echo "# Adding libcurl and dependencies (recursive)..." >&2
-for curl_lib in /usr/lib/x86_64-linux-gnu/libcurl*.so*; do
+for curl_lib in /usr/lib/x86_64-linux-gnu/libcurl*.so* /lib/x86_64-linux-gnu/libcurl*.so*; do
     if [ -f "$curl_lib" ]; then
+        echo "# Found libcurl: $curl_lib" >&2
         add_dep_recursive "$curl_lib"
+    fi
+done
+
+# Add libraries that libcurl may load via dlopen (SSL backends, resolvers, etc.)
+# These are not discovered by ldd but are needed at runtime
+echo "# Adding libcurl dlopen dependencies (SSL backends, etc.)..." >&2
+for dlopen_lib in \
+    /usr/lib/x86_64-linux-gnu/libssl*.so* \
+    /usr/lib/x86_64-linux-gnu/libcrypto*.so* \
+    /lib/x86_64-linux-gnu/libssl*.so* \
+    /lib/x86_64-linux-gnu/libcrypto*.so* \
+    /usr/lib/x86_64-linux-gnu/libnghttp2*.so* \
+    /usr/lib/x86_64-linux-gnu/librtmp*.so* \
+    /usr/lib/x86_64-linux-gnu/libssh*.so* \
+    /usr/lib/x86_64-linux-gnu/libldap*.so* \
+    /usr/lib/x86_64-linux-gnu/liblber*.so* \
+    /usr/lib/x86_64-linux-gnu/libgssapi*.so* \
+    /usr/lib/x86_64-linux-gnu/libkrb5*.so* \
+    /usr/lib/x86_64-linux-gnu/libidn2*.so*; do
+    if [ -f "$dlopen_lib" ]; then
+        add_dep_recursive "$dlopen_lib"
     fi
 done
 
