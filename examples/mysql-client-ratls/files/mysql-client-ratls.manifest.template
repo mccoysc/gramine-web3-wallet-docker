@@ -23,6 +23,11 @@ loader.insecure__use_cmdline_argv = true
 # like libcurl.so.4 even if they are in trusted_files and their directories are mounted
 loader.env.LD_LIBRARY_PATH = "/lib:/usr/lib:/lib/x86_64-linux-gnu:/usr/lib/x86_64-linux-gnu:/usr/local/lib:/usr/local/lib/x86_64-linux-gnu"
 
+# Disable io_uring in Node.js/libuv - Gramine does not support io_uring syscalls
+# Without this, Node.js v22+ will try to use io_uring_setup which causes MEMFAULT
+# Setting this to "0" forces libuv to use traditional epoll instead
+loader.env.UV_USE_IO_URING = "0"
+
 # RA-TLS Configuration
 # Use secp256k1 curve for Ethereum compatibility
 loader.env.RA_TLS_CERT_ALGORITHM = "secp256k1"
