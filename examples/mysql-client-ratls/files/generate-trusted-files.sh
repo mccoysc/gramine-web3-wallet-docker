@@ -297,6 +297,10 @@ echo "# Analyzing dependencies (with recursive resolution)..." >&2
 # Collect dependencies from launcher (recursively)
 echo "# Analyzing $LAUNCHER_PATH (recursive)..." >&2
 if [ -f "$LAUNCHER_PATH" ]; then
+    # Debug: Show ldd output for launcher to help diagnose missing dependencies
+    echo "# DEBUG: ldd output for launcher:" >&2
+    ldd "$LAUNCHER_PATH" 2>&1 | head -30 >&2
+    echo "# DEBUG: End of ldd output" >&2
     add_executable_recursive "$LAUNCHER_PATH"
 else
     echo "# Warning: $LAUNCHER_PATH not found" >&2
@@ -364,8 +368,18 @@ for curl_lib in /usr/lib/x86_64-linux-gnu/libcurl*.so* /lib/x86_64-linux-gnu/lib
     if [ -f "$curl_lib" ]; then
         echo "# Found libcurl: $curl_lib" >&2
         add_dep_recursive "$curl_lib"
+        # Debug: Verify libcurl was added to ALL_DEPS
+        if grep -q "$curl_lib" "$ALL_DEPS" 2>/dev/null; then
+            echo "# DEBUG: Successfully added $curl_lib to ALL_DEPS" >&2
+        else
+            echo "# DEBUG: WARNING - $curl_lib NOT found in ALL_DEPS after add_dep_recursive!" >&2
+        fi
     fi
 done
+
+# Debug: Show ALL_DEPS content for libcurl
+echo "# DEBUG: libcurl entries in ALL_DEPS file:" >&2
+grep -i curl "$ALL_DEPS" 2>/dev/null >&2 || echo "# DEBUG: No libcurl in ALL_DEPS!" >&2
 
 # Add libraries that libcurl may load via dlopen (SSL backends, resolvers, etc.)
 # These are not discovered by ldd but are needed at runtime
@@ -467,6 +481,11 @@ generate_auto_mounts() {
 # Count dependencies
 DEP_COUNT=$(echo "$UNIQUE_DEPS" | grep -c . || echo "0")
 echo "# Found $DEP_COUNT unique library dependencies" >&2
+
+# Debug: Show libcurl entries in final dependency list
+echo "# DEBUG: libcurl entries in UNIQUE_DEPS:" >&2
+echo "$UNIQUE_DEPS" | grep -i curl >&2 || echo "# DEBUG: No libcurl entries found in UNIQUE_DEPS!" >&2
+echo "# DEBUG: End of libcurl entries" >&2
 
 if [ -n "$OUTPUT_FILE" ]; then
     generate_output > "$OUTPUT_FILE"
