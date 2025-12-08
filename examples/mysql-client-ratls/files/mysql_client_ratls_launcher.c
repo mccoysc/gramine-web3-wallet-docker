@@ -384,14 +384,26 @@ static const char *find_first_existing(const char **paths) {
 int main(int argc, char *argv[]) {
     printf("[Launcher] MySQL RA-TLS Client Launcher starting...\n");
     
+    /* Set RA-TLS configuration environment variables */
+    /* These are set by the launcher to ensure consistent configuration */
+    /* Reference: mccoysc/gramine tools/sgx/ra-tls/CERTIFICATE_CONFIGURATION.md */
+    
+    /* Use secp256k1 curve for Ethereum compatibility */
+    set_env("RA_TLS_CERT_ALGORITHM", "secp256k1");
+    
+    /* Enable RA-TLS verification and require peer certificate for mutual TLS */
+    set_env("RATLS_ENABLE_VERIFY", "1");
+    set_env("RATLS_REQUIRE_PEER_CERT", "1");
+    
+    /* Set default certificate and key paths if not already set */
+    set_env_default("RATLS_CERT_PATH", DEFAULT_CERT_PATH);
+    set_env_default("RATLS_KEY_PATH", DEFAULT_KEY_PATH);
+    
     /* Get configuration from environment variables */
     const char *contract_address = getenv("CONTRACT_ADDRESS");
     const char *rpc_url = getenv("RPC_URL");
     const char *cert_path = getenv("RATLS_CERT_PATH");
     const char *key_path = getenv("RATLS_KEY_PATH");
-    
-    if (!cert_path) cert_path = DEFAULT_CERT_PATH;
-    if (!key_path) key_path = DEFAULT_KEY_PATH;
     
     /* Create directories for certificates and keys */
     char cert_dir[MAX_PATH_LEN];
