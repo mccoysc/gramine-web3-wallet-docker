@@ -31,13 +31,8 @@
 #define DEFAULT_KEY_PATH "/app/wallet/mysql-client-keys/client-key.pem"
 #define CLIENT_SCRIPT_PATH "/app/mysql-client.js"
 
-/* Node.js binary candidate paths (searched in order) */
-static const char *NODE_PATHS[] = {
-    "/opt/node-install/bin/node",
-    "/usr/local/bin/node",
-    "/usr/bin/node",
-    NULL
-};
+/* Node.js binary path (hardcoded to match generate-trusted-files.sh) */
+#define NODE_PATH "/usr/local/bin/node"
 
 /* RA-TLS library candidate paths (searched in order) */
 static const char *RATLS_LIB_PATHS[] = {
@@ -445,17 +440,12 @@ int main(int argc, char *argv[]) {
     }
     printf("[Launcher] Found RA-TLS library: %s\n", ratls_lib);
     
-    /* Find Node.js binary */
-    const char *node_path = find_first_existing(NODE_PATHS);
-    if (!node_path) {
-        fprintf(stderr, "[Launcher] ERROR: Node.js binary not found\n");
-        fprintf(stderr, "[Launcher] Searched paths:\n");
-        for (int i = 0; NODE_PATHS[i] != NULL; i++) {
-            fprintf(stderr, "[Launcher]   - %s\n", NODE_PATHS[i]);
-        }
+    /* Check Node.js binary exists */
+    if (!file_exists(NODE_PATH)) {
+        fprintf(stderr, "[Launcher] ERROR: Node.js binary not found: %s\n", NODE_PATH);
         return 1;
     }
-    printf("[Launcher] Found Node.js binary: %s\n", node_path);
+    printf("[Launcher] Found Node.js binary: %s\n", NODE_PATH);
     
     /* Check if client script exists */
     if (!file_exists(CLIENT_SCRIPT_PATH)) {
@@ -484,7 +474,7 @@ int main(int argc, char *argv[]) {
         return 1;
     }
     
-    new_argv[0] = (char *)node_path;
+    new_argv[0] = (char *)NODE_PATH;
     new_argv[1] = CLIENT_SCRIPT_PATH;
     
     /* Pass through any additional arguments */
@@ -493,10 +483,10 @@ int main(int argc, char *argv[]) {
     }
     new_argv[new_argc] = NULL;
     
-    printf("[Launcher] Executing: %s %s\n", node_path, CLIENT_SCRIPT_PATH);
+    printf("[Launcher] Executing: %s %s\n", NODE_PATH, CLIENT_SCRIPT_PATH);
     
     /* Replace this process with Node.js */
-    execve(node_path, new_argv, environ);
+    execve(NODE_PATH, new_argv, environ);
     
     /* If we get here, execve failed */
     fprintf(stderr, "[Launcher] ERROR: execve failed: %s\n", strerror(errno));

@@ -74,12 +74,6 @@ fs.mounts = [
   { path = "/bin", uri = "file:/bin" },
   { path = "/sbin", uri = "file:/sbin" },
   
-  # Node.js installation directory (for /opt/node-install/bin/node)
-  { path = "/opt/node-install", uri = "file:/opt/node-install" },
-  
-  # OpenSSL installation directory (for /opt/openssl-install/lib64)
-  { path = "/opt/openssl-install", uri = "file:/opt/openssl-install" },
-  
   # Application directory
   { path = "/app", uri = "file:/app" },
   

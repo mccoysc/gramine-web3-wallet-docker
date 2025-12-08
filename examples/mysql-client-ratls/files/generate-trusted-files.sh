@@ -23,19 +23,8 @@ OUTPUT_FILE="${1:-}"
 # Binaries to analyze
 LAUNCHER_PATH="/usr/local/bin/mysql-client-ratls-launcher"
 
-# Node.js binary paths (check multiple locations)
-NODE_PATH=""
-for path in /opt/node-install/bin/node /usr/local/bin/node /usr/bin/node; do
-    if [ -f "$path" ]; then
-        NODE_PATH="$path"
-        break
-    fi
-done
-
-if [ -z "$NODE_PATH" ]; then
-    echo "# Warning: Node.js binary not found" >&2
-    NODE_PATH="/usr/bin/node"  # Default fallback
-fi
+# Node.js binary path (hardcoded to match launcher detection)
+NODE_PATH="/usr/local/bin/node"
 
 # Gramine paths (auto-detect)
 GRAMINE_LIBDIR=""
