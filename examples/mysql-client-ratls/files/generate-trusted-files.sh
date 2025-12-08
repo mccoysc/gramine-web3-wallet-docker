@@ -8,10 +8,13 @@
 #
 # The script:
 # 1. Uses ldd to RECURSIVELY find all dependencies of Node.js and launcher
-# 2. Adds Gramine runtime libraries and their dependencies (recursively)
-# 3. Adds NSS libraries for DNS resolution (and their dependencies)
-# 4. Adds RA-TLS library and its dependencies
-# 5. Outputs in Gramine manifest format
+# 2. Handles symlinks by resolving to real paths and adding both
+# 3. Handles script files by parsing shebang and exec calls
+# 4. Adds Gramine runtime libraries and their dependencies (recursively)
+# 5. Adds NSS libraries for DNS resolution (and their dependencies)
+# 6. Adds RA-TLS library and its dependencies
+# 7. Tracks required mounts for discovered paths
+# 8. Outputs in Gramine manifest format
 #
 # IMPORTANT: This script recursively resolves ALL transitive dependencies
 # to ensure no libraries are missing at runtime.
@@ -23,22 +26,167 @@ OUTPUT_FILE="${1:-}"
 # Binaries to analyze
 LAUNCHER_PATH="/usr/local/bin/mysql-client-ratls-launcher"
 
-# Node.js binary path detection (must match launcher logic)
-# IMPORTANT: /usr/local/bin/node is a shell script wrapper, NOT the actual binary!
-# In Gramine SGX, we cannot execve() to a shell script - we need the actual ELF binary.
-# The launcher detects the actual binary at runtime, and we must use the same logic here.
-NODE_PATH=""
-if [ -x /opt/node-install/bin/node ]; then
-    NODE_PATH="/opt/node-install/bin/node"
-    echo "# Using prebuilt Node.js: $NODE_PATH" >&2
-elif [ -x /usr/bin/node ]; then
-    NODE_PATH="/usr/bin/node"
-    echo "# Using system Node.js: $NODE_PATH" >&2
-else
-    echo "# ERROR: Node.js binary not found!" >&2
-    echo "# Searched: /opt/node-install/bin/node, /usr/bin/node" >&2
-    exit 1
-fi
+# Track visited executables to prevent infinite loops
+VISITED_EXEC=""
+
+# Track required mounts (directories that need to be mounted)
+REQUIRED_MOUNTS=""
+
+# Known mounts from manifest template (these don't need to be added)
+KNOWN_MOUNTS="/lib /lib/x86_64-linux-gnu /usr/lib /usr/local/lib /usr/bin /usr/sbin /usr/local/bin /bin /sbin /opt/node-install /opt/openssl-install /app /etc /var/lib/mysql-client-ssl /tmp"
+
+# Check if a path is covered by known mounts
+is_path_covered() {
+    local path="$1"
+    for mount in $KNOWN_MOUNTS; do
+        case "$path" in
+            "$mount"/*|"$mount")
+                return 0
+                ;;
+        esac
+    done
+    return 1
+}
+
+# Add a mount requirement if not already covered
+add_mount_requirement() {
+    local path="$1"
+    [ -z "$path" ] && return
+    
+    # Get the directory containing the file
+    local dir
+    if [ -d "$path" ]; then
+        dir="$path"
+    else
+        dir=$(dirname "$path")
+    fi
+    
+    # Check if already covered by known mounts
+    if is_path_covered "$dir"; then
+        return
+    fi
+    
+    # Check if already in required mounts
+    case " $REQUIRED_MOUNTS " in
+        *" $dir "*) return ;;
+    esac
+    
+    REQUIRED_MOUNTS="$REQUIRED_MOUNTS $dir"
+    echo "# Mount required for: $dir" >&2
+}
+
+# Check if file is an ELF binary
+is_elf() {
+    local file="$1"
+    [ -f "$file" ] || return 1
+    local magic
+    magic=$(head -c 4 "$file" 2>/dev/null | od -An -tx1 | tr -d ' ')
+    [ "$magic" = "7f454c46" ]
+}
+
+# Check if file is a script (has shebang)
+is_script() {
+    local file="$1"
+    [ -f "$file" ] || return 1
+    head -c 2 "$file" 2>/dev/null | grep -q '^#!'
+}
+
+# Get interpreter from shebang line
+get_shebang_interpreter() {
+    local file="$1"
+    head -n 1 "$file" 2>/dev/null | sed -E 's/^#![[:space:]]*//; s/[[:space:]].*$//'
+}
+
+# Parse script for exec calls with absolute paths
+# Handles patterns like: exec /path/to/binary
+parse_exec_calls() {
+    local file="$1"
+    grep -E '^[[:space:]]*(exec|\.)[[:space:]]+/[^[:space:]]+' "$file" 2>/dev/null | \
+        sed -E 's/^[[:space:]]*(exec|\.)[[:space:]]+([^[:space:]]+).*/\2/' | \
+        sort -u
+}
+
+# Recursively add an executable and all its dependencies
+# Handles: symlinks (resolves and adds both), scripts (parses shebang and exec calls), ELF binaries (uses ldd)
+add_executable_recursive() {
+    local path="$1"
+    
+    # Skip empty paths
+    [ -z "$path" ] && return 0
+    
+    # Skip if already visited (prevents infinite loops)
+    case " $VISITED_EXEC " in
+        *" $path "*) return 0 ;;
+    esac
+    VISITED_EXEC="$VISITED_EXEC $path"
+    
+    # Skip if file doesn't exist
+    if [ ! -e "$path" ]; then
+        echo "# Warning: $path does not exist" >&2
+        return 0
+    fi
+    
+    # Handle symlinks: add the symlink itself, then recurse on the real path
+    if [ -L "$path" ]; then
+        echo "# Found symlink: $path" >&2
+        
+        # Add the symlink path to trusted files
+        echo "$path" >> "$ALL_DEPS"
+        add_mount_requirement "$path"
+        
+        # Resolve to real path and recurse
+        local real_path
+        real_path=$(readlink -f "$path" 2>/dev/null || true)
+        if [ -n "$real_path" ] && [ "$real_path" != "$path" ] && [ -e "$real_path" ]; then
+            echo "# Symlink resolves to: $real_path" >&2
+            add_executable_recursive "$real_path"
+        fi
+        return 0
+    fi
+    
+    # Handle script files: parse shebang and exec calls
+    if is_script "$path"; then
+        echo "# Found script: $path" >&2
+        
+        # Add the script itself to trusted files
+        echo "$path" >> "$ALL_DEPS"
+        add_mount_requirement "$path"
+        
+        # Get and process the interpreter from shebang
+        local interp
+        interp=$(get_shebang_interpreter "$path")
+        if [ -n "$interp" ] && [ -x "$interp" ]; then
+            echo "# Script interpreter: $interp" >&2
+            add_executable_recursive "$interp"
+        fi
+        
+        # Parse exec calls in the script
+        local exec_targets
+        exec_targets=$(parse_exec_calls "$path")
+        if [ -n "$exec_targets" ]; then
+            echo "$exec_targets" | while read -r target; do
+                if [ -n "$target" ] && [ -e "$target" ]; then
+                    echo "# Script exec target: $target" >&2
+                    add_executable_recursive "$target"
+                fi
+            done
+        fi
+        return 0
+    fi
+    
+    # Handle ELF binaries: use ldd to find dependencies
+    if is_elf "$path"; then
+        echo "# Found ELF binary: $path" >&2
+        add_dep_recursive "$path"
+        add_mount_requirement "$path"
+        return 0
+    fi
+    
+    # Unknown file type - just add it
+    echo "# Adding file (unknown type): $path" >&2
+    echo "$path" >> "$ALL_DEPS"
+    add_mount_requirement "$path"
+}
 
 # Gramine paths (auto-detect)
 GRAMINE_LIBDIR=""
@@ -135,18 +283,41 @@ echo "# Analyzing dependencies (with recursive resolution)..." >&2
 # Collect dependencies from launcher (recursively)
 echo "# Analyzing $LAUNCHER_PATH (recursive)..." >&2
 if [ -f "$LAUNCHER_PATH" ]; then
-    add_dep_recursive "$LAUNCHER_PATH"
+    add_executable_recursive "$LAUNCHER_PATH"
 else
     echo "# Warning: $LAUNCHER_PATH not found" >&2
 fi
 
-# Collect dependencies from Node.js (recursively)
-echo "# Analyzing $NODE_PATH (recursive)..." >&2
-if [ -f "$NODE_PATH" ]; then
-    add_dep_recursive "$NODE_PATH"
+# Analyze Node.js starting from the wrapper script at /usr/local/bin/node
+# The add_executable_recursive function will:
+# 1. Detect it's a script and parse the shebang (#!/bin/sh -> add /bin/sh)
+# 2. Parse exec calls to find the actual Node.js binary (/opt/node-install/bin/node or /usr/bin/node)
+# 3. Recursively analyze the actual binary and its dependencies
+# This ensures all paths (wrapper script, interpreter, actual binary) are in trusted_files
+NODE_WRAPPER_PATH="/usr/local/bin/node"
+echo "# Analyzing Node.js wrapper: $NODE_WRAPPER_PATH (recursive)..." >&2
+if [ -e "$NODE_WRAPPER_PATH" ]; then
+    add_executable_recursive "$NODE_WRAPPER_PATH"
 else
-    echo "# Warning: $NODE_PATH not found" >&2
+    echo "# Warning: $NODE_WRAPPER_PATH not found, trying direct paths..." >&2
+    # Fallback to direct binary detection if wrapper doesn't exist
+    if [ -x /opt/node-install/bin/node ]; then
+        add_executable_recursive "/opt/node-install/bin/node"
+    elif [ -x /usr/bin/node ]; then
+        add_executable_recursive "/usr/bin/node"
+    else
+        echo "# ERROR: Node.js not found!" >&2
+    fi
 fi
+
+# Also explicitly analyze the actual Node.js binary paths to ensure they're included
+# (in case the wrapper script parsing missed them)
+for node_bin in /opt/node-install/bin/node /usr/bin/node; do
+    if [ -x "$node_bin" ]; then
+        echo "# Also analyzing direct Node.js binary: $node_bin" >&2
+        add_executable_recursive "$node_bin"
+    fi
+done
 
 # Add Gramine runtime libraries and their dependencies (recursively)
 echo "# Adding Gramine runtime libraries (recursive)..." >&2
@@ -172,10 +343,11 @@ if [ -n "$GRAMINE_LIBDIR" ] && [ -d "$GRAMINE_LIBDIR" ]; then
 fi
 
 # Add RA-TLS library and its dependencies (recursively)
+# Use add_executable_recursive to properly handle symlinks (e.g., libratls.so -> libratls.so.1)
 echo "# Adding RA-TLS libraries (recursive)..." >&2
 for ratls_lib in /usr/local/lib/x86_64-linux-gnu/libratls*.so* /usr/local/lib/libratls*.so* /usr/lib/x86_64-linux-gnu/libratls*.so*; do
-    if [ -f "$ratls_lib" ]; then
-        add_dep_recursive "$ratls_lib"
+    if [ -e "$ratls_lib" ]; then
+        add_executable_recursive "$ratls_lib"
     fi
 done
 
@@ -228,7 +400,8 @@ done | sort -u)
 generate_output() {
     echo "# Auto-generated trusted_files for MySQL RA-TLS Client"
     echo "# Generated on: $(date -u '+%Y-%m-%d %H:%M:%S UTC')"
-    echo "# Binaries analyzed: $LAUNCHER_PATH, $NODE_PATH"
+    echo "# Binaries analyzed: $LAUNCHER_PATH, /usr/local/bin/node (wrapper + actual binaries)"
+    echo "# Note: Script files, symlinks, and their targets are all included"
     echo ""
     echo "sgx.trusted_files = ["
     echo "  # Gramine LibOS and runtime"
@@ -238,15 +411,13 @@ generate_output() {
     echo "  # Launcher binary (entrypoint)"
     echo '  "file:{{ entrypoint }}",'
     echo ""
-    echo "  # Node.js binary (target of execve)"
-    echo "  \"file:$NODE_PATH\","
-    echo ""
     echo "  # Client script"
     echo '  "file:/app/mysql-client.js",'
     echo ""
-    echo "  # System libraries (auto-detected via ldd)"
+    echo "  # System libraries and executables (auto-detected via ldd and script parsing)"
+    echo "  # Includes: symlinks + real paths, script interpreters, exec targets"
     
-    # Output each library
+    # Output each library/executable
     echo "$UNIQUE_DEPS" | while read -r lib; do
         if [ -n "$lib" ]; then
             echo "  \"file:$lib\","
@@ -264,6 +435,15 @@ generate_output() {
     echo '  "file:/etc/host.conf",'
     echo '  "file:/etc/gai.conf",'
     echo "]"
+    
+    # Output required mounts warning if any
+    if [ -n "$REQUIRED_MOUNTS" ]; then
+        echo ""
+        echo "# WARNING: The following directories need to be added to fs.mounts:"
+        for mount in $REQUIRED_MOUNTS; do
+            echo "#   { path = \"$mount\", uri = \"file:$mount\" },"
+        done
+    fi
 }
 
 # Count dependencies
