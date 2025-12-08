@@ -290,34 +290,18 @@ fi
 
 # Analyze Node.js starting from the wrapper script at /usr/local/bin/node
 # The add_executable_recursive function will:
-# 1. Detect it's a script and parse the shebang (#!/bin/sh -> add /bin/sh)
-# 2. Parse exec calls to find the actual Node.js binary (/opt/node-install/bin/node or /usr/bin/node)
+# 1. Detect it's a script or symlink and follow it
+# 2. Parse shebang and exec calls to find the actual Node.js binary
 # 3. Recursively analyze the actual binary and its dependencies
 # This ensures all paths (wrapper script, interpreter, actual binary) are in trusted_files
+# NO pre-assumed paths - the script discovers whatever is actually used
 NODE_WRAPPER_PATH="/usr/local/bin/node"
 echo "# Analyzing Node.js wrapper: $NODE_WRAPPER_PATH (recursive)..." >&2
 if [ -e "$NODE_WRAPPER_PATH" ]; then
     add_executable_recursive "$NODE_WRAPPER_PATH"
 else
-    echo "# Warning: $NODE_WRAPPER_PATH not found, trying direct paths..." >&2
-    # Fallback to direct binary detection if wrapper doesn't exist
-    if [ -x /opt/node-install/bin/node ]; then
-        add_executable_recursive "/opt/node-install/bin/node"
-    elif [ -x /usr/bin/node ]; then
-        add_executable_recursive "/usr/bin/node"
-    else
-        echo "# ERROR: Node.js not found!" >&2
-    fi
+    echo "# ERROR: $NODE_WRAPPER_PATH not found!" >&2
 fi
-
-# Also explicitly analyze the actual Node.js binary paths to ensure they're included
-# (in case the wrapper script parsing missed them)
-for node_bin in /opt/node-install/bin/node /usr/bin/node; do
-    if [ -x "$node_bin" ]; then
-        echo "# Also analyzing direct Node.js binary: $node_bin" >&2
-        add_executable_recursive "$node_bin"
-    fi
-done
 
 # Add Gramine runtime libraries and their dependencies (recursively)
 echo "# Adding Gramine runtime libraries (recursive)..." >&2
@@ -375,13 +359,8 @@ for sgx_lib in /usr/lib/x86_64-linux-gnu/libsgx*.so* /usr/lib/x86_64-linux-gnu/l
     fi
 done
 
-# Add OpenSSL libraries (for TLS) - recursively
-echo "# Adding OpenSSL libraries (recursive)..." >&2
-for ssl_lib in /opt/openssl-install/lib64/*.so* /opt/openssl-install/lib/*.so* /usr/lib/x86_64-linux-gnu/libssl*.so* /usr/lib/x86_64-linux-gnu/libcrypto*.so*; do
-    if [ -f "$ssl_lib" ]; then
-        add_dep_recursive "$ssl_lib"
-    fi
-done
+# Note: OpenSSL libraries are discovered automatically via ldd from Node.js and other binaries
+# No need to explicitly scan directories - the script discovers whatever is actually used
 
 # Sort and deduplicate, then resolve symlinks
 echo "# Deduplicating and resolving symlinks..." >&2
@@ -436,12 +415,14 @@ generate_output() {
     echo '  "file:/etc/gai.conf",'
     echo "]"
     
-    # Output required mounts warning if any
+}
+
+# Generate auto-discovered mounts section
+generate_auto_mounts() {
     if [ -n "$REQUIRED_MOUNTS" ]; then
-        echo ""
-        echo "# WARNING: The following directories need to be added to fs.mounts:"
+        echo "  # Auto-discovered mounts (directories found during dependency analysis)"
         for mount in $REQUIRED_MOUNTS; do
-            echo "#   { path = \"$mount\", uri = \"file:$mount\" },"
+            echo "  { path = \"$mount\", uri = \"file:$mount\" },"
         done
     fi
 }
@@ -453,8 +434,20 @@ echo "# Found $DEP_COUNT unique library dependencies" >&2
 if [ -n "$OUTPUT_FILE" ]; then
     generate_output > "$OUTPUT_FILE"
     echo "# Output written to: $OUTPUT_FILE" >&2
+    
+    # Also output auto-discovered mounts to a separate file
+    AUTO_MOUNTS_FILE="${OUTPUT_FILE%.toml}.auto_mounts"
+    generate_auto_mounts > "$AUTO_MOUNTS_FILE"
+    if [ -s "$AUTO_MOUNTS_FILE" ]; then
+        echo "# Auto-discovered mounts written to: $AUTO_MOUNTS_FILE" >&2
+    else
+        echo "# No additional mounts needed (all paths covered by known mounts)" >&2
+    fi
 else
     generate_output
+    echo ""
+    echo "# Auto-discovered mounts:"
+    generate_auto_mounts
 fi
 
 echo "# Done!" >&2

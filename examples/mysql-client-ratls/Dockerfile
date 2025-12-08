@@ -92,16 +92,31 @@ RUN curl -fsSL https://raw.githubusercontent.com/mccoysc/gramine-web3-wallet-doc
       -o /opt/mysql-client-ratls/generate-trusted-files.sh && \
     chmod +x /opt/mysql-client-ratls/generate-trusted-files.sh
 
-# Generate trusted_files dynamically and inject into manifest template
-# This ensures only the minimal set of required files are included
+# Generate trusted_files and auto-discovered mounts dynamically and inject into manifest template
+# This ensures only the minimal set of required files and mounts are included
+# The script outputs:
+#   - trusted_files.toml: the sgx.trusted_files section
+#   - trusted_files.auto_mounts: any additional mounts discovered during dependency analysis
 RUN /opt/mysql-client-ratls/generate-trusted-files.sh /opt/mysql-client-ratls/trusted_files.toml && \
-    # Replace the placeholder in the manifest template with the generated trusted_files
+    # Replace the trusted_files placeholder
     sed -e '/^# __TRUSTED_FILES_PLACEHOLDER__$/r /opt/mysql-client-ratls/trusted_files.toml' \
         -e '/^# __TRUSTED_FILES_PLACEHOLDER__$/d' \
-        /opt/mysql-client-ratls/mysql-client-ratls.manifest.template.base > /opt/mysql-client-ratls/mysql-client-ratls.manifest.template && \
+        /opt/mysql-client-ratls/mysql-client-ratls.manifest.template.base > /opt/mysql-client-ratls/mysql-client-ratls.manifest.template.tmp && \
+    # Replace the auto_mounts placeholder (if auto_mounts file exists and is non-empty)
+    if [ -s /opt/mysql-client-ratls/trusted_files.auto_mounts ]; then \
+        sed -e '/^  # __AUTO_MOUNTS_PLACEHOLDER__$/r /opt/mysql-client-ratls/trusted_files.auto_mounts' \
+            -e '/^  # __AUTO_MOUNTS_PLACEHOLDER__$/d' \
+            /opt/mysql-client-ratls/mysql-client-ratls.manifest.template.tmp > /opt/mysql-client-ratls/mysql-client-ratls.manifest.template; \
+    else \
+        sed -e '/^  # __AUTO_MOUNTS_PLACEHOLDER__$/d' \
+            /opt/mysql-client-ratls/mysql-client-ratls.manifest.template.tmp > /opt/mysql-client-ratls/mysql-client-ratls.manifest.template; \
+    fi && \
     # Clean up temporary files
-    rm -f /opt/mysql-client-ratls/mysql-client-ratls.manifest.template.base /opt/mysql-client-ratls/trusted_files.toml && \
-    echo "Trusted files generated and injected into manifest template"
+    rm -f /opt/mysql-client-ratls/mysql-client-ratls.manifest.template.base \
+          /opt/mysql-client-ratls/mysql-client-ratls.manifest.template.tmp \
+          /opt/mysql-client-ratls/trusted_files.toml \
+          /opt/mysql-client-ratls/trusted_files.auto_mounts && \
+    echo "Trusted files and auto-discovered mounts generated and injected into manifest template"
 
 # Build the Gramine manifest
 # This generates the signed manifest so it's ready to run immediately
