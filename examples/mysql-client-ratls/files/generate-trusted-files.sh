@@ -251,9 +251,6 @@ generate_output() {
     done
     
     echo ""
-    echo "  # Node.js modules directory"
-    echo '  "file:/app/node_modules/",'
-    echo ""
     echo "  # System configuration files"
     echo '  "file:/etc/hosts",'
     echo '  "file:/etc/resolv.conf",'
