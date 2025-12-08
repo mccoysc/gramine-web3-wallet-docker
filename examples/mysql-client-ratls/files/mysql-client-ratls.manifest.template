@@ -126,9 +126,6 @@ sgx.allowed_files = [
   # SSL certificates directory (public certificates only, private keys in encrypted partition)
   "file:/var/lib/mysql-client-ssl/",
   
-  # Node.js modules directory (frequently changing, not integrity-checked)
-  "file:/app/node_modules/",
-  
   # Temporary files
   "file:/tmp/",
   
