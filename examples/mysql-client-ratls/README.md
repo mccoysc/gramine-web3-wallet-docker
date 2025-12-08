@@ -134,6 +134,20 @@ docker run -it \
 | `CONTRACT_ADDRESS` | No | Ethereum contract address to read whitelist from |
 | `RPC_URL` | No* | Ethereum RPC endpoint (*required if CONTRACT_ADDRESS is set) |
 
+## RA-TLS Certificate Configuration
+
+The following RA-TLS environment variables are configured by the C launcher (following [mccoysc/gramine tools/sgx/ra-tls/CERTIFICATE_CONFIGURATION.md](https://github.com/mccoysc/gramine/blob/main/tools/sgx/ra-tls/CERTIFICATE_CONFIGURATION.md)):
+
+| Variable | Value | Description |
+|----------|-------|-------------|
+| `RA_TLS_CERT_ALGORITHM` | `secp256k1` | Elliptic curve for certificate generation (Ethereum compatible) |
+| `RATLS_ENABLE_VERIFY` | `1` | Enable RA-TLS verification during TLS handshake |
+| `RATLS_REQUIRE_PEER_CERT` | `1` | Require peer certificate for mutual TLS authentication |
+| `RATLS_CERT_PATH` | `/var/lib/mysql-client-ssl/client-cert.pem` | Path to store generated certificate (regular directory) |
+| `RATLS_KEY_PATH` | `/app/wallet/mysql-client-keys/client-key.pem` | Path to store private key (encrypted partition) |
+
+These values are hardcoded in the manifest and launcher for security (not passthrough from host environment). The private key is stored in the encrypted partition (`/app/wallet/`) to prevent data leakage.
+
 ## Smart Contract Integration
 
 The launcher can read whitelist configuration from a smart contract that implements:
