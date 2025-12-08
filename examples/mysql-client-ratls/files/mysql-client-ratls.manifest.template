@@ -16,7 +16,7 @@ loader.insecure__use_cmdline_argv = true
 # The launcher sets LD_PRELOAD before execve() to Node.js, so:
 # - The launcher runs WITHOUT RA-TLS hooks
 # - Only Node.js gets the RA-TLS library injected
-loader.insecure__use_host_env = true
+# loader.insecure__use_host_env = true
 
 # Library search path - MUST be explicitly set for Gramine's glibc runtime
 # Without this, the dynamic linker inside the enclave cannot find system libraries
@@ -87,7 +87,6 @@ fs.mounts = [
 
 # SGX configuration
 sgx.debug = false
-sgx.enclave_size = "1024G"
 sgx.max_threads = 64
 sgx.edmm_enable = true
 
