@@ -98,6 +98,14 @@ RUN curl -fsSL https://raw.githubusercontent.com/mccoysc/gramine-web3-wallet-doc
 #   - trusted_files.toml: the sgx.trusted_files section
 #   - trusted_files.auto_mounts: any additional mounts discovered during dependency analysis
 RUN /opt/mysql-client-ratls/generate-trusted-files.sh /opt/mysql-client-ratls/trusted_files.toml && \
+    # DEBUG: Show generated trusted_files content
+    echo "=== DEBUG: Generated trusted_files.toml content ===" && \
+    cat /opt/mysql-client-ratls/trusted_files.toml && \
+    echo "=== DEBUG: End of trusted_files.toml ===" && \
+    # DEBUG: Check for libcurl in trusted_files
+    echo "=== DEBUG: libcurl entries in trusted_files.toml ===" && \
+    grep -i curl /opt/mysql-client-ratls/trusted_files.toml || echo "WARNING: No libcurl found in trusted_files.toml!" && \
+    echo "=== DEBUG: End of libcurl check ===" && \
     # Replace the trusted_files placeholder
     sed -e '/^# __TRUSTED_FILES_PLACEHOLDER__$/r /opt/mysql-client-ratls/trusted_files.toml' \
         -e '/^# __TRUSTED_FILES_PLACEHOLDER__$/d' \
@@ -111,6 +119,10 @@ RUN /opt/mysql-client-ratls/generate-trusted-files.sh /opt/mysql-client-ratls/tr
         sed -e '/^  # __AUTO_MOUNTS_PLACEHOLDER__$/d' \
             /opt/mysql-client-ratls/mysql-client-ratls.manifest.template.tmp > /opt/mysql-client-ratls/mysql-client-ratls.manifest.template; \
     fi && \
+    # DEBUG: Show final manifest template content
+    echo "=== DEBUG: Final manifest template content ===" && \
+    cat /opt/mysql-client-ratls/mysql-client-ratls.manifest.template && \
+    echo "=== DEBUG: End of manifest template ===" && \
     # Clean up temporary files
     rm -f /opt/mysql-client-ratls/mysql-client-ratls.manifest.template.base \
           /opt/mysql-client-ratls/mysql-client-ratls.manifest.template.tmp \
@@ -137,6 +149,14 @@ RUN mkdir -p /var/lib/mysql-client-ssl && \
         -Dlog_level=error \
         /opt/mysql-client-ratls/mysql-client-ratls.manifest.template \
         /app/mysql-client-ratls.manifest && \
+    # DEBUG: Show final compiled manifest content
+    echo "=== DEBUG: Final compiled manifest content ===" && \
+    cat /app/mysql-client-ratls.manifest && \
+    echo "=== DEBUG: End of compiled manifest ===" && \
+    # DEBUG: Check for libcurl in final manifest
+    echo "=== DEBUG: libcurl entries in final manifest ===" && \
+    grep -i curl /app/mysql-client-ratls.manifest || echo "WARNING: No libcurl found in final manifest!" && \
+    echo "=== DEBUG: End of libcurl check in manifest ===" && \
     # Sign manifest
     gramine-sgx-sign \
         --manifest /app/mysql-client-ratls.manifest \
