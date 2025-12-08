@@ -240,14 +240,6 @@ RUN if [ "$USE_PREBUILT" = "true" ] && [ -f /tmp/prebuilt/nodejs/node-install.ta
         curl -fsSL https://deb.nodesource.com/setup_${NODE_MAJOR}.x | bash -; \
         apt-get install -y nodejs; \
         rm -rf /var/lib/apt/lists/*; \
-        # Create /opt/node-install with symlinks to system Node.js
-        # This ensures Gramine manifests that mount /opt/node-install will work
-        # regardless of whether prebuilt or NodeSource Node.js is used
-        echo "Creating /opt/node-install symlinks for NodeSource Node.js"; \
-        mkdir -p /opt/node-install/bin; \
-        ln -sf /usr/bin/node /opt/node-install/bin/node; \
-        ln -sf /usr/bin/npm /opt/node-install/bin/npm; \
-        ln -sf /usr/bin/npx /opt/node-install/bin/npx; \
     fi
 
 # Create wrapper scripts for openssl and node to limit OpenSSL library path scope
