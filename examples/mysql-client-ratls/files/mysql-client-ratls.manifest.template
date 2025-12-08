@@ -12,9 +12,9 @@ loader.log_level = "{{ log_level }}"
 loader.insecure__use_cmdline_argv = true
 
 # Environment variables
-# Note: LD_LIBRARY_PATH includes /opt/openssl-install paths for custom OpenSSL libraries
-# The launcher also sets this dynamically before execve() to Node.js
-loader.env.LD_LIBRARY_PATH = "/opt/openssl-install/lib64:/opt/openssl-install/lib:/lib:/usr/lib:/lib/x86_64-linux-gnu:/usr/lib/x86_64-linux-gnu:/usr/local/lib:/usr/local/lib/x86_64-linux-gnu"
+# Note: LD_LIBRARY_PATH is set to system library paths
+# The launcher may set additional paths dynamically before execve() to Node.js if needed
+loader.env.LD_LIBRARY_PATH = "/lib:/usr/lib:/lib/x86_64-linux-gnu:/usr/lib/x86_64-linux-gnu:/usr/local/lib:/usr/local/lib/x86_64-linux-gnu"
 loader.env.PATH = "/usr/bin:/bin:/usr/sbin:/sbin:/usr/local/bin"
 loader.env.HOME = "/app/wallet"
 
@@ -76,10 +76,6 @@ fs.mounts = [
   { path = "/bin", uri = "file:/bin" },
   { path = "/sbin", uri = "file:/sbin" },
   
-  # Custom OpenSSL installation (Node.js is dynamically linked against this)
-  # The launcher sets LD_LIBRARY_PATH to include these paths before execve()
-  { path = "/opt/openssl-install", uri = "file:/opt/openssl-install" },
-  
   # Application directory
   { path = "/app", uri = "file:/app" },
   
@@ -94,6 +90,8 @@ fs.mounts = [
   
   # Temporary directory
   { type = "tmpfs", path = "/tmp" },
+  
+  # __AUTO_MOUNTS_PLACEHOLDER__
 ]
 
 # SGX configuration
