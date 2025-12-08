@@ -1,0 +1,139 @@
+# Gramine manifest template for MySQL RA-TLS Client
+# This manifest runs the mysql-client-ratls-launcher which then execve() to Node.js
+# Both the launcher and Node.js run inside the same SGX enclave
+
+# Note: loader.entrypoint is automatically set by gramine-manifest to the LibOS
+# libos.entrypoint specifies the actual application to run inside the enclave
+libos.entrypoint = "{{ entrypoint }}"
+
+loader.log_level = "{{ log_level }}"
+
+# Allow command line arguments from gramine-sgx invocation
+loader.insecure__use_cmdline_argv = true
+
+# Environment variables
+loader.env.LD_LIBRARY_PATH = "/lib:/usr/lib:/lib/x86_64-linux-gnu:/usr/lib/x86_64-linux-gnu:/usr/local/lib:/usr/local/lib/x86_64-linux-gnu"
+loader.env.PATH = "/usr/bin:/bin:/usr/sbin:/sbin:/usr/local/bin"
+loader.env.HOME = "/app/wallet"
+loader.env.NODE_PATH = "/app/node_modules:/usr/local/lib/node_modules:/usr/lib/node_modules"
+
+# Note: RA-TLS injection via LD_PRELOAD is handled by the launcher, NOT by this manifest.
+# The launcher sets LD_PRELOAD before execve() to Node.js, so:
+# - The launcher runs WITHOUT RA-TLS hooks
+# - Only Node.js gets the RA-TLS library injected
+# Do NOT set loader.env.LD_PRELOAD here - the launcher handles it dynamically.
+
+# RA-TLS Configuration
+# Use secp256k1 curve for Ethereum compatibility
+loader.env.RA_TLS_CERT_ALGORITHM = "secp256k1"
+
+# Enable RA-TLS verification and require peer certificate for mutual TLS
+loader.env.RATLS_ENABLE_VERIFY = "1"
+loader.env.RATLS_REQUIRE_PEER_CERT = "1"
+
+# Allow platforms with out-of-date TCB or configuration needed status
+# These are INSECURE settings that accept platforms that haven't been updated
+# to the latest microcode/firmware. Use only when necessary for compatibility.
+loader.env.RA_TLS_ALLOW_OUTDATED_TCB_INSECURE = "1"
+loader.env.RA_TLS_ALLOW_HW_CONFIG_NEEDED = "1"
+loader.env.RA_TLS_ALLOW_SW_HARDENING_NEEDED = "1"
+
+# Certificate and key paths (fixed in manifest for security)
+# Certificate can be in normal directory
+loader.env.RATLS_CERT_PATH = "/var/lib/mysql-client-ssl/client-cert.pem"
+# Private key MUST be in encrypted partition
+loader.env.RATLS_KEY_PATH = "/app/wallet/mysql-client-keys/client-key.pem"
+
+# Contract configuration for whitelist (passthrough from host for deployment flexibility)
+loader.env.CONTRACT_ADDRESS = { passthrough = true }
+loader.env.RPC_URL = { passthrough = true }
+
+# MySQL connection configuration (passthrough from host)
+loader.env.MYSQL_HOST = { passthrough = true }
+loader.env.MYSQL_PORT = { passthrough = true }
+loader.env.MYSQL_USER = { passthrough = true }
+loader.env.MYSQL_DATABASE = { passthrough = true }
+loader.env.MYSQL_QUERY = { passthrough = true }
+loader.env.MYSQL_INTERACTIVE = { passthrough = true }
+
+# Filesystem mounts
+fs.mounts = [
+  # Gramine runtime libraries
+  { path = "/lib", uri = "file:{{ gramine.runtimedir() }}" },
+  
+  # System libraries from /lib/x86_64-linux-gnu
+  { path = "/lib/x86_64-linux-gnu", uri = "file:/lib/x86_64-linux-gnu" },
+  
+  # System libraries
+  { path = "/usr/lib", uri = "file:/usr/lib" },
+  { path = "/usr/local/lib", uri = "file:/usr/local/lib" },
+  
+  # Binaries
+  { path = "/usr/bin", uri = "file:/usr/bin" },
+  { path = "/usr/sbin", uri = "file:/usr/sbin" },
+  { path = "/usr/local/bin", uri = "file:/usr/local/bin" },
+  { path = "/bin", uri = "file:/bin" },
+  { path = "/sbin", uri = "file:/sbin" },
+  
+  # Node.js modules
+  { path = "/app/node_modules", uri = "file:/app/node_modules" },
+  { path = "/usr/local/lib/node_modules", uri = "file:/usr/local/lib/node_modules" },
+  
+  # Application directory
+  { path = "/app", uri = "file:/app" },
+  
+  # System configuration
+  { path = "/etc", uri = "file:/etc" },
+  
+  # SSL certificate directory (writable for RA-TLS cert generation)
+  { path = "/var/lib/mysql-client-ssl", uri = "file:/var/lib/mysql-client-ssl" },
+  
+  # Encrypted storage for private keys and sensitive files
+  { type = "encrypted", path = "/app/wallet", uri = "file:/app/wallet", key_name = "_sgx_mrenclave" },
+  
+  # Temporary directory
+  { type = "tmpfs", path = "/tmp" },
+]
+
+# SGX configuration
+sgx.debug = false
+sgx.enclave_size = "512M"
+sgx.max_threads = 16
+sgx.edmm_enable = true
+
+# Enable DCAP attestation
+sgx.remote_attestation = "dcap"
+
+# Trusted files (integrity-checked at load time)
+# Note: RA-TLS library (libratls-quote-verify.so) is included in trusted_files
+# by the generate-trusted-files.sh script. The launcher sets LD_PRELOAD at runtime
+# before execve() to Node.js, so the library must be trusted.
+#
+# IMPORTANT: The trusted_files section below is dynamically generated during
+# Docker build by the generate-trusted-files.sh script. This ensures only
+# the minimal set of required files are included, improving startup time.
+#
+# The script analyzes dependencies using ldd and includes:
+# - Gramine LibOS and runtime libraries
+# - Launcher binary and its dependencies (including libcurl)
+# - Node.js binary and its dependencies
+# - RA-TLS library and its dependencies (for LD_PRELOAD injection)
+# - NSS libraries for DNS resolution
+# - SGX DCAP libraries for attestation
+#
+# DO NOT manually edit the trusted_files section - it will be overwritten
+# during the Docker build process.
+
+# __TRUSTED_FILES_PLACEHOLDER__
+
+# Allowed files (can be modified at runtime, not integrity-checked)
+sgx.allowed_files = [
+  # SSL certificates directory (public certificates only, private keys in encrypted partition)
+  "file:/var/lib/mysql-client-ssl/",
+  
+  # Temporary files
+  "file:/tmp/",
+  
+  # System configuration directory
+  "file:/etc/",
+]

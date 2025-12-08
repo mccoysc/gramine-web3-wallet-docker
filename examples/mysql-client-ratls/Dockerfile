@@ -1,0 +1,156 @@
+# MySQL Client with RA-TLS (Remote Attestation TLS) Support in SGX Enclave
+#
+# This Dockerfile downloads required source files from the repository.
+# External files are stored in the files/ directory and downloaded via curl.
+#
+# Architecture:
+# - A C launcher program runs inside the SGX enclave
+# - The launcher reads whitelist from smart contract (if configured)
+# - The launcher sets LD_PRELOAD to inject RA-TLS library for Node.js
+# - The launcher uses execve() to replace itself with Node.js (same enclave)
+# - Only Node.js gets RA-TLS hooks (launcher runs without them)
+# - DCAP attestation is enabled for remote verification
+#
+# Features:
+# - Mutual RA-TLS authentication (both client and server must be SGX-based)
+# - Certificate-only MySQL authentication (no passwords)
+# - Certificates generated at startup from SGX quotes using secp256k1 curve
+# - Optional whitelist from smart contract (via CONTRACT_ADDRESS env var)
+# - Pre-compiled Gramine manifest for immediate SGX execution
+#
+# Environment Variables:
+#   CONTRACT_ADDRESS - Smart contract address to read whitelist from (optional)
+#   RPC_URL - Ethereum RPC endpoint URL (required if CONTRACT_ADDRESS is set)
+#   MYSQL_HOST - MySQL server hostname (default: localhost)
+#   MYSQL_PORT - MySQL server port (default: 3306)
+#   MYSQL_USER - MySQL username (default: app)
+#   MYSQL_DATABASE - MySQL database name (optional)
+#   MYSQL_QUERY - SQL query to execute (optional)
+#   MYSQL_INTERACTIVE - Set to "1" for interactive mode (optional)
+#
+# Usage:
+#   docker build -t mysql-client-ratls .
+#   docker run -it \
+#     --device=/dev/sgx_enclave \
+#     --device=/dev/sgx_provision \
+#     -e PCCS_API_KEY=your_api_key \
+#     -e MYSQL_HOST=mysql-server \
+#     -e MYSQL_USER=app \
+#     -e MYSQL_INTERACTIVE=1 \
+#     mysql-client-ratls
+#
+
+ARG BASE_IMAGE=ghcr.io/mccoysc/gramine-web3-wallet-docker:latest
+FROM ${BASE_IMAGE}
+
+LABEL org.opencontainers.image.description="MySQL Client with RA-TLS (Remote Attestation TLS) support for SGX-based mutual authentication"
+LABEL org.opencontainers.image.licenses=MIT
+
+# Avoid interactive prompts during package installation
+ENV DEBIAN_FRONTEND=noninteractive
+
+# Install development dependencies for launcher compilation
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    libcurl4-openssl-dev \
+    && rm -rf /var/lib/apt/lists/*
+
+# Create application directories
+RUN mkdir -p /app /opt/mysql-client-ratls/launcher /var/lib/mysql-client-ssl
+
+# Install mysql2 npm package for Node.js MySQL client
+RUN cd /app && npm init -y && npm install mysql2 && npm cache clean --force
+
+# Download cJSON library (MIT licensed JSON parser)
+RUN curl -fsSL https://raw.githubusercontent.com/DaveGamble/cJSON/v1.7.18/cJSON.c \
+      -o /opt/mysql-client-ratls/launcher/cJSON.c && \
+    curl -fsSL https://raw.githubusercontent.com/DaveGamble/cJSON/v1.7.18/cJSON.h \
+      -o /opt/mysql-client-ratls/launcher/cJSON.h
+
+# Download the C launcher source code from repository
+RUN curl -fsSL https://raw.githubusercontent.com/mccoysc/gramine-web3-wallet-docker/main/examples/mysql-client-ratls/files/mysql_client_ratls_launcher.c \
+      -o /opt/mysql-client-ratls/launcher/mysql_client_ratls_launcher.c
+
+# Compile and install the launcher directly with gcc
+RUN cd /opt/mysql-client-ratls/launcher && \
+    gcc -Wall -Wextra -O2 -g -o mysql-client-ratls-launcher \
+        mysql_client_ratls_launcher.c cJSON.c \
+        -lcurl && \
+    install -m 755 mysql-client-ratls-launcher /usr/local/bin/mysql-client-ratls-launcher && \
+    echo "Launcher compiled and installed successfully"
+
+# Download the Node.js client script from repository
+RUN curl -fsSL https://raw.githubusercontent.com/mccoysc/gramine-web3-wallet-docker/main/examples/mysql-client-ratls/files/mysql-client.js \
+      -o /app/mysql-client.js && \
+    chmod +x /app/mysql-client.js
+
+# Download the Gramine manifest template from repository
+RUN curl -fsSL https://raw.githubusercontent.com/mccoysc/gramine-web3-wallet-docker/main/examples/mysql-client-ratls/files/mysql-client-ratls.manifest.template \
+      -o /opt/mysql-client-ratls/mysql-client-ratls.manifest.template.base
+
+# Download the trusted_files generator script from repository
+RUN curl -fsSL https://raw.githubusercontent.com/mccoysc/gramine-web3-wallet-docker/main/examples/mysql-client-ratls/files/generate-trusted-files.sh \
+      -o /opt/mysql-client-ratls/generate-trusted-files.sh && \
+    chmod +x /opt/mysql-client-ratls/generate-trusted-files.sh
+
+# Generate trusted_files dynamically and inject into manifest template
+# This ensures only the minimal set of required files are included
+RUN /opt/mysql-client-ratls/generate-trusted-files.sh /opt/mysql-client-ratls/trusted_files.toml && \
+    # Replace the placeholder in the manifest template with the generated trusted_files
+    sed -e '/^# __TRUSTED_FILES_PLACEHOLDER__$/r /opt/mysql-client-ratls/trusted_files.toml' \
+        -e '/^# __TRUSTED_FILES_PLACEHOLDER__$/d' \
+        /opt/mysql-client-ratls/mysql-client-ratls.manifest.template.base > /opt/mysql-client-ratls/mysql-client-ratls.manifest.template && \
+    # Clean up temporary files
+    rm -f /opt/mysql-client-ratls/mysql-client-ratls.manifest.template.base /opt/mysql-client-ratls/trusted_files.toml && \
+    echo "Trusted files generated and injected into manifest template"
+
+# Build the Gramine manifest
+# This generates the signed manifest so it's ready to run immediately
+#
+# IMPORTANT: We do NOT set GRAMINE_LD_PRELOAD here. Instead, the launcher sets
+# LD_PRELOAD before execve() to Node.js. This means:
+# - The launcher runs WITHOUT RA-TLS hooks (no LD_PRELOAD for launcher)
+# - Only Node.js gets the RA-TLS library injected via LD_PRELOAD
+# - The RA-TLS library is already in trusted_files via generate-trusted-files.sh
+RUN mkdir -p /var/lib/mysql-client-ssl && \
+    # Generate signing key for manifest
+    mkdir -p /root/.config/gramine && \
+    gramine-sgx-gen-private-key && \
+    # Generate manifest (no GRAMINE_LD_PRELOAD - launcher handles LD_PRELOAD)
+    cd /app && \
+    gramine-manifest \
+        -Dentrypoint=/usr/local/bin/mysql-client-ratls-launcher \
+        -Dlog_level=error \
+        /opt/mysql-client-ratls/mysql-client-ratls.manifest.template \
+        /app/mysql-client-ratls.manifest && \
+    # Sign manifest
+    gramine-sgx-sign \
+        --manifest /app/mysql-client-ratls.manifest \
+        --output /app/mysql-client-ratls.manifest.sgx && \
+    # Verify files were created
+    ls -la /app/mysql-client-ratls.manifest* && \
+    # Copy manifests to /opt/mysql-client-ratls for reference
+    cp /app/mysql-client-ratls.manifest* /opt/mysql-client-ratls/
+
+# Clean up build artifacts (keep only what's needed at runtime)
+RUN rm -rf /opt/mysql-client-ratls/launcher/*.c \
+    /opt/mysql-client-ratls/launcher/*.h \
+    /opt/mysql-client-ratls/launcher/*.o \
+    /opt/mysql-client-ratls/launcher/mysql-client-ratls-launcher
+
+# Note: All RA-TLS environment variables are configured in the Gramine manifest
+# (loader.env.*) and are NOT set here because host environment variables are
+# isolated from the SGX enclave. The manifest directly sets:
+# - RA_TLS_CERT_ALGORITHM=secp256k1
+# - RATLS_ENABLE_VERIFY=1
+# - RATLS_REQUIRE_PEER_CERT=1
+# - RATLS_CERT_PATH=/var/lib/mysql-client-ssl/client-cert.pem
+# - RATLS_KEY_PATH=/app/wallet/mysql-client-keys/client-key.pem
+
+# Set working directory
+WORKDIR /app
+
+# The entrypoint runs the base image's entrypoint first (starts aesmd, PCCS, etc.)
+# Then runs gramine-sgx with the pre-compiled manifest to start the launcher in SGX enclave
+# The launcher (inside enclave) will then execve() to Node.js
+ENTRYPOINT ["/usr/local/bin/entrypoint.sh", "gramine-sgx", "/app/mysql-client-ratls"]
+CMD []
