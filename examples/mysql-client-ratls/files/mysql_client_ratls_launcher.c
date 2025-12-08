@@ -31,8 +31,21 @@
 #define DEFAULT_KEY_PATH "/app/wallet/mysql-client-keys/client-key.pem"
 #define CLIENT_SCRIPT_PATH "/app/mysql-client.js"
 
-/* Node.js binary path (hardcoded to match generate-trusted-files.sh) */
-#define NODE_PATH "/usr/local/bin/node"
+/* Node.js binary candidate paths (searched in order)
+ * IMPORTANT: /usr/local/bin/node is a shell script wrapper, NOT the actual binary!
+ * In Gramine SGX, we cannot execve() to a shell script - we need the actual ELF binary.
+ * The wrapper script sets LD_LIBRARY_PATH and then exec's the real binary.
+ * We replicate that logic here in C. */
+static const char *NODE_BINARY_PATHS[] = {
+    "/opt/node-install/bin/node",  /* Prebuilt Node.js from base image */
+    "/usr/bin/node",               /* System Node.js from NodeSource */
+    NULL
+};
+
+/* OpenSSL library paths (for LD_LIBRARY_PATH, matching the wrapper script logic) */
+#define OPENSSL_INSTALL_DIR "/opt/openssl-install"
+#define OPENSSL_LIB64_PATH "/opt/openssl-install/lib64"
+#define OPENSSL_LIB_PATH "/opt/openssl-install/lib"
 
 /* RA-TLS library candidate paths (searched in order) */
 static const char *RATLS_LIB_PATHS[] = {
@@ -440,12 +453,40 @@ int main(int argc, char *argv[]) {
     }
     printf("[Launcher] Found RA-TLS library: %s\n", ratls_lib);
     
-    /* Check Node.js binary exists */
-    if (!file_exists(NODE_PATH)) {
-        fprintf(stderr, "[Launcher] ERROR: Node.js binary not found: %s\n", NODE_PATH);
+    /* Find actual Node.js binary (NOT the wrapper script at /usr/local/bin/node)
+     * IMPORTANT: /usr/local/bin/node is a shell script wrapper that sets LD_LIBRARY_PATH
+     * and then exec's the real binary. In Gramine SGX, we cannot execve() to a shell script,
+     * so we need to find the actual ELF binary and replicate the wrapper's logic here. */
+    const char *node_path = find_first_existing(NODE_BINARY_PATHS);
+    if (!node_path) {
+        fprintf(stderr, "[Launcher] ERROR: Node.js binary not found\n");
+        fprintf(stderr, "[Launcher] Searched paths:\n");
+        for (int i = 0; NODE_BINARY_PATHS[i] != NULL; i++) {
+            fprintf(stderr, "[Launcher]   - %s\n", NODE_BINARY_PATHS[i]);
+        }
         return 1;
     }
-    printf("[Launcher] Found Node.js binary: %s\n", NODE_PATH);
+    printf("[Launcher] Found Node.js binary: %s\n", node_path);
+    
+    /* Set LD_LIBRARY_PATH for OpenSSL (replicating the wrapper script logic)
+     * The wrapper at /usr/local/bin/node does:
+     *   if [ -d /opt/openssl-install ]; then
+     *     export LD_LIBRARY_PATH="/opt/openssl-install/lib64:/opt/openssl-install/lib${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
+     *   fi
+     * We replicate this here so Node.js can find the custom OpenSSL libraries. */
+    if (file_exists(OPENSSL_INSTALL_DIR)) {
+        const char *old_ld_path = getenv("LD_LIBRARY_PATH");
+        char ld_path_buf[MAX_PATH_LEN];
+        if (old_ld_path && old_ld_path[0]) {
+            snprintf(ld_path_buf, sizeof(ld_path_buf), "%s:%s:%s",
+                     OPENSSL_LIB64_PATH, OPENSSL_LIB_PATH, old_ld_path);
+        } else {
+            snprintf(ld_path_buf, sizeof(ld_path_buf), "%s:%s",
+                     OPENSSL_LIB64_PATH, OPENSSL_LIB_PATH);
+        }
+        set_env("LD_LIBRARY_PATH", ld_path_buf);
+        printf("[Launcher] Set LD_LIBRARY_PATH=%s\n", ld_path_buf);
+    }
     
     /* Check if client script exists */
     if (!file_exists(CLIENT_SCRIPT_PATH)) {
@@ -474,7 +515,7 @@ int main(int argc, char *argv[]) {
         return 1;
     }
     
-    new_argv[0] = (char *)NODE_PATH;
+    new_argv[0] = (char *)node_path;
     new_argv[1] = CLIENT_SCRIPT_PATH;
     
     /* Pass through any additional arguments */
@@ -483,10 +524,10 @@ int main(int argc, char *argv[]) {
     }
     new_argv[new_argc] = NULL;
     
-    printf("[Launcher] Executing: %s %s\n", NODE_PATH, CLIENT_SCRIPT_PATH);
+    printf("[Launcher] Executing: %s %s\n", node_path, CLIENT_SCRIPT_PATH);
     
     /* Replace this process with Node.js */
-    execve(NODE_PATH, new_argv, environ);
+    execve(node_path, new_argv, environ);
     
     /* If we get here, execve failed */
     fprintf(stderr, "[Launcher] ERROR: execve failed: %s\n", strerror(errno));
