@@ -219,6 +219,8 @@ RUN if [ "$USE_PREBUILT" = "true" ] && [ -f /tmp/prebuilt/nodejs/node-install.ta
         echo "Using prebuilt Node.js"; \
         cd /opt; \
         tar -xzf /tmp/prebuilt/nodejs/node-install.tar.gz; \
+        # Ensure Node.js binary has executable permission
+        chmod +x /opt/node-install/bin/node; \
         echo "Prebuilt Node.js extracted successfully"; \
         /opt/node-install/bin/node --version; \
     else \
