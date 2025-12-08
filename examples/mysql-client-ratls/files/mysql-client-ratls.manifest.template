@@ -48,14 +48,6 @@ loader.env.RATLS_KEY_PATH = "/app/wallet/mysql-client-keys/client-key.pem"
 loader.env.CONTRACT_ADDRESS = { passthrough = true }
 loader.env.RPC_URL = { passthrough = true }
 
-# MySQL connection configuration (passthrough from host)
-loader.env.MYSQL_HOST = { passthrough = true }
-loader.env.MYSQL_PORT = { passthrough = true }
-loader.env.MYSQL_USER = { passthrough = true }
-loader.env.MYSQL_DATABASE = { passthrough = true }
-loader.env.MYSQL_QUERY = { passthrough = true }
-loader.env.MYSQL_INTERACTIVE = { passthrough = true }
-
 # Filesystem mounts
 fs.mounts = [
   # Gramine runtime libraries
@@ -95,8 +87,8 @@ fs.mounts = [
 
 # SGX configuration
 sgx.debug = false
-sgx.enclave_size = "512M"
-sgx.max_threads = 16
+sgx.enclave_size = "1024G"
+sgx.max_threads = 64
 sgx.edmm_enable = true
 
 # Enable DCAP attestation
