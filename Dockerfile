@@ -211,6 +211,18 @@ RUN if [ "$USE_PREBUILT" = "true" ] && [ -f /tmp/prebuilt/openssl/openssl-instal
         LD_LIBRARY_PATH="$OPENSSL_LIB_DIR" /opt/openssl-install/bin/openssl version; \
     else \
         echo "Using system OpenSSL"; \
+        # Create /opt/openssl-install with symlinks to system OpenSSL
+        # This ensures Gramine manifests that mount /opt/openssl-install will work
+        # regardless of whether prebuilt or system OpenSSL is used
+        echo "Creating /opt/openssl-install symlinks for system OpenSSL"; \
+        mkdir -p /opt/openssl-install/bin /opt/openssl-install/lib; \
+        ln -sf /usr/bin/openssl /opt/openssl-install/bin/openssl; \
+        # Symlink system OpenSSL libraries
+        for lib in /usr/lib/x86_64-linux-gnu/libssl.so* /usr/lib/x86_64-linux-gnu/libcrypto.so*; do \
+            if [ -e "$lib" ]; then \
+                ln -sf "$lib" /opt/openssl-install/lib/; \
+            fi; \
+        done; \
     fi
 
 # Install Node.js (prebuilt or from NodeSource)
@@ -228,6 +240,14 @@ RUN if [ "$USE_PREBUILT" = "true" ] && [ -f /tmp/prebuilt/nodejs/node-install.ta
         curl -fsSL https://deb.nodesource.com/setup_${NODE_MAJOR}.x | bash -; \
         apt-get install -y nodejs; \
         rm -rf /var/lib/apt/lists/*; \
+        # Create /opt/node-install with symlinks to system Node.js
+        # This ensures Gramine manifests that mount /opt/node-install will work
+        # regardless of whether prebuilt or NodeSource Node.js is used
+        echo "Creating /opt/node-install symlinks for NodeSource Node.js"; \
+        mkdir -p /opt/node-install/bin; \
+        ln -sf /usr/bin/node /opt/node-install/bin/node; \
+        ln -sf /usr/bin/npm /opt/node-install/bin/npm; \
+        ln -sf /usr/bin/npx /opt/node-install/bin/npx; \
     fi
 
 # Create wrapper scripts for openssl and node to limit OpenSSL library path scope
