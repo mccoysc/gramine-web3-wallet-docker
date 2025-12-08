@@ -23,8 +23,22 @@ OUTPUT_FILE="${1:-}"
 # Binaries to analyze
 LAUNCHER_PATH="/usr/local/bin/mysql-client-ratls-launcher"
 
-# Node.js binary path (hardcoded to match launcher detection)
-NODE_PATH="/usr/local/bin/node"
+# Node.js binary path detection (must match launcher logic)
+# IMPORTANT: /usr/local/bin/node is a shell script wrapper, NOT the actual binary!
+# In Gramine SGX, we cannot execve() to a shell script - we need the actual ELF binary.
+# The launcher detects the actual binary at runtime, and we must use the same logic here.
+NODE_PATH=""
+if [ -x /opt/node-install/bin/node ]; then
+    NODE_PATH="/opt/node-install/bin/node"
+    echo "# Using prebuilt Node.js: $NODE_PATH" >&2
+elif [ -x /usr/bin/node ]; then
+    NODE_PATH="/usr/bin/node"
+    echo "# Using system Node.js: $NODE_PATH" >&2
+else
+    echo "# ERROR: Node.js binary not found!" >&2
+    echo "# Searched: /opt/node-install/bin/node, /usr/bin/node" >&2
+    exit 1
+fi
 
 # Gramine paths (auto-detect)
 GRAMINE_LIBDIR=""
