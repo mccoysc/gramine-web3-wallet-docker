@@ -18,6 +18,11 @@ loader.insecure__use_cmdline_argv = true
 # - Only Node.js gets the RA-TLS library injected
 loader.insecure__use_host_env = true
 
+# Library search path - MUST be explicitly set for Gramine's glibc runtime
+# Without this, the dynamic linker inside the enclave cannot find system libraries
+# like libcurl.so.4 even if they are in trusted_files and their directories are mounted
+loader.env.LD_LIBRARY_PATH = "/lib:/usr/lib:/lib/x86_64-linux-gnu:/usr/lib/x86_64-linux-gnu:/usr/local/lib:/usr/local/lib/x86_64-linux-gnu"
+
 # RA-TLS Configuration
 # Use secp256k1 curve for Ethereum compatibility
 loader.env.RA_TLS_CERT_ALGORITHM = "secp256k1"
