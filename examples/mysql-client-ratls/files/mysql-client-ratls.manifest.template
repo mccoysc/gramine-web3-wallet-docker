@@ -92,6 +92,8 @@ fs.mounts = [
 
 # SGX configuration
 sgx.debug = false
+sgx.nonpie_binary = true
+sgx.enclave_size = "1024G"
 sgx.max_threads = 64
 sgx.edmm_enable = true
 
