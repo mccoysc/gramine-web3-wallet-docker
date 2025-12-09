@@ -403,9 +403,17 @@ for dlopen_lib in \
 done
 
 # Add SGX DCAP libraries (for attestation) - recursively
+# Include both /usr/lib and /lib directories, and also check for libdcap_quoteprov
 echo "# Adding SGX DCAP libraries (recursive)..." >&2
-for sgx_lib in /usr/lib/x86_64-linux-gnu/libsgx*.so* /usr/lib/x86_64-linux-gnu/libdcap*.so*; do
+for sgx_lib in \
+    /usr/lib/x86_64-linux-gnu/libsgx*.so* \
+    /usr/lib/x86_64-linux-gnu/libdcap*.so* \
+    /lib/x86_64-linux-gnu/libsgx*.so* \
+    /lib/x86_64-linux-gnu/libdcap*.so* \
+    /usr/lib/libsgx*.so* \
+    /usr/lib/libdcap*.so*; do
     if [ -f "$sgx_lib" ]; then
+        echo "# Found SGX/DCAP library: $sgx_lib" >&2
         add_dep_recursive "$sgx_lib"
     fi
 done
@@ -464,6 +472,13 @@ generate_output() {
     echo '  "file:/etc/nsswitch.conf",'
     echo '  "file:/etc/host.conf",'
     echo '  "file:/etc/gai.conf",'
+    echo ""
+    echo "  # OpenSSL configuration files"
+    echo '  "file:/etc/ssl/openssl.cnf",'
+    echo '  "file:/usr/lib/ssl/openssl.cnf",'
+    echo ""
+    echo "  # SGX DCAP configuration files"
+    echo '  "file:/etc/sgx_default_qcnl.conf",'
     echo "]"
     
 }
