@@ -146,7 +146,7 @@ RUN mkdir -p /var/lib/mysql-client-ssl && \
     cd /app && \
     gramine-manifest \
         -Dentrypoint=/usr/local/bin/mysql-client-ratls-launcher \
-        -Dlog_level=debug \
+        -Dlog_level=error \
         /opt/mysql-client-ratls/mysql-client-ratls.manifest.template \
         /app/mysql-client-ratls.manifest && \
     # DEBUG: Show final compiled manifest content
