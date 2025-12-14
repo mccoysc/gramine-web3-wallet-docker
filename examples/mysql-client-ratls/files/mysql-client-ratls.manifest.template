@@ -131,6 +131,7 @@ sys.stack.size = "8M"
 
 # Allowed files (can be modified at runtime, not integrity-checked)
 sgx.allowed_files = [
+  "file:/app",
   # SSL certificates directory (public certificates only, private keys in encrypted partition)
   "file:/var/lib/mysql-client-ssl/",
   
