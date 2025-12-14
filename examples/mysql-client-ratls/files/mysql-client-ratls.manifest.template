@@ -102,6 +102,11 @@ sgx.edmm_enable = true
 # Enable DCAP attestation
 sgx.remote_attestation = "dcap"
 
+sgx.use_exinfo = true
+
+sys.enable_extra_runtime_domain_names_conf = true
+sys.stack.size = "8M"
+
 # Trusted files (integrity-checked at load time)
 # Note: RA-TLS library (libratls-quote-verify.so) is included in trusted_files
 # by the generate-trusted-files.sh script. The launcher sets LD_PRELOAD at runtime
