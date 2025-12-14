@@ -397,7 +397,7 @@ int main(int argc, char *argv[]) {
     /* Reference: mccoysc/gramine tools/sgx/ra-tls/CERTIFICATE_CONFIGURATION.md */
     
     /* Use secp256k1 curve for Ethereum compatibility */
-    set_env("RA_TLS_CERT_ALGORITHM", "secp256k1");
+    //set_env("RA_TLS_CERT_ALGORITHM", "secp256k1");
     
     /* Enable RA-TLS verification and require peer certificate for mutual TLS */
     set_env("RATLS_ENABLE_VERIFY", "1");
