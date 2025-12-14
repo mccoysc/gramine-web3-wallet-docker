@@ -145,7 +145,7 @@ RUN mkdir -p /var/lib/mysql-client-ssl && \
     # Generate manifest (no GRAMINE_LD_PRELOAD - launcher handles LD_PRELOAD)
     cd /app && \
     gramine-manifest \
-        -Dentrypoint=/usr/bin/node \
+        -Dentrypoint=/usr/local/bin/mysql-client-ratls-launcher \
         -Dlog_level=debug \
         /opt/mysql-client-ratls/mysql-client-ratls.manifest.template \
         /app/mysql-client-ratls.manifest && \
