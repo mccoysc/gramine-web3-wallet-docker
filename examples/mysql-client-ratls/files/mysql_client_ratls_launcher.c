@@ -497,7 +497,7 @@ int main(int argc, char *argv[]) {
     /* Set LD_PRELOAD for RA-TLS injection */
     /* This is set just before execve() so only Node.js gets the injection */
     printf("[Launcher] Setting LD_PRELOAD=%s\n", ratls_lib);
-    //set_env("LD_PRELOAD", ratls_lib);
+    set_env("LD_PRELOAD", ratls_lib);
     
     /* Log RA-TLS configuration */
     printf("[Launcher] RA-TLS Configuration:\n");
