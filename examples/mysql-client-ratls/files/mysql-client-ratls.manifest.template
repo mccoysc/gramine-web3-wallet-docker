@@ -36,7 +36,7 @@ loader.env.RA_TLS_CERT_ALGORITHM = "p256"
 loader.env.RATLS_ENABLE_VERIFY = "1"
 loader.env.RATLS_REQUIRE_PEER_CERT = "1"
 
-loader.env.MYSQL_INTERACTIVE="1"
+loader.env.MYSQL_QUERY="SELECT CONNECTION_ID() AS connection_id,CURRENT_USER() AS authenticated_as,USER() AS client_user_host, @@hostname AS server_hostname,@@port AS server_port,DATABASE() AS current_db;"
 
 # Allow platforms with out-of-date TCB or configuration needed status
 # These are INSECURE settings that accept platforms that haven't been updated
