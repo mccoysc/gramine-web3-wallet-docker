@@ -53,6 +53,10 @@ loader.env.RPC_URL = { passthrough = true }
 loader.env.MYSQL_DATA_DIR = "/app/wallet/mysql-data"
 # Note: MYSQL_ROOT_PASSWORD is not needed because MySQL uses X.509 certificate authentication only
 
+sys.enable_extra_runtime_domain_names_conf = true
+sgx.use_exinfo = true
+sys.stack.size = "8M"
+
 # Filesystem mounts
 fs.mounts = [
   # Gramine runtime libraries
