@@ -36,6 +36,8 @@ loader.env.RA_TLS_CERT_ALGORITHM = "p256"
 loader.env.RATLS_ENABLE_VERIFY = "1"
 loader.env.RATLS_REQUIRE_PEER_CERT = "1"
 
+loader.env.MYSQL_INTERACTIVE="1"
+
 # Allow platforms with out-of-date TCB or configuration needed status
 # These are INSECURE settings that accept platforms that haven't been updated
 # to the latest microcode/firmware. Use only when necessary for compatibility.
