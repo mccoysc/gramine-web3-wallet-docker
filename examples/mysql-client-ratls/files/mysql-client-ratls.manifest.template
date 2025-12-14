@@ -53,7 +53,7 @@ loader.env.RATLS_KEY_PATH = "/app/wallet/mysql-client-keys/client-key.pem"
 loader.env.CONTRACT_ADDRESS = { passthrough = true }
 loader.env.RPC_URL = { passthrough = true }
 
-loader.env.MYSQL_HOST="127.0.0.1"
+loader.env.MYSQL_HOST="10.224.113.229"
 loader.env.MYSQL_USER="app"
 
 # Filesystem mounts
