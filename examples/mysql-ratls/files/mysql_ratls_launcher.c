@@ -646,7 +646,7 @@ int main(int argc, char *argv[]) {
     printf("[Launcher] Setting up RA-TLS configuration...\n");
     
     /* Use secp256k1 curve for Ethereum compatibility */
-    set_env("RA_TLS_CERT_ALGORITHM", "secp256k1", 1);
+    //set_env("RA_TLS_CERT_ALGORITHM", "secp256k1", 1);
     
     /* Enable RA-TLS verification and require peer certificate */
     set_env("RATLS_ENABLE_VERIFY", "1", 1);
