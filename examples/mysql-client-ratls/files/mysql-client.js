@@ -88,7 +88,6 @@ async function connectToMySQL(config) {
             cert,
             key,
             rejectUnauthorized: false, // RA-TLS handles verification via SGX attestation,
-            ecdhCurve:"secp256k1"
         },
         connectTimeout: 30000
     });
