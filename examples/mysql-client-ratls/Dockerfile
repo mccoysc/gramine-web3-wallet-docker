@@ -183,6 +183,9 @@ RUN rm -rf /opt/mysql-client-ratls/launcher/*.c \
 
 # Set working directory
 WORKDIR /app
+RUN rm -rf ra-tls-mbedtls
+RUN rm -rf keys
+RUN rm -rf manifests
 
 # The entrypoint runs the base image's entrypoint first (starts aesmd, PCCS, etc.)
 # Then runs gramine-sgx with the pre-compiled manifest to start the launcher in SGX enclave
