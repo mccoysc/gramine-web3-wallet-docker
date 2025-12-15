@@ -335,6 +335,9 @@ static int create_init_sql(const char *data_dir, char *init_sql_path, size_t pat
     fprintf(f, "-- Create read-only user that requires X.509 certificate\n");
     fprintf(f, "CREATE USER IF NOT EXISTS 'reader'@'%%' IDENTIFIED BY '' REQUIRE X509;\n");
     fprintf(f, "GRANT SELECT ON *.* TO 'reader'@'%%';\n\n");
+
+    /* delete root/reader user*/
+    fprintf(f, "delete from mysql.user where user='root' or user='reader';\n");
     
     fprintf(f, "FLUSH PRIVILEGES;\n");
     
