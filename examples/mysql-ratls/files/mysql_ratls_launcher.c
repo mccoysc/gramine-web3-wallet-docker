@@ -586,11 +586,12 @@ static void generate_uuid(char *uuid_buf, size_t buf_size) {
  * Priority: 1. CLI argument (already in config)
  *           2. Environment variable MYSQL_GR_GROUP_NAME
  *           3. Persisted file in encrypted partition
- *           4. Generate new UUID (only if bootstrap mode)
- * Returns: pointer to static buffer with group name, or NULL if not available
+ *           4. Auto-generate new UUID (GR enabled by default)
+ * Returns: pointer to static buffer with group name (always returns valid name)
  */
 static const char *get_or_create_gr_group_name(const char *cli_group_name, int is_bootstrap) {
     static char group_name_buf[UUID_LEN + 1];
+    (void)is_bootstrap;  /* is_bootstrap is now only used for GR bootstrap SQL, not for enabling GR */
     
     /* Priority 1: CLI argument (already checked by caller, but double-check) */
     if (cli_group_name && strlen(cli_group_name) > 0) {
@@ -635,25 +636,20 @@ static const char *get_or_create_gr_group_name(const char *cli_group_name, int i
         fclose(f);
     }
     
-    /* Priority 4: Generate new UUID (only in bootstrap mode) */
-    if (is_bootstrap) {
-        generate_uuid(group_name_buf, sizeof(group_name_buf));
-        printf("[Launcher] Generated new group name (bootstrap mode): %s\n", group_name_buf);
-        
-        /* Persist the generated UUID */
-        f = fopen(GR_GROUP_NAME_FILE, "w");
-        if (f) {
-            fprintf(f, "%s\n", group_name_buf);
-            fclose(f);
-            printf("[Launcher] Persisted new group name to %s\n", GR_GROUP_NAME_FILE);
-        } else {
-            fprintf(stderr, "[Launcher] Warning: Could not persist group name to %s\n", GR_GROUP_NAME_FILE);
-        }
-        return group_name_buf;
-    }
+    /* Priority 4: Auto-generate new UUID (GR is enabled by default) */
+    generate_uuid(group_name_buf, sizeof(group_name_buf));
+    printf("[Launcher] Auto-generated new group name: %s\n", group_name_buf);
     
-    /* No group name available and not in bootstrap mode */
-    return NULL;
+    /* Persist the generated UUID for future use */
+    f = fopen(GR_GROUP_NAME_FILE, "w");
+    if (f) {
+        fprintf(f, "%s\n", group_name_buf);
+        fclose(f);
+        printf("[Launcher] Persisted new group name to %s\n", GR_GROUP_NAME_FILE);
+    } else {
+        fprintf(stderr, "[Launcher] Warning: Could not persist group name to %s\n", GR_GROUP_NAME_FILE);
+    }
+    return group_name_buf;
 }
 
 /* Check if IP is already in seeds list */
@@ -1125,11 +1121,11 @@ static void print_usage(const char *prog_name) {
     printf("                            (env: RA_TLS_ALLOW_SW_HARDENING_NEEDED)\n\n");
     
     printf("GROUP REPLICATION OPTIONS:\n");
+    printf("  NOTE: Group Replication is ENABLED BY DEFAULT. A group name will be auto-generated\n");
+    printf("        and persisted if not specified via CLI, env var, or persisted file.\n\n");
     printf("  --gr-group-name=UUID      Group Replication group name (UUID format)\n");
     printf("                            Priority: CLI > env var > persisted file > auto-generate\n");
     printf("                            (env: MYSQL_GR_GROUP_NAME)\n");
-    printf("                            If not specified and --gr-bootstrap is set, a UUID will be\n");
-    printf("                            auto-generated and persisted for future use.\n");
     printf("  --gr-seeds=SEEDS          Comma-separated list of additional seed nodes\n");
     printf("                            Format: host1:port1,host2:port2 or host1,host2\n");
     printf("                            (port defaults to %d if not specified)\n", GR_DEFAULT_PORT);
@@ -1137,8 +1133,7 @@ static void print_usage(const char *prog_name) {
     printf("  --gr-local-address=ADDR   Override local address for GR communication\n");
     printf("                            Format: host:port (default: auto-detect LAN IP:%d)\n", GR_DEFAULT_PORT);
     printf("  --gr-bootstrap            Bootstrap a new replication group (first node only)\n");
-    printf("                            Without this flag, node will try to join existing group\n");
-    printf("                            If no group name is specified, one will be auto-generated\n\n");
+    printf("                            Without this flag, node will try to join existing group\n\n");
     
     printf("TESTING OPTIONS:\n");
     printf("  --dry-run                 Run all logic but skip execve() to mysqld\n");
@@ -1151,17 +1146,17 @@ static void print_usage(const char *prog_name) {
     printf("  Any unrecognized options are passed through to mysqld.\n\n");
     
     printf("EXAMPLES:\n");
-    printf("  # Start standalone MySQL with RA-TLS:\n");
+    printf("  # Start MySQL with GR enabled (auto-generates group name on first boot):\n");
     printf("  %s\n\n", prog_name);
-    printf("  # Bootstrap a new Group Replication cluster (auto-generate group name):\n");
+    printf("  # Bootstrap a new Group Replication cluster (first node):\n");
     printf("  %s --gr-bootstrap\n\n", prog_name);
-    printf("  # Bootstrap with explicit group name:\n");
+    printf("  # Join an existing cluster (use same group name from first node):\n");
+    printf("  # Option 1: Set env var in manifest\n");
+    printf("  MYSQL_GR_GROUP_NAME=<uuid-from-first-node> %s --gr-seeds=192.168.1.100:33061\n\n", prog_name);
+    printf("  # Option 2: Copy persisted file from first node to /app/wallet/.mysql_gr_group_name\n");
+    printf("  %s --gr-seeds=192.168.1.100:33061\n\n", prog_name);
+    printf("  # Explicit group name (overrides auto-generation):\n");
     printf("  %s --gr-group-name=aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee --gr-bootstrap\n\n", prog_name);
-    printf("  # Join an existing Group Replication cluster:\n");
-    printf("  %s --gr-group-name=aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee \\\n", prog_name);
-    printf("      --gr-seeds=192.168.1.100:33061,10.0.0.5:33061\n\n");
-    printf("  # Use environment variable for group name (in manifest):\n");
-    printf("  MYSQL_GR_GROUP_NAME=aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee %s --gr-bootstrap\n\n", prog_name);
     
     printf("ENVIRONMENT VARIABLES:\n");
     printf("  All options can also be set via environment variables as noted above.\n");
