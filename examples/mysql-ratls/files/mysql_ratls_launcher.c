@@ -1627,6 +1627,18 @@ int main(int argc, char *argv[]) {
         fprintf(stderr, "[Launcher] Warning: Failed to create GR config directory: %s\n", strerror(errno));
     }
     
+    /* Create MySQL runtime directory for socket and pid file */
+    printf("[Launcher] Creating MySQL runtime directory: /var/run/mysqld\n");
+    if (mkdir_p("/var/run/mysqld") != 0) {
+        fprintf(stderr, "[Launcher] Warning: Failed to create MySQL runtime directory: %s\n", strerror(errno));
+    }
+    
+    /* Create MySQL secure file operations directory (for LOAD DATA INFILE, etc.) */
+    printf("[Launcher] Creating MySQL secure files directory: /var/lib/mysql-files\n");
+    if (mkdir_p("/var/lib/mysql-files") != 0) {
+        fprintf(stderr, "[Launcher] Warning: Failed to create MySQL secure files directory: %s\n", strerror(errno));
+    }
+    
     /* Check if MySQL data directory needs initialization */
     /* Instead of running mysqld --initialize-insecure inside the enclave (which was failing),
      * we copy pre-initialized data from a template directory that was created during Docker build.
