@@ -26,6 +26,7 @@
 #include <netinet/in.h>
 #include <arpa/inet.h>
 #include <netdb.h>
+#include <time.h>
 
 #include "cJSON.h"
 
@@ -41,9 +42,11 @@
 #define GR_CONFIG_FILE "/var/lib/mysql/mysql-gr.cnf"
 #define GR_DEFAULT_PORT 33061
 #define GR_SERVER_ID_FILE "/app/wallet/.mysql_server_id"
+#define GR_GROUP_NAME_FILE "/app/wallet/.mysql_gr_group_name"
 #define PUBLIC_IP_URL "https://ifconfig.me/ip"
 #define MAX_SEEDS_LEN 4096
 #define MAX_IP_LEN 64
+#define UUID_LEN 36  /* xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx */
 
 /* RA-TLS library candidate paths (searched in order) */
 static const char *RATLS_LIB_PATHS[] = {
@@ -536,6 +539,119 @@ static unsigned int get_or_create_server_id(const char *lan_ip, const char *publ
     return server_id;
 }
 
+/* Generate a random UUID v4 string */
+static void generate_uuid(char *uuid_buf, size_t buf_size) {
+    if (buf_size < UUID_LEN + 1) {
+        uuid_buf[0] = '\0';
+        return;
+    }
+    
+    /* Read random bytes from /dev/urandom */
+    unsigned char random_bytes[16];
+    FILE *f = fopen("/dev/urandom", "rb");
+    if (f) {
+        size_t read = fread(random_bytes, 1, 16, f);
+        fclose(f);
+        if (read != 16) {
+            /* Fallback to time-based seed if urandom fails */
+            srand((unsigned int)time(NULL) ^ getpid());
+            for (int i = 0; i < 16; i++) {
+                random_bytes[i] = rand() & 0xFF;
+            }
+        }
+    } else {
+        /* Fallback to time-based seed */
+        srand((unsigned int)time(NULL) ^ getpid());
+        for (int i = 0; i < 16; i++) {
+            random_bytes[i] = rand() & 0xFF;
+        }
+    }
+    
+    /* Set version (4) and variant (RFC 4122) bits */
+    random_bytes[6] = (random_bytes[6] & 0x0F) | 0x40;  /* Version 4 */
+    random_bytes[8] = (random_bytes[8] & 0x3F) | 0x80;  /* Variant RFC 4122 */
+    
+    /* Format as UUID string: xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx */
+    snprintf(uuid_buf, buf_size,
+        "%02x%02x%02x%02x-%02x%02x-%02x%02x-%02x%02x-%02x%02x%02x%02x%02x%02x",
+        random_bytes[0], random_bytes[1], random_bytes[2], random_bytes[3],
+        random_bytes[4], random_bytes[5],
+        random_bytes[6], random_bytes[7],
+        random_bytes[8], random_bytes[9],
+        random_bytes[10], random_bytes[11], random_bytes[12], random_bytes[13],
+        random_bytes[14], random_bytes[15]);
+}
+
+/* Get or create Group Replication group name
+ * Priority: 1. CLI argument (already in config)
+ *           2. Environment variable MYSQL_GR_GROUP_NAME
+ *           3. Persisted file in encrypted partition
+ *           4. Auto-generate new UUID (GR enabled by default)
+ * Returns: pointer to static buffer with group name (always returns valid name)
+ */
+static const char *get_or_create_gr_group_name(const char *cli_group_name, int is_bootstrap) {
+    static char group_name_buf[UUID_LEN + 1];
+    (void)is_bootstrap;  /* is_bootstrap is now only used for GR bootstrap SQL, not for enabling GR */
+    
+    /* Priority 1: CLI argument (already checked by caller, but double-check) */
+    if (cli_group_name && strlen(cli_group_name) > 0) {
+        strncpy(group_name_buf, cli_group_name, UUID_LEN);
+        group_name_buf[UUID_LEN] = '\0';
+        printf("[Launcher] Using group name from command line: %s\n", group_name_buf);
+        return group_name_buf;
+    }
+    
+    /* Priority 2: Environment variable */
+    const char *env_group_name = getenv("MYSQL_GR_GROUP_NAME");
+    if (env_group_name && strlen(env_group_name) > 0) {
+        strncpy(group_name_buf, env_group_name, UUID_LEN);
+        group_name_buf[UUID_LEN] = '\0';
+        printf("[Launcher] Using group name from environment variable: %s\n", group_name_buf);
+        
+        /* Also persist it for future use */
+        FILE *f = fopen(GR_GROUP_NAME_FILE, "w");
+        if (f) {
+            fprintf(f, "%s\n", group_name_buf);
+            fclose(f);
+            printf("[Launcher] Persisted group name to %s\n", GR_GROUP_NAME_FILE);
+        }
+        return group_name_buf;
+    }
+    
+    /* Priority 3: Persisted file */
+    FILE *f = fopen(GR_GROUP_NAME_FILE, "r");
+    if (f) {
+        if (fgets(group_name_buf, sizeof(group_name_buf), f)) {
+            /* Remove trailing newline */
+            size_t len = strlen(group_name_buf);
+            if (len > 0 && group_name_buf[len-1] == '\n') {
+                group_name_buf[len-1] = '\0';
+            }
+            if (strlen(group_name_buf) > 0) {
+                fclose(f);
+                printf("[Launcher] Using group name from persisted file: %s\n", group_name_buf);
+                return group_name_buf;
+            }
+        }
+        fclose(f);
+    }
+    
+    /* Priority 4: Auto-generate new UUID (GR is enabled by default) */
+    generate_uuid(group_name_buf, sizeof(group_name_buf));
+    printf("[Launcher] Auto-generated new group name: %s\n", group_name_buf);
+    
+    /* Persist the generated UUID for future use */
+    f = fopen(GR_GROUP_NAME_FILE, "w");
+    if (f) {
+        fprintf(f, "%s\n", group_name_buf);
+        fclose(f);
+        printf("[Launcher] Persisted new group name to %s\n", GR_GROUP_NAME_FILE);
+    } else {
+        fprintf(stderr, "[Launcher] Warning: Could not persist group name to %s\n", GR_GROUP_NAME_FILE);
+    }
+    return group_name_buf;
+}
+
 /* Check if IP is already in seeds list */
 /* Check if an ip:port pair is already in the seeds list (exact match) */
 static int seed_in_list(const char *seeds, const char *seed_with_port) {
@@ -1005,8 +1121,11 @@ static void print_usage(const char *prog_name) {
     printf("                            (env: RA_TLS_ALLOW_SW_HARDENING_NEEDED)\n\n");
     
     printf("GROUP REPLICATION OPTIONS:\n");
+    printf("  NOTE: Group Replication is ENABLED BY DEFAULT. A group name will be auto-generated\n");
+    printf("        and persisted if not specified via CLI, env var, or persisted file.\n\n");
     printf("  --gr-group-name=UUID      Group Replication group name (UUID format)\n");
-    printf("                            Required to enable Group Replication\n");
+    printf("                            Priority: CLI > env var > persisted file > auto-generate\n");
+    printf("                            (env: MYSQL_GR_GROUP_NAME)\n");
     printf("  --gr-seeds=SEEDS          Comma-separated list of additional seed nodes\n");
     printf("                            Format: host1:port1,host2:port2 or host1,host2\n");
     printf("                            (port defaults to %d if not specified)\n", GR_DEFAULT_PORT);
@@ -1027,15 +1146,17 @@ static void print_usage(const char *prog_name) {
     printf("  Any unrecognized options are passed through to mysqld.\n\n");
     
     printf("EXAMPLES:\n");
-    printf("  # Start standalone MySQL with RA-TLS:\n");
+    printf("  # Start MySQL with GR enabled (auto-generates group name on first boot):\n");
     printf("  %s\n\n", prog_name);
-    printf("  # Bootstrap a new Group Replication cluster:\n");
+    printf("  # Bootstrap a new Group Replication cluster (first node):\n");
+    printf("  %s --gr-bootstrap\n\n", prog_name);
+    printf("  # Join an existing cluster (use same group name from first node):\n");
+    printf("  # Option 1: Set env var in manifest\n");
+    printf("  MYSQL_GR_GROUP_NAME=<uuid-from-first-node> %s --gr-seeds=192.168.1.100:33061\n\n", prog_name);
+    printf("  # Option 2: Copy persisted file from first node to /app/wallet/.mysql_gr_group_name\n");
+    printf("  %s --gr-seeds=192.168.1.100:33061\n\n", prog_name);
+    printf("  # Explicit group name (overrides auto-generation):\n");
     printf("  %s --gr-group-name=aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee --gr-bootstrap\n\n", prog_name);
-    printf("  # Join an existing Group Replication cluster:\n");
-    printf("  %s --gr-group-name=aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee \\\n", prog_name);
-    printf("      --gr-seeds=192.168.1.100:33061,10.0.0.5:33061\n\n");
-    printf("  # Override certificate path:\n");
-    printf("  %s --cert-path=/custom/path/cert.pem --key-path=/app/wallet/key.pem\n\n", prog_name);
     
     printf("ENVIRONMENT VARIABLES:\n");
     printf("  All options can also be set via environment variables as noted above.\n");
@@ -1072,20 +1193,24 @@ static int validate_config(struct launcher_config *config) {
     }
     
     /* === Group Replication dependencies === */
-    int gr_enabled = (config->gr_group_name && strlen(config->gr_group_name) > 0);
+    /* Group name can come from: CLI, env var, persisted file, or auto-generated (if bootstrap) */
+    int has_cli_group_name = (config->gr_group_name && strlen(config->gr_group_name) > 0);
+    const char *env_group_name = getenv("MYSQL_GR_GROUP_NAME");
+    int has_env_group_name = (env_group_name && strlen(env_group_name) > 0);
     
-    /* GR-specific options only valid when GR is enabled */
-    if (!gr_enabled) {
-        if (config->gr_bootstrap) {
-            fprintf(stderr, "[Launcher] ERROR: --gr-bootstrap specified but --gr-group-name is missing\n");
-            fprintf(stderr, "[Launcher]        Group Replication requires a group name\n");
-            has_errors = 1;
-        }
+    /* GR is potentially enabled if we have a group name OR if bootstrap mode is set (auto-generate) */
+    int gr_potentially_enabled = has_cli_group_name || has_env_group_name || config->gr_bootstrap;
+    
+    /* GR-specific options only valid when GR is potentially enabled */
+    if (!gr_potentially_enabled) {
+        /* Only warn about seeds/local-address if they're specified without any GR enablement */
         if (config->gr_seeds && strlen(config->gr_seeds) > 0) {
-            printf("[Launcher] Warning: --gr-seeds specified but --gr-group-name is missing (ignored)\n");
+            printf("[Launcher] Warning: --gr-seeds specified but no GR mode enabled (ignored)\n");
+            printf("[Launcher]          Use --gr-group-name, MYSQL_GR_GROUP_NAME env var, or --gr-bootstrap\n");
         }
         if (config->gr_local_address && strlen(config->gr_local_address) > 0) {
-            printf("[Launcher] Warning: --gr-local-address specified but --gr-group-name is missing (ignored)\n");
+            printf("[Launcher] Warning: --gr-local-address specified but no GR mode enabled (ignored)\n");
+            printf("[Launcher]          Use --gr-group-name, MYSQL_GR_GROUP_NAME env var, or --gr-bootstrap\n");
         }
     }
     
@@ -1540,7 +1665,9 @@ int main(int argc, char *argv[]) {
     char init_file_arg[MAX_PATH_LEN] = {0};
     
     /* Group Replication variables */
-    int gr_enabled = (config.gr_group_name && strlen(config.gr_group_name) > 0);
+    /* Get group name using priority: CLI > env var > persisted file > generate (if bootstrap) */
+    const char *gr_group_name = get_or_create_gr_group_name(config.gr_group_name, config.gr_bootstrap);
+    int gr_enabled = (gr_group_name != NULL && strlen(gr_group_name) > 0);
     char gr_config_path[MAX_PATH_LEN] = {0};
     char defaults_extra_file_arg[MAX_PATH_LEN] = {0};
     char lan_ip[MAX_IP_LEN] = {0};
@@ -1551,7 +1678,7 @@ int main(int argc, char *argv[]) {
     /* Handle Group Replication setup if enabled */
     if (gr_enabled) {
         printf("\n[Launcher] Group Replication Configuration:\n");
-        printf("[Launcher] Group name: %s\n", config.gr_group_name);
+        printf("[Launcher] Group name: %s\n", gr_group_name);
         printf("[Launcher] Bootstrap mode: %s\n", config.gr_bootstrap ? "YES" : "NO");
         
         /* Get LAN IP - use test override if provided */
@@ -1597,7 +1724,7 @@ int main(int argc, char *argv[]) {
         /* Create GR config file */
         strncpy(gr_config_path, GR_CONFIG_FILE, sizeof(gr_config_path) - 1);
         if (create_gr_config(GR_CONFIG_FILE, server_id,
-                            config.gr_group_name, gr_local_address, seeds_list,
+                            gr_group_name, gr_local_address, seeds_list,
                             config.gr_bootstrap, cert_path, key_path) != 0) {
             fprintf(stderr, "[Launcher] ERROR: Failed to create GR config file\n");
             return 1;
