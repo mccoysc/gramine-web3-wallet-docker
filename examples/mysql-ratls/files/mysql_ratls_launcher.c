@@ -837,12 +837,13 @@ static int create_gr_config(const char *config_path, unsigned int server_id,
         "loose-group_replication_enforce_update_everywhere_checks=ON\n");
     
     /* Recovery channel SSL settings (use same certs as main connection) */
+    /* Enable mutual TLS: verify server certificate when connecting to other nodes */
     offset += snprintf(config_content + offset, sizeof(config_content) - offset,
-        "\n# Recovery Channel SSL Settings\n"
+        "\n# Recovery Channel SSL Settings (Mutual TLS)\n"
         "loose-group_replication_recovery_use_ssl=ON\n"
         "loose-group_replication_recovery_ssl_cert=%s\n"
         "loose-group_replication_recovery_ssl_key=%s\n"
-        "loose-group_replication_recovery_ssl_verify_server_cert=OFF\n",
+        "loose-group_replication_recovery_ssl_verify_server_cert=ON\n",
         cert_path, key_path);
     
     /* IP allowlist - allow all private networks and public IPs */
