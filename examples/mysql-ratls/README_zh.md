@@ -13,10 +13,10 @@
 - **双向 RA-TLS 认证**：客户端和服务器都必须在 SGX enclave 中运行
 - **仅证书认证**：MySQL 使用 X.509 证书进行认证（无密码）
 - **基于 SGX Quote 的证书**：证书在启动时从 SGX quote 生成
-- **以太坊兼容**：使用 secp256k1 曲线生成证书
+- **标准 TLS 证书**：使用 secp256r1 曲线生成证书（基础设施广泛支持）
 - **智能合约白名单**：可选的从以太坊智能合约读取白名单配置
 - **预编译 Manifest**：Gramine manifest 在 Docker 构建期间预编译和签名
-- **加密数据存储**：MySQL 数据和日志存储在加密分区
+- **加密数据存储**：MySQL 数据和私钥存储在加密分区（日志为便于调试不加密）
 - **Group Replication 支持**：多节点互为主从模式，支持自动 IP 检测
 - **默认启用 GR 模式**：Group Replication 默认启用，无需任何参数
 - **自动生成 Group Name**：首次运行时自动生成 UUID 并持久化以供重用
@@ -30,11 +30,14 @@
 
 2. C 启动器程序在 SGX enclave 内运行：
    - 从智能合约读取白名单配置（如果设置了 CONTRACT_ADDRESS）
-   - 设置 RA-TLS 环境变量（secp256k1 曲线，启用验证）
+   - 设置 RA-TLS 环境变量（secp256r1 曲线，启用验证）
+   - 在 execve() 前设置 `LD_PRELOAD` 注入 RA-TLS 库
    - 生成或加载 Group Replication 配置
    - 使用 `execve()` 替换自身为 mysqld（避免在 enclave 中创建子进程的开销）
 
-3. RA-TLS 通过 Gramine manifest 中配置的 `LD_PRELOAD` 注入：
+3. RA-TLS 通过启动器设置的 `LD_PRELOAD` 注入（不是 manifest）：
+   - 启动器在 execve() 前动态设置 LD_PRELOAD
+   - 这确保只有 mysqld 获得 RA-TLS 库，启动器本身不会
    - 透明拦截 MySQL 连接的 TLS
    - 自动生成和验证 SGX quote
 
@@ -88,32 +91,25 @@ docker run -d \
 
 ### 使用手动白名单
 
-```bash
-# 创建白名单（Base64 编码的 CSV，5 行）
+**注意**：`RATLS_WHITELIST_CONFIG` 只能通过 Gramine manifest 环境变量设置，不能通过 `docker run -e` 设置。这是因为 manifest 是签名和可信的，而命令行参数不是。
+
+要使用手动白名单，必须在构建前修改 manifest 模板：
+
+```toml
+# 在 mysql-ratls.manifest.template 中添加：
+loader.env.RATLS_WHITELIST_CONFIG = "BASE64_ENCODED_CSV_HERE"
+```
+
+白名单格式是 Base64 编码的 CSV，共 5 行：
+```
 # 第 1 行：MRENCLAVE 值（逗号分隔的十六进制）
 # 第 2 行：MRSIGNER 值（逗号分隔的十六进制）
 # 第 3 行：ISV_PROD_ID 值
 # 第 4 行：ISV_SVN 值
 # 第 5 行：PLATFORM_INSTANCE_ID 值
-WHITELIST=$(cat <<EOF | base64 -w 0
-abc123...,def456...
-aaa111...,bbb222...
-1,2
-1,1
-0,0
-EOF
-)
-
-docker run -d \
-  --name mysql-ratls \
-  --device=/dev/sgx_enclave \
-  --device=/dev/sgx_provision \
-  -e PCCS_API_KEY=your_intel_api_key \
-  -e RATLS_WHITELIST_CONFIG=$WHITELIST \
-  -p 3306:3306 \
-  -p 33061:33061 \
-  mysql-ratls
 ```
+
+如果同时配置了合约白名单（通过 RPC URL）和 manifest 白名单，它们会按规则去重后合并。
 
 ## 环境变量
 
@@ -357,11 +353,20 @@ START GROUP_REPLICATION;
 
 **注意**：`RATLS_WHITELIST_CONFIG` 只能通过 manifest 环境变量设置（不能通过命令行），这是出于安全考虑。如果同时设置了合约白名单和环境变量白名单，它们会按规则去重后合并（5 行中相同索引的值组成一条规则）。
 
-### RA-TLS 配置选项
+### 路径选项
 
 | 参数 | 环境变量 | 默认值 | 描述 |
 |------|----------|--------|------|
 | `--cert-path=PATH` | `RATLS_CERT_PATH` | `/var/lib/mysql-ssl/server-cert.pem` | RA-TLS 证书路径 |
+
+**注意**：以下路径**只能**通过 manifest 环境变量设置（不能通过命令行），以防止数据泄漏：
+- `RATLS_KEY_PATH`：RA-TLS 私钥路径（默认：`/app/wallet/mysql-keys/server-key.pem`）
+- `MYSQL_DATA_DIR`：MySQL 数据目录（默认：`/app/wallet/mysql-data`）
+
+### RA-TLS 配置选项
+
+| 参数 | 环境变量 | 默认值 | 描述 |
+|------|----------|--------|------|
 | `--ra-tls-cert-algorithm=ALG` | `RA_TLS_CERT_ALGORITHM` | - | 证书算法（例如 secp256r1, secp256k1） |
 | `--ratls-enable-verify=0\|1` | `RATLS_ENABLE_VERIFY` | `1` | 启用 RA-TLS 验证 |
 | `--ratls-require-peer-cert=0\|1` | `RATLS_REQUIRE_PEER_CERT` | `1` | 要求对等证书以进行双向 TLS |
