@@ -739,28 +739,44 @@ static int create_gr_init_sql(const char *data_dir, char *init_sql_path, size_t 
     }
     
     /* Build SQL content in memory so we can both write and print it */
-    char sql_content[8192];
+    char sql_content[16384];
     int offset = 0;
     
     offset += snprintf(sql_content + offset, sizeof(sql_content) - offset,
         "-- MySQL RA-TLS User Initialization with Group Replication\n"
-        "-- This file is executed on first boot inside the SGX enclave\n"
+        "-- This file is executed on EVERY startup inside the SGX enclave\n"
+        "-- All statements are idempotent (safe to run multiple times)\n"
         "-- Users are configured with REQUIRE X509 (certificate-only authentication)\n"
         "-- RA-TLS handles the actual SGX attestation verification\n\n");
     
     /* Create application user with X509 requirement (only app user needed) */
+    /* CREATE USER IF NOT EXISTS is already idempotent */
     offset += snprintf(sql_content + offset, sizeof(sql_content) - offset,
-        "-- Create application user that requires X.509 certificate\n"
+        "-- Create application user that requires X.509 certificate (idempotent)\n"
         "CREATE USER IF NOT EXISTS 'app'@'%%' IDENTIFIED BY '' REQUIRE X509;\n"
         "GRANT ALL PRIVILEGES ON *.* TO 'app'@'%%' WITH GRANT OPTION;\n\n");
     
     offset += snprintf(sql_content + offset, sizeof(sql_content) - offset,
         "FLUSH PRIVILEGES;\n\n");
     
-    /* Group Replication setup */
+    /* Install Group Replication plugin (idempotent - check if already installed) */
+    /* INSTALL PLUGIN doesn't have IF NOT EXISTS, so we use a conditional approach */
+    offset += snprintf(sql_content + offset, sizeof(sql_content) - offset,
+        "-- Install Group Replication plugin (idempotent)\n"
+        "-- Check if plugin is already installed before attempting to install\n"
+        "SET @gr_plugin_installed = (SELECT COUNT(*) FROM information_schema.plugins WHERE plugin_name = 'group_replication');\n"
+        "SET @install_sql = IF(@gr_plugin_installed = 0, \n"
+        "    'INSTALL PLUGIN group_replication SONAME \"group_replication.so\"', \n"
+        "    'SELECT \"Group Replication plugin already installed\" AS status');\n"
+        "PREPARE install_stmt FROM @install_sql;\n"
+        "EXECUTE install_stmt;\n"
+        "DEALLOCATE PREPARE install_stmt;\n\n");
+    
+    /* Group Replication recovery channel setup */
+    /* CHANGE REPLICATION SOURCE is idempotent - it just updates the configuration */
     offset += snprintf(sql_content + offset, sizeof(sql_content) - offset,
         "-- Group Replication Setup\n"
-        "-- Configure recovery channel to use certificate authentication\n"
+        "-- Configure recovery channel to use certificate authentication (idempotent)\n"
         "CHANGE REPLICATION SOURCE TO\n"
         "  SOURCE_USER='app',\n"
         "  SOURCE_SSL=1,\n"
@@ -769,17 +785,43 @@ static int create_gr_init_sql(const char *data_dir, char *init_sql_path, size_t 
         "  FOR CHANNEL 'group_replication_recovery';\n\n",
         cert_path, key_path);
     
-    /* Start Group Replication */
+    /* Start Group Replication (idempotent - check if already running) */
     if (is_bootstrap) {
         offset += snprintf(sql_content + offset, sizeof(sql_content) - offset,
-            "-- Bootstrap the group (first node)\n"
-            "SET GLOBAL group_replication_bootstrap_group=ON;\n"
-            "START GROUP_REPLICATION;\n"
-            "SET GLOBAL group_replication_bootstrap_group=OFF;\n");
+            "-- Bootstrap the group (first node) - idempotent\n"
+            "-- Only bootstrap if GR is not already running\n"
+            "SET @gr_running = (SELECT COUNT(*) FROM performance_schema.replication_group_members WHERE member_state = 'ONLINE');\n"
+            "SET @bootstrap_sql = IF(@gr_running = 0, \n"
+            "    'SET GLOBAL group_replication_bootstrap_group=ON', \n"
+            "    'SELECT \"Group Replication already running, skipping bootstrap\" AS status');\n"
+            "PREPARE bootstrap_stmt FROM @bootstrap_sql;\n"
+            "EXECUTE bootstrap_stmt;\n"
+            "DEALLOCATE PREPARE bootstrap_stmt;\n\n"
+            "-- Start GR if not running\n"
+            "SET @start_sql = IF(@gr_running = 0, \n"
+            "    'START GROUP_REPLICATION', \n"
+            "    'SELECT \"Group Replication already started\" AS status');\n"
+            "PREPARE start_stmt FROM @start_sql;\n"
+            "EXECUTE start_stmt;\n"
+            "DEALLOCATE PREPARE start_stmt;\n\n"
+            "-- Turn off bootstrap mode\n"
+            "SET @unbootstrap_sql = IF(@gr_running = 0, \n"
+            "    'SET GLOBAL group_replication_bootstrap_group=OFF', \n"
+            "    'SELECT 1');\n"
+            "PREPARE unbootstrap_stmt FROM @unbootstrap_sql;\n"
+            "EXECUTE unbootstrap_stmt;\n"
+            "DEALLOCATE PREPARE unbootstrap_stmt;\n");
     } else {
         offset += snprintf(sql_content + offset, sizeof(sql_content) - offset,
-            "-- Join existing group\n"
-            "START GROUP_REPLICATION;\n");
+            "-- Join existing group - idempotent\n"
+            "-- Only start GR if not already running\n"
+            "SET @gr_running = (SELECT COUNT(*) FROM performance_schema.replication_group_members WHERE member_state = 'ONLINE');\n"
+            "SET @start_sql = IF(@gr_running = 0, \n"
+            "    'START GROUP_REPLICATION', \n"
+            "    'SELECT \"Group Replication already running\" AS status');\n"
+            "PREPARE start_stmt FROM @start_sql;\n"
+            "EXECUTE start_stmt;\n"
+            "DEALLOCATE PREPARE start_stmt;\n");
     }
     
     /* Write to file */
@@ -1576,36 +1618,38 @@ int main(int argc, char *argv[]) {
     }
     
     if (first_boot) {
-        printf("[Launcher] First boot detected - will create X.509 users\n");
-        
-        /* Create the init SQL file in the encrypted data directory */
-        if (gr_enabled) {
-            /* GR mode: create init SQL with GR setup */
-            if (create_gr_init_sql(data_dir, init_sql_path, sizeof(init_sql_path),
-                                   config.gr_bootstrap, cert_path, key_path) == 0) {
-                snprintf(init_file_arg, sizeof(init_file_arg), "--init-file=%s", init_sql_path);
-                printf("[Launcher] Will execute GR init SQL on startup: %s\n", init_sql_path);
-            } else {
-                fprintf(stderr, "[Launcher] Warning: Could not create GR init SQL file\n");
-                first_boot = 0;
-            }
-        } else {
-            /* Non-GR mode: create standard init SQL */
-            if (create_init_sql(data_dir, init_sql_path, sizeof(init_sql_path)) == 0) {
-                snprintf(init_file_arg, sizeof(init_file_arg), "--init-file=%s", init_sql_path);
-                printf("[Launcher] Will execute init SQL on startup: %s\n", init_sql_path);
-            } else {
-                fprintf(stderr, "[Launcher] Warning: Could not create init SQL file\n");
-                first_boot = 0;  /* Don't add --init-file if we couldn't create the file */
-            }
-        }
-        
-        /* Create sentinel file to mark as initialized */
-        /* Note: We create it now so that if MySQL crashes during init, we don't retry */
-        /* The init SQL is idempotent anyway, so re-running it is safe */
+        printf("[Launcher] First boot detected - will initialize MySQL data directory\n");
+        /* Create sentinel file to mark data directory as initialized */
         create_sentinel_file(data_dir);
     } else {
-        printf("[Launcher] MySQL already initialized - skipping user creation\n");
+        printf("[Launcher] MySQL data directory already initialized\n");
+    }
+    
+    /* Always create and execute init SQL on every startup */
+    /* The SQL is idempotent (safe to run multiple times) */
+    /* This ensures users are created and GR plugin is installed even on subsequent boots */
+    int init_sql_created = 0;
+    printf("[Launcher] Creating init SQL (executed on every startup, idempotent)\n");
+    
+    if (gr_enabled) {
+        /* GR mode: create init SQL with GR setup */
+        if (create_gr_init_sql(data_dir, init_sql_path, sizeof(init_sql_path),
+                               config.gr_bootstrap, cert_path, key_path) == 0) {
+            snprintf(init_file_arg, sizeof(init_file_arg), "--init-file=%s", init_sql_path);
+            printf("[Launcher] Will execute GR init SQL on startup: %s\n", init_sql_path);
+            init_sql_created = 1;
+        } else {
+            fprintf(stderr, "[Launcher] Warning: Could not create GR init SQL file\n");
+        }
+    } else {
+        /* Non-GR mode: create standard init SQL */
+        if (create_init_sql(data_dir, init_sql_path, sizeof(init_sql_path)) == 0) {
+            snprintf(init_file_arg, sizeof(init_file_arg), "--init-file=%s", init_sql_path);
+            printf("[Launcher] Will execute init SQL on startup: %s\n", init_sql_path);
+            init_sql_created = 1;
+        } else {
+            fprintf(stderr, "[Launcher] Warning: Could not create init SQL file\n");
+        }
     }
     
     /* Build argument list for mysqld */
@@ -1619,7 +1663,7 @@ int main(int argc, char *argv[]) {
     int base_args = 7;  /* mysqld, datadir, ssl-cert, ssl-key, require-secure-transport, log-error, console */
     int extra_args = 0;
     if (gr_enabled) extra_args++;  /* --defaults-extra-file */
-    if (first_boot && init_file_arg[0] != '\0') extra_args++;  /* --init-file */
+    if (init_sql_created && init_file_arg[0] != '\0') extra_args++;  /* --init-file (always on every startup) */
     
     int new_argc = base_args + extra_args;
     char **new_argv = malloc((new_argc + 1) * sizeof(char *));
@@ -1652,8 +1696,8 @@ int main(int argc, char *argv[]) {
     new_argv[idx++] = "--log-error=/var/log/mysql/error.log";  /* Override config file setting */
     new_argv[idx++] = "--console";  /* Output logs to stderr for easier debugging */
     
-    /* Add --init-file on first boot */
-    if (first_boot && init_file_arg[0] != '\0') {
+    /* Add --init-file on every startup (SQL is idempotent) */
+    if (init_sql_created && init_file_arg[0] != '\0') {
         new_argv[idx++] = init_file_arg;
     }
     
@@ -1684,8 +1728,8 @@ int main(int argc, char *argv[]) {
         printf("[Launcher]   GR config: %s\n", gr_config_path);
         printf("[Launcher]   GR mode: %s\n", config.gr_bootstrap ? "BOOTSTRAP" : "JOIN");
     }
-    if (first_boot && init_file_arg[0] != '\0') {
-        printf("[Launcher]   Init file: %s\n", init_sql_path);
+    if (init_sql_created && init_file_arg[0] != '\0') {
+        printf("[Launcher]   Init file: %s (executed every startup)\n", init_sql_path);
     }
     printf("\n");
     
