@@ -173,12 +173,14 @@ for nss_lib in /lib/x86_64-linux-gnu/libnss_*.so* /usr/lib/x86_64-linux-gnu/libn
 done
 
 # Add MySQL plugins directory (ALL plugins) - recursively
+# This includes group_replication.so for Group Replication support
 echo "# Adding MySQL plugins (recursive)..." >&2
 # Check multiple possible MySQL plugin directories
 for MYSQL_PLUGIN_DIR in /usr/lib/mysql/plugin /usr/lib/x86_64-linux-gnu/mysql/plugin; do
     if [ -d "$MYSQL_PLUGIN_DIR" ]; then
         echo "# Found MySQL plugin directory: $MYSQL_PLUGIN_DIR" >&2
         # Add ALL plugins in the directory and their dependencies
+        # Including: group_replication.so, mysql_native_password.so, caching_sha2_password.so, etc.
         for plugin in "$MYSQL_PLUGIN_DIR"/*.so; do
             if [ -f "$plugin" ]; then
                 add_dep_recursive "$plugin"

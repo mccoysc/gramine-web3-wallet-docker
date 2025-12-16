@@ -22,6 +22,10 @@
 #include <dirent.h>
 #include <fcntl.h>
 #include <curl/curl.h>
+#include <sys/socket.h>
+#include <netinet/in.h>
+#include <arpa/inet.h>
+#include <netdb.h>
 
 #include "cJSON.h"
 
@@ -32,6 +36,14 @@
 #define DEFAULT_DATA_DIR "/app/wallet/mysql-data"
 #define INIT_SENTINEL_FILE ".mysql_initialized"
 #define INIT_SQL_FILE "init_users.sql"
+
+/* Group Replication constants */
+#define GR_CONFIG_FILE "/var/lib/mysql/mysql-gr.cnf"
+#define GR_DEFAULT_PORT 33061
+#define GR_SERVER_ID_FILE "/app/wallet/.mysql_server_id"
+#define PUBLIC_IP_URL "https://ifconfig.me/ip"
+#define MAX_SEEDS_LEN 4096
+#define MAX_IP_LEN 64
 
 /* RA-TLS library candidate paths (searched in order) */
 static const char *RATLS_LIB_PATHS[] = {
@@ -48,6 +60,11 @@ static const char *RATLS_LIB_PATHS[] = {
 #define MAX_URL_LEN 2048
 #define MAX_RESPONSE_LEN (1024 * 1024)  /* 1MB max response */
 #define MAX_PATH_LEN 4096
+
+/* Forward declarations */
+struct launcher_config;
+static void print_usage(const char *prog_name);
+static void parse_args(int argc, char *argv[], struct launcher_config *config);
 
 /* Structure to hold curl response */
 struct curl_response {
@@ -309,7 +326,7 @@ static int is_mysql_initialized(const char *data_dir) {
     return file_exists(sentinel_path);
 }
 
-/* Create the initialization SQL file for first boot */
+/* Create the initialization SQL file for first boot (non-GR mode) */
 static int create_init_sql(const char *data_dir, char *init_sql_path, size_t path_size) {
     snprintf(init_sql_path, path_size, "%s/%s", data_dir, INIT_SQL_FILE);
     
@@ -319,31 +336,35 @@ static int create_init_sql(const char *data_dir, char *init_sql_path, size_t pat
         return -1;
     }
     
-    /* Write idempotent SQL to create X.509-only users */
-    fprintf(f, "-- MySQL RA-TLS User Initialization\n");
-    fprintf(f, "-- This file is executed on first boot inside the SGX enclave\n");
-    fprintf(f, "-- Users are configured with REQUIRE X509 (certificate-only authentication)\n");
-    fprintf(f, "-- RA-TLS handles the actual SGX attestation verification\n\n");
+    /* Build SQL content in memory so we can both write and print it */
+    char sql_content[4096];
+    int offset = 0;
     
+    offset += snprintf(sql_content + offset, sizeof(sql_content) - offset,
+        "-- MySQL RA-TLS User Initialization\n"
+        "-- This file is executed on first boot inside the SGX enclave\n"
+        "-- Users are configured with REQUIRE X509 (certificate-only authentication)\n"
+        "-- RA-TLS handles the actual SGX attestation verification\n\n");
     
     /* Create application user with X509 requirement */
-    fprintf(f, "-- Create application user that requires X.509 certificate\n");
-    fprintf(f, "CREATE USER IF NOT EXISTS 'app'@'%%' IDENTIFIED BY '' REQUIRE X509;\n");
-    fprintf(f, "GRANT ALL PRIVILEGES ON *.* TO 'app'@'%%' WITH GRANT OPTION;\n\n");
+    offset += snprintf(sql_content + offset, sizeof(sql_content) - offset,
+        "-- Create application user that requires X.509 certificate\n"
+        "CREATE USER IF NOT EXISTS 'app'@'%%' IDENTIFIED BY '' REQUIRE X509;\n"
+        "GRANT ALL PRIVILEGES ON *.* TO 'app'@'%%' WITH GRANT OPTION;\n\n");
     
-    /* Create a read-only user with X509 requirement */
-    fprintf(f, "-- Create read-only user that requires X.509 certificate\n");
-    fprintf(f, "CREATE USER IF NOT EXISTS 'reader'@'%%' IDENTIFIED BY '' REQUIRE X509;\n");
-    fprintf(f, "GRANT SELECT ON *.* TO 'reader'@'%%';\n\n");
-
-    /* delete root/reader user*/
-    fprintf(f, "delete from mysql.user where user='root' or user='reader';\n");
+    offset += snprintf(sql_content + offset, sizeof(sql_content) - offset,
+        "FLUSH PRIVILEGES;\n");
     
-    fprintf(f, "FLUSH PRIVILEGES;\n");
-    
+    /* Write to file */
+    fprintf(f, "%s", sql_content);
     fclose(f);
     
+    /* Print the generated SQL */
     printf("[Launcher] Created init SQL file: %s\n", init_sql_path);
+    printf("[Launcher] ========== Init SQL Content ==========\n");
+    printf("%s", sql_content);
+    printf("[Launcher] ======================================\n");
+    
     return 0;
 }
 
@@ -363,6 +384,706 @@ static int create_sentinel_file(const char *data_dir) {
     
     printf("[Launcher] Created sentinel file: %s\n", sentinel_path);
     return 0;
+}
+
+/* ============================================
+ * Group Replication Helper Functions
+ * ============================================ */
+
+/* Get LAN IP address using UDP connect trick */
+static int get_lan_ip(char *ip_buf, size_t buf_size) {
+    int sock = socket(AF_INET, SOCK_DGRAM, 0);
+    if (sock < 0) {
+        fprintf(stderr, "[Launcher] Failed to create socket for LAN IP detection: %s\n", strerror(errno));
+        return -1;
+    }
+    
+    struct sockaddr_in serv_addr;
+    memset(&serv_addr, 0, sizeof(serv_addr));
+    serv_addr.sin_family = AF_INET;
+    serv_addr.sin_port = htons(53);  /* DNS port */
+    inet_pton(AF_INET, "8.8.8.8", &serv_addr.sin_addr);
+    
+    /* Connect (doesn't actually send data for UDP) */
+    if (connect(sock, (struct sockaddr *)&serv_addr, sizeof(serv_addr)) < 0) {
+        fprintf(stderr, "[Launcher] Failed to connect for LAN IP detection: %s\n", strerror(errno));
+        close(sock);
+        return -1;
+    }
+    
+    struct sockaddr_in local_addr;
+    socklen_t addr_len = sizeof(local_addr);
+    if (getsockname(sock, (struct sockaddr *)&local_addr, &addr_len) < 0) {
+        fprintf(stderr, "[Launcher] Failed to get local address: %s\n", strerror(errno));
+        close(sock);
+        return -1;
+    }
+    
+    close(sock);
+    
+    if (inet_ntop(AF_INET, &local_addr.sin_addr, ip_buf, buf_size) == NULL) {
+        fprintf(stderr, "[Launcher] Failed to convert IP to string: %s\n", strerror(errno));
+        return -1;
+    }
+    
+    printf("[Launcher] Detected LAN IP: %s\n", ip_buf);
+    return 0;
+}
+
+/* Get public IP address using libcurl */
+static int get_public_ip(char *ip_buf, size_t buf_size) {
+    CURL *curl;
+    CURLcode res;
+    struct curl_response response = {0};
+    int ret = -1;
+    
+    curl = curl_easy_init();
+    if (!curl) {
+        fprintf(stderr, "[Launcher] Failed to initialize curl for public IP detection\n");
+        return -1;
+    }
+    
+    response.data = malloc(1);
+    if (!response.data) {
+        curl_easy_cleanup(curl);
+        return -1;
+    }
+    response.data[0] = '\0';
+    response.size = 0;
+    
+    curl_easy_setopt(curl, CURLOPT_URL, PUBLIC_IP_URL);
+    curl_easy_setopt(curl, CURLOPT_WRITEFUNCTION, write_callback);
+    curl_easy_setopt(curl, CURLOPT_WRITEDATA, &response);
+    curl_easy_setopt(curl, CURLOPT_TIMEOUT, 10L);
+    curl_easy_setopt(curl, CURLOPT_CONNECTTIMEOUT, 5L);
+    curl_easy_setopt(curl, CURLOPT_FOLLOWLOCATION, 1L);
+    
+    res = curl_easy_perform(curl);
+    
+    if (res != CURLE_OK) {
+        fprintf(stderr, "[Launcher] Failed to get public IP: %s\n", curl_easy_strerror(res));
+        goto cleanup;
+    }
+    
+    /* Trim whitespace from response */
+    char *start = response.data;
+    while (*start && (*start == ' ' || *start == '\n' || *start == '\r' || *start == '\t')) {
+        start++;
+    }
+    char *end = start + strlen(start) - 1;
+    while (end > start && (*end == ' ' || *end == '\n' || *end == '\r' || *end == '\t')) {
+        *end = '\0';
+        end--;
+    }
+    
+    if (strlen(start) == 0 || strlen(start) >= buf_size) {
+        fprintf(stderr, "[Launcher] Invalid public IP response\n");
+        goto cleanup;
+    }
+    
+    strncpy(ip_buf, start, buf_size - 1);
+    ip_buf[buf_size - 1] = '\0';
+    
+    printf("[Launcher] Detected public IP: %s\n", ip_buf);
+    ret = 0;
+    
+cleanup:
+    curl_easy_cleanup(curl);
+    free(response.data);
+    return ret;
+}
+
+/* Get or create stable server_id based on IP hash */
+static unsigned int get_or_create_server_id(const char *lan_ip, const char *public_ip) {
+    unsigned int server_id = 0;
+    
+    /* Try to read existing server_id from file */
+    FILE *f = fopen(GR_SERVER_ID_FILE, "r");
+    if (f) {
+        if (fscanf(f, "%u", &server_id) == 1 && server_id > 0) {
+            fclose(f);
+            printf("[Launcher] Loaded existing server_id: %u\n", server_id);
+            return server_id;
+        }
+        fclose(f);
+    }
+    
+    /* Generate new server_id based on hash of IPs */
+    unsigned int hash = 5381;
+    const char *str = lan_ip;
+    int c;
+    while ((c = *str++)) {
+        hash = ((hash << 5) + hash) + c;
+    }
+    str = public_ip;
+    while ((c = *str++)) {
+        hash = ((hash << 5) + hash) + c;
+    }
+    
+    /* Ensure server_id is in valid range (1 to 2^32-1) and not 0 */
+    server_id = (hash % 4294967294) + 1;
+    
+    /* Save server_id to file */
+    f = fopen(GR_SERVER_ID_FILE, "w");
+    if (f) {
+        fprintf(f, "%u\n", server_id);
+        fclose(f);
+        printf("[Launcher] Created new server_id: %u (saved to %s)\n", server_id, GR_SERVER_ID_FILE);
+    } else {
+        printf("[Launcher] Created new server_id: %u (could not save to file)\n", server_id);
+    }
+    
+    return server_id;
+}
+
+/* Check if IP is already in seeds list */
+/* Check if an ip:port pair is already in the seeds list (exact match) */
+static int seed_in_list(const char *seeds, const char *seed_with_port) {
+    if (!seeds || !seed_with_port || strlen(seeds) == 0) return 0;
+    
+    /* Make a copy to tokenize */
+    char *seeds_copy = strdup(seeds);
+    if (!seeds_copy) return 0;
+    
+    int found = 0;
+    char *saveptr;
+    char *token = strtok_r(seeds_copy, ",", &saveptr);
+    while (token) {
+        /* Trim whitespace */
+        while (*token == ' ') token++;
+        char *end = token + strlen(token) - 1;
+        while (end > token && *end == ' ') {
+            *end = '\0';
+            end--;
+        }
+        
+        /* Exact match comparison */
+        if (strcmp(token, seed_with_port) == 0) {
+            found = 1;
+            break;
+        }
+        token = strtok_r(NULL, ",", &saveptr);
+    }
+    
+    free(seeds_copy);
+    return found;
+}
+
+/* Build deduplicated seeds list from self IPs and additional seeds */
+static int build_seeds_list(char *seeds_buf, size_t buf_size,
+                            const char *lan_ip, const char *public_ip,
+                            const char *extra_seeds, int gr_port) {
+    seeds_buf[0] = '\0';
+    size_t len = 0;
+    
+    /* Add LAN IP if valid */
+    if (lan_ip && strlen(lan_ip) > 0) {
+        len += snprintf(seeds_buf + len, buf_size - len, "%s:%d", lan_ip, gr_port);
+    }
+    
+    /* Add public IP if valid and different from LAN IP */
+    if (public_ip && strlen(public_ip) > 0) {
+        if (!lan_ip || strcmp(lan_ip, public_ip) != 0) {
+            if (len > 0) {
+                len += snprintf(seeds_buf + len, buf_size - len, ",");
+            }
+            len += snprintf(seeds_buf + len, buf_size - len, "%s:%d", public_ip, gr_port);
+        }
+    }
+    
+    /* Add extra seeds (deduplicated) */
+    if (extra_seeds && strlen(extra_seeds) > 0) {
+        char *extra_copy = strdup(extra_seeds);
+        if (!extra_copy) return -1;
+        
+        char *saveptr;
+        char *token = strtok_r(extra_copy, ",", &saveptr);
+        while (token) {
+            /* Trim whitespace */
+            while (*token == ' ') token++;
+            char *end = token + strlen(token) - 1;
+            while (end > token && *end == ' ') {
+                *end = '\0';
+                end--;
+            }
+            
+            if (strlen(token) > 0) {
+                /* Check if token has port, if not add default port */
+                char seed_with_port[MAX_IP_LEN + 16];
+                if (strchr(token, ':') == NULL) {
+                    snprintf(seed_with_port, sizeof(seed_with_port), "%s:%d", token, gr_port);
+                } else {
+                    strncpy(seed_with_port, token, sizeof(seed_with_port) - 1);
+                    seed_with_port[sizeof(seed_with_port) - 1] = '\0';
+                }
+                
+                /* Check if already in seeds list (exact ip:port pair deduplication) */
+                if (!seed_in_list(seeds_buf, seed_with_port)) {
+                    if (len > 0) {
+                        len += snprintf(seeds_buf + len, buf_size - len, ",");
+                    }
+                    len += snprintf(seeds_buf + len, buf_size - len, "%s", seed_with_port);
+                }
+            }
+            
+            token = strtok_r(NULL, ",", &saveptr);
+        }
+        
+        free(extra_copy);
+    }
+    
+    printf("[Launcher] Built seeds list: %s\n", seeds_buf);
+    return 0;
+}
+
+/* Create Group Replication configuration file */
+static int create_gr_config(const char *config_path, unsigned int server_id,
+                            const char *group_name, const char *local_address,
+                            const char *seeds, int is_bootstrap,
+                            const char *cert_path, const char *key_path) {
+    FILE *f = fopen(config_path, "w");
+    if (!f) {
+        fprintf(stderr, "[Launcher] Failed to create GR config file %s: %s\n", config_path, strerror(errno));
+        return -1;
+    }
+    
+    /* Build config content in memory so we can both write and print it */
+    char config_content[8192];
+    int offset = 0;
+    
+    offset += snprintf(config_content + offset, sizeof(config_content) - offset,
+        "# MySQL Group Replication Configuration\n"
+        "# Generated by mysql-ratls-launcher\n\n"
+        "[mysqld]\n");
+    
+    /* Server identification */
+    offset += snprintf(config_content + offset, sizeof(config_content) - offset,
+        "server_id=%u\n", server_id);
+    
+    /* GTID settings (required for GR) */
+    offset += snprintf(config_content + offset, sizeof(config_content) - offset,
+        "gtid_mode=ON\n"
+        "enforce_gtid_consistency=ON\n");
+    
+    /* Binary logging (required for GR) */
+    offset += snprintf(config_content + offset, sizeof(config_content) - offset,
+        "log_bin=binlog\n"
+        "binlog_format=ROW\n"
+        "binlog_checksum=NONE\n");
+    
+    /* Replication info repositories */
+    offset += snprintf(config_content + offset, sizeof(config_content) - offset,
+        "master_info_repository=TABLE\n"
+        "relay_log_info_repository=TABLE\n");
+    
+    /* Transaction write set extraction */
+    offset += snprintf(config_content + offset, sizeof(config_content) - offset,
+        "transaction_write_set_extraction=XXHASH64\n");
+    
+    /* Group Replication plugin settings */
+    offset += snprintf(config_content + offset, sizeof(config_content) - offset,
+        "\n# Group Replication Settings\n"
+        "plugin_load_add=group_replication.so\n"
+        "loose-group_replication_group_name=%s\n"
+        "loose-group_replication_local_address=%s\n"
+        "loose-group_replication_group_seeds=%s\n"
+        "loose-group_replication_start_on_boot=OFF\n"
+        "loose-group_replication_bootstrap_group=OFF\n",
+        group_name, local_address, seeds);
+    
+    /* Multi-primary mode (mutual primary-replica) */
+    offset += snprintf(config_content + offset, sizeof(config_content) - offset,
+        "loose-group_replication_single_primary_mode=OFF\n"
+        "loose-group_replication_enforce_update_everywhere_checks=ON\n");
+    
+    /* Recovery channel SSL settings (use same certs as main connection) */
+    offset += snprintf(config_content + offset, sizeof(config_content) - offset,
+        "\n# Recovery Channel SSL Settings\n"
+        "loose-group_replication_recovery_use_ssl=ON\n"
+        "loose-group_replication_recovery_ssl_cert=%s\n"
+        "loose-group_replication_recovery_ssl_key=%s\n"
+        "loose-group_replication_recovery_ssl_verify_server_cert=OFF\n",
+        cert_path, key_path);
+    
+    /* IP allowlist - allow all private networks and public IPs */
+    offset += snprintf(config_content + offset, sizeof(config_content) - offset,
+        "\n# IP Allowlist\n"
+        "loose-group_replication_ip_allowlist=AUTOMATIC\n");
+    
+    /* Suppress unused variable warning */
+    (void)is_bootstrap;
+    
+    /* Write to file */
+    fprintf(f, "%s", config_content);
+    fclose(f);
+    
+    /* Print the generated config */
+    printf("[Launcher] Created GR config file: %s\n", config_path);
+    printf("[Launcher] ========== GR Config Content ==========\n");
+    printf("%s", config_content);
+    printf("[Launcher] ======================================\n");
+    
+    return 0;
+}
+
+/* Create Group Replication init SQL (stored in encrypted partition) */
+static int create_gr_init_sql(const char *data_dir, char *init_sql_path, size_t path_size,
+                              int is_bootstrap, const char *cert_path, const char *key_path) {
+    /* SQL file is stored in data_dir which is in encrypted partition (/app/wallet/mysql-data) */
+    snprintf(init_sql_path, path_size, "%s/%s", data_dir, INIT_SQL_FILE);
+    
+    FILE *f = fopen(init_sql_path, "w");
+    if (!f) {
+        fprintf(stderr, "[Launcher] Failed to create init SQL file: %s\n", strerror(errno));
+        return -1;
+    }
+    
+    /* Build SQL content in memory so we can both write and print it */
+    char sql_content[8192];
+    int offset = 0;
+    
+    offset += snprintf(sql_content + offset, sizeof(sql_content) - offset,
+        "-- MySQL RA-TLS User Initialization with Group Replication\n"
+        "-- This file is executed on first boot inside the SGX enclave\n"
+        "-- Users are configured with REQUIRE X509 (certificate-only authentication)\n"
+        "-- RA-TLS handles the actual SGX attestation verification\n\n");
+    
+    /* Create application user with X509 requirement (only app user needed) */
+    offset += snprintf(sql_content + offset, sizeof(sql_content) - offset,
+        "-- Create application user that requires X.509 certificate\n"
+        "CREATE USER IF NOT EXISTS 'app'@'%%' IDENTIFIED BY '' REQUIRE X509;\n"
+        "GRANT ALL PRIVILEGES ON *.* TO 'app'@'%%' WITH GRANT OPTION;\n\n");
+    
+    offset += snprintf(sql_content + offset, sizeof(sql_content) - offset,
+        "FLUSH PRIVILEGES;\n\n");
+    
+    /* Group Replication setup */
+    offset += snprintf(sql_content + offset, sizeof(sql_content) - offset,
+        "-- Group Replication Setup\n"
+        "-- Configure recovery channel to use certificate authentication\n"
+        "CHANGE REPLICATION SOURCE TO\n"
+        "  SOURCE_USER='app',\n"
+        "  SOURCE_SSL=1,\n"
+        "  SOURCE_SSL_CERT='%s',\n"
+        "  SOURCE_SSL_KEY='%s'\n"
+        "  FOR CHANNEL 'group_replication_recovery';\n\n",
+        cert_path, key_path);
+    
+    /* Start Group Replication */
+    if (is_bootstrap) {
+        offset += snprintf(sql_content + offset, sizeof(sql_content) - offset,
+            "-- Bootstrap the group (first node)\n"
+            "SET GLOBAL group_replication_bootstrap_group=ON;\n"
+            "START GROUP_REPLICATION;\n"
+            "SET GLOBAL group_replication_bootstrap_group=OFF;\n");
+    } else {
+        offset += snprintf(sql_content + offset, sizeof(sql_content) - offset,
+            "-- Join existing group\n"
+            "START GROUP_REPLICATION;\n");
+    }
+    
+    /* Write to file */
+    fprintf(f, "%s", sql_content);
+    fclose(f);
+    
+    /* Print the generated SQL */
+    printf("[Launcher] Created GR init SQL file: %s (in encrypted partition)\n", init_sql_path);
+    printf("[Launcher] ========== GR Init SQL Content ==========\n");
+    printf("%s", sql_content);
+    printf("[Launcher] =========================================\n");
+    
+    return 0;
+}
+
+/* Structure to hold all launcher configuration options */
+struct launcher_config {
+    /* Existing environment variables - can be overridden by args */
+    const char *contract_address;      /* CONTRACT_ADDRESS */
+    const char *rpc_url;               /* RPC_URL */
+    const char *whitelist_config;      /* RATLS_WHITELIST_CONFIG */
+    const char *cert_path;             /* RATLS_CERT_PATH */
+    const char *key_path;              /* RATLS_KEY_PATH */
+    const char *data_dir;              /* MYSQL_DATA_DIR */
+    
+    /* RA-TLS configuration (from manifest, can be overridden) */
+    const char *ra_tls_cert_algorithm;           /* RA_TLS_CERT_ALGORITHM */
+    const char *ratls_enable_verify;             /* RATLS_ENABLE_VERIFY */
+    const char *ratls_require_peer_cert;         /* RATLS_REQUIRE_PEER_CERT */
+    const char *ra_tls_allow_outdated_tcb;       /* RA_TLS_ALLOW_OUTDATED_TCB_INSECURE */
+    const char *ra_tls_allow_hw_config_needed;   /* RA_TLS_ALLOW_HW_CONFIG_NEEDED */
+    const char *ra_tls_allow_sw_hardening_needed;/* RA_TLS_ALLOW_SW_HARDENING_NEEDED */
+    
+    /* Group Replication options */
+    const char *gr_group_name;         /* --gr-group-name */
+    const char *gr_seeds;              /* --gr-seeds */
+    const char *gr_local_address;      /* --gr-local-address */
+    int gr_bootstrap;                  /* --gr-bootstrap */
+    
+    /* Testing options */
+    int dry_run;                       /* --dry-run: run all logic but skip execve() */
+    const char *test_lan_ip;           /* --test-lan-ip: override LAN IP for testing */
+    const char *test_public_ip;        /* --test-public-ip: override public IP for testing */
+    const char *test_output_dir;       /* --test-output-dir: override output directory for testing */
+    
+    /* Additional MySQL args to pass through */
+    int mysql_argc;
+    char **mysql_argv;
+};
+
+/* Parse command line arguments - args take priority over environment variables */
+static void parse_args(int argc, char *argv[], struct launcher_config *config) {
+    /* Initialize with environment variables as defaults */
+    config->contract_address = getenv("CONTRACT_ADDRESS");
+    config->rpc_url = getenv("RPC_URL");
+    config->whitelist_config = getenv("RATLS_WHITELIST_CONFIG");
+    config->cert_path = getenv("RATLS_CERT_PATH");
+    config->key_path = getenv("RATLS_KEY_PATH");
+    config->data_dir = getenv("MYSQL_DATA_DIR");
+    
+    /* RA-TLS configuration from environment */
+    config->ra_tls_cert_algorithm = getenv("RA_TLS_CERT_ALGORITHM");
+    config->ratls_enable_verify = getenv("RATLS_ENABLE_VERIFY");
+    config->ratls_require_peer_cert = getenv("RATLS_REQUIRE_PEER_CERT");
+    config->ra_tls_allow_outdated_tcb = getenv("RA_TLS_ALLOW_OUTDATED_TCB_INSECURE");
+    config->ra_tls_allow_hw_config_needed = getenv("RA_TLS_ALLOW_HW_CONFIG_NEEDED");
+    config->ra_tls_allow_sw_hardening_needed = getenv("RA_TLS_ALLOW_SW_HARDENING_NEEDED");
+    
+    /* GR options default to NULL/0 */
+    config->gr_group_name = NULL;
+    config->gr_seeds = NULL;
+    config->gr_local_address = NULL;
+    config->gr_bootstrap = 0;
+    
+    /* Testing options default to NULL/0 */
+    config->dry_run = 0;
+    config->test_lan_ip = NULL;
+    config->test_public_ip = NULL;
+    config->test_output_dir = NULL;
+    
+    /* Allocate array for MySQL passthrough args */
+    config->mysql_argv = malloc(argc * sizeof(char *));
+    config->mysql_argc = 0;
+    
+    /* Parse arguments - args override environment variables */
+    for (int i = 1; i < argc; i++) {
+        if (strncmp(argv[i], "--contract-address=", 19) == 0) {
+            config->contract_address = argv[i] + 19;
+        } else if (strncmp(argv[i], "--rpc-url=", 10) == 0) {
+            config->rpc_url = argv[i] + 10;
+        } else if (strncmp(argv[i], "--whitelist-config=", 19) == 0) {
+            config->whitelist_config = argv[i] + 19;
+        } else if (strncmp(argv[i], "--cert-path=", 12) == 0) {
+            config->cert_path = argv[i] + 12;
+        /* NOTE: --key-path and --data-dir are NOT allowed via command-line to prevent data leakage */
+        /* They can only be set via environment variables in the manifest */
+        } else if (strncmp(argv[i], "--ra-tls-cert-algorithm=", 24) == 0) {
+            config->ra_tls_cert_algorithm = argv[i] + 24;
+        } else if (strncmp(argv[i], "--ratls-enable-verify=", 22) == 0) {
+            config->ratls_enable_verify = argv[i] + 22;
+        } else if (strncmp(argv[i], "--ratls-require-peer-cert=", 26) == 0) {
+            config->ratls_require_peer_cert = argv[i] + 26;
+        } else if (strncmp(argv[i], "--ra-tls-allow-outdated-tcb=", 28) == 0) {
+            config->ra_tls_allow_outdated_tcb = argv[i] + 28;
+        } else if (strncmp(argv[i], "--ra-tls-allow-hw-config-needed=", 32) == 0) {
+            config->ra_tls_allow_hw_config_needed = argv[i] + 32;
+        } else if (strncmp(argv[i], "--ra-tls-allow-sw-hardening-needed=", 35) == 0) {
+            config->ra_tls_allow_sw_hardening_needed = argv[i] + 35;
+        } else if (strncmp(argv[i], "--gr-group-name=", 16) == 0) {
+            config->gr_group_name = argv[i] + 16;
+        } else if (strncmp(argv[i], "--gr-seeds=", 11) == 0) {
+            config->gr_seeds = argv[i] + 11;
+        } else if (strcmp(argv[i], "--gr-bootstrap") == 0) {
+            config->gr_bootstrap = 1;
+        } else if (strncmp(argv[i], "--gr-local-address=", 19) == 0) {
+            config->gr_local_address = argv[i] + 19;
+        } else if (strcmp(argv[i], "--dry-run") == 0) {
+            config->dry_run = 1;
+        } else if (strncmp(argv[i], "--test-lan-ip=", 14) == 0) {
+            config->test_lan_ip = argv[i] + 14;
+        } else if (strncmp(argv[i], "--test-public-ip=", 17) == 0) {
+            config->test_public_ip = argv[i] + 17;
+        } else if (strncmp(argv[i], "--test-output-dir=", 18) == 0) {
+            config->test_output_dir = argv[i] + 18;
+        } else if (strcmp(argv[i], "--help") == 0 || strcmp(argv[i], "-h") == 0) {
+            print_usage(argv[0]);
+            exit(0);
+        } else {
+            /* Pass through to MySQL */
+            config->mysql_argv[config->mysql_argc++] = argv[i];
+        }
+    }
+    
+    /* Apply defaults for paths if not set */
+    if (!config->cert_path || strlen(config->cert_path) == 0) {
+        config->cert_path = DEFAULT_CERT_PATH;
+    }
+    if (!config->key_path || strlen(config->key_path) == 0) {
+        config->key_path = DEFAULT_KEY_PATH;
+    }
+    if (!config->data_dir || strlen(config->data_dir) == 0) {
+        config->data_dir = DEFAULT_DATA_DIR;
+    }
+}
+
+/* Print usage information */
+static void print_usage(const char *prog_name) {
+    printf("Usage: %s [OPTIONS] [MYSQL_OPTIONS...]\n\n", prog_name);
+    printf("MySQL RA-TLS Launcher with Group Replication Support\n");
+    printf("Runs inside SGX enclave, sets up RA-TLS, and execve() to mysqld.\n\n");
+    
+    printf("GENERAL OPTIONS:\n");
+    printf("  -h, --help                Show this help message and exit\n\n");
+    
+    printf("SMART CONTRACT OPTIONS (for whitelist from blockchain):\n");
+    printf("  --contract-address=ADDR   Smart contract address for whitelist\n");
+    printf("                            (env: CONTRACT_ADDRESS)\n");
+    printf("  --rpc-url=URL             Ethereum JSON-RPC endpoint URL\n");
+    printf("                            (env: RPC_URL)\n");
+    printf("  --whitelist-config=CFG    Direct whitelist configuration (Base64-encoded CSV)\n");
+    printf("                            (env: RATLS_WHITELIST_CONFIG)\n\n");
+    
+    printf("PATH OPTIONS:\n");
+    printf("  --cert-path=PATH          Path for RA-TLS certificate\n");
+    printf("                            (env: RATLS_CERT_PATH, default: %s)\n", DEFAULT_CERT_PATH);
+    printf("\n");
+    printf("  NOTE: The following paths can ONLY be set via manifest environment variables\n");
+    printf("        (not command-line) to prevent data leakage:\n");
+    printf("        - RATLS_KEY_PATH: RA-TLS private key path (default: %s)\n", DEFAULT_KEY_PATH);
+    printf("        - MYSQL_DATA_DIR: MySQL data directory (default: %s)\n\n", DEFAULT_DATA_DIR);
+    
+    printf("RA-TLS CONFIGURATION OPTIONS:\n");
+    printf("  --ra-tls-cert-algorithm=ALG\n");
+    printf("                            Certificate algorithm (e.g., secp256r1, secp256k1)\n");
+    printf("                            (env: RA_TLS_CERT_ALGORITHM)\n");
+    printf("  --ratls-enable-verify=0|1\n");
+    printf("                            Enable RA-TLS verification (default: 1)\n");
+    printf("                            (env: RATLS_ENABLE_VERIFY)\n");
+    printf("  --ratls-require-peer-cert=0|1\n");
+    printf("                            Require peer certificate for mutual TLS (default: 1)\n");
+    printf("                            (env: RATLS_REQUIRE_PEER_CERT)\n");
+    printf("  --ra-tls-allow-outdated-tcb=0|1\n");
+    printf("                            Allow outdated TCB (INSECURE, default: from manifest)\n");
+    printf("                            (env: RA_TLS_ALLOW_OUTDATED_TCB_INSECURE)\n");
+    printf("  --ra-tls-allow-hw-config-needed=0|1\n");
+    printf("                            Allow HW configuration needed status (default: from manifest)\n");
+    printf("                            (env: RA_TLS_ALLOW_HW_CONFIG_NEEDED)\n");
+    printf("  --ra-tls-allow-sw-hardening-needed=0|1\n");
+    printf("                            Allow SW hardening needed status (default: from manifest)\n");
+    printf("                            (env: RA_TLS_ALLOW_SW_HARDENING_NEEDED)\n\n");
+    
+    printf("GROUP REPLICATION OPTIONS:\n");
+    printf("  --gr-group-name=UUID      Group Replication group name (UUID format)\n");
+    printf("                            Required to enable Group Replication\n");
+    printf("  --gr-seeds=SEEDS          Comma-separated list of additional seed nodes\n");
+    printf("                            Format: host1:port1,host2:port2 or host1,host2\n");
+    printf("                            (port defaults to %d if not specified)\n", GR_DEFAULT_PORT);
+    printf("                            Note: Local LAN IP and public IP are automatically added\n");
+    printf("  --gr-local-address=ADDR   Override local address for GR communication\n");
+    printf("                            Format: host:port (default: auto-detect LAN IP:%d)\n", GR_DEFAULT_PORT);
+    printf("  --gr-bootstrap            Bootstrap a new replication group (first node only)\n");
+    printf("                            Without this flag, node will try to join existing group\n\n");
+    
+    printf("TESTING OPTIONS:\n");
+    printf("  --dry-run                 Run all logic but skip execve() to mysqld\n");
+    printf("                            Useful for testing configuration generation\n");
+    printf("  --test-lan-ip=IP          Override LAN IP detection (for testing)\n");
+    printf("  --test-public-ip=IP       Override public IP detection (for testing)\n");
+    printf("  --test-output-dir=DIR     Override output directory for config files (for testing)\n\n");
+    
+    printf("MYSQL OPTIONS:\n");
+    printf("  Any unrecognized options are passed through to mysqld.\n\n");
+    
+    printf("EXAMPLES:\n");
+    printf("  # Start standalone MySQL with RA-TLS:\n");
+    printf("  %s\n\n", prog_name);
+    printf("  # Bootstrap a new Group Replication cluster:\n");
+    printf("  %s --gr-group-name=aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee --gr-bootstrap\n\n", prog_name);
+    printf("  # Join an existing Group Replication cluster:\n");
+    printf("  %s --gr-group-name=aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee \\\n", prog_name);
+    printf("      --gr-seeds=192.168.1.100:33061,10.0.0.5:33061\n\n");
+    printf("  # Override certificate path:\n");
+    printf("  %s --cert-path=/custom/path/cert.pem --key-path=/app/wallet/key.pem\n\n", prog_name);
+    
+    printf("ENVIRONMENT VARIABLES:\n");
+    printf("  All options can also be set via environment variables as noted above.\n");
+    printf("  Command-line arguments take priority over environment variables.\n");
+}
+
+/* Validate and normalize configuration - handle mutual exclusions and dependencies */
+static int validate_config(struct launcher_config *config) {
+    int has_errors = 0;
+    
+    printf("\n[Launcher] Validating configuration...\n");
+    
+    /* === Whitelist / Contract / RPC precedence === */
+    /* Rule: If --rpc-url is specified, ignore --whitelist-config (will use contract whitelist) */
+    if (config->rpc_url && strlen(config->rpc_url) > 0) {
+        if (config->whitelist_config && strlen(config->whitelist_config) > 0) {
+            printf("[Launcher] Warning: --rpc-url specified, ignoring --whitelist-config (will use contract whitelist if available)\n");
+            config->whitelist_config = NULL;  /* Clear whitelist config */
+        }
+        
+        /* If rpc-url is set but contract-address is missing, warn */
+        if (!config->contract_address || strlen(config->contract_address) == 0) {
+            printf("[Launcher] Warning: --rpc-url specified but --contract-address is missing\n");
+            printf("[Launcher]          Cannot read whitelist from contract without contract address\n");
+        }
+    }
+    
+    /* If contract-address is set but rpc-url is missing, warn and fall back to whitelist-config */
+    if (config->contract_address && strlen(config->contract_address) > 0) {
+        if (!config->rpc_url || strlen(config->rpc_url) == 0) {
+            printf("[Launcher] Warning: --contract-address specified but --rpc-url is missing\n");
+            printf("[Launcher]          Falling back to --whitelist-config or environment whitelist\n");
+        }
+    }
+    
+    /* === Group Replication dependencies === */
+    int gr_enabled = (config->gr_group_name && strlen(config->gr_group_name) > 0);
+    
+    /* GR-specific options only valid when GR is enabled */
+    if (!gr_enabled) {
+        if (config->gr_bootstrap) {
+            fprintf(stderr, "[Launcher] ERROR: --gr-bootstrap specified but --gr-group-name is missing\n");
+            fprintf(stderr, "[Launcher]        Group Replication requires a group name\n");
+            has_errors = 1;
+        }
+        if (config->gr_seeds && strlen(config->gr_seeds) > 0) {
+            printf("[Launcher] Warning: --gr-seeds specified but --gr-group-name is missing (ignored)\n");
+        }
+        if (config->gr_local_address && strlen(config->gr_local_address) > 0) {
+            printf("[Launcher] Warning: --gr-local-address specified but --gr-group-name is missing (ignored)\n");
+        }
+    }
+    
+    /* === Certificate and key path validation === */
+    if (config->cert_path && strlen(config->cert_path) > 0) {
+        if (!config->key_path || strlen(config->key_path) == 0) {
+            printf("[Launcher] Warning: --cert-path specified but --key-path is missing, using default key path\n");
+        }
+    }
+    if (config->key_path && strlen(config->key_path) > 0) {
+        if (!config->cert_path || strlen(config->cert_path) == 0) {
+            printf("[Launcher] Warning: --key-path specified but --cert-path is missing, using default cert path\n");
+        }
+        /* Warn if key path is not in encrypted partition */
+        if (strstr(config->key_path, "/app/wallet") == NULL) {
+            printf("[Launcher] Warning: --key-path '%s' is not in encrypted partition (/app/wallet/)\n", config->key_path);
+            printf("[Launcher]          Private key may not be protected by SGX encryption\n");
+        }
+    }
+    
+    /* === Data directory validation === */
+    if (config->data_dir && strlen(config->data_dir) > 0) {
+        if (strstr(config->data_dir, "/app/wallet") == NULL) {
+            printf("[Launcher] Warning: --data-dir '%s' is not in encrypted partition (/app/wallet/)\n", config->data_dir);
+            printf("[Launcher]          MySQL data may not be protected by SGX encryption\n");
+        }
+    }
+    
+    printf("[Launcher] Configuration validation %s\n", has_errors ? "FAILED" : "passed");
+    
+    return has_errors ? -1 : 0;
 }
 
 /* Hex character to integer */
@@ -632,36 +1353,57 @@ static const char *find_ratls_library(void) {
 int main(int argc, char *argv[]) {
     printf("==========================================\n");
     printf("MySQL RA-TLS Launcher (SGX Enclave)\n");
+    printf("With Group Replication Support\n");
     printf("==========================================\n\n");
     
     /* Initialize curl globally */
     curl_global_init(CURL_GLOBAL_DEFAULT);
     
-    /* Get environment variables */
-    const char *contract_address = getenv("CONTRACT_ADDRESS");
-    const char *rpc_url = getenv("RPC_URL");
-    const char *existing_whitelist = getenv("RATLS_WHITELIST_CONFIG");
+    /* Parse command line arguments - args take priority over environment variables */
+    struct launcher_config config;
+    parse_args(argc, argv, &config);
     
-    /* Suppress unused variable warning */
-    (void)existing_whitelist;
+    /* Validate configuration - handle mutual exclusions and dependencies */
+    if (validate_config(&config) != 0) {
+        fprintf(stderr, "[Launcher] Configuration validation failed, exiting\n");
+        curl_global_cleanup();
+        return 1;
+    }
     
-    /* Set RA-TLS configuration */
+    /* Set RA-TLS configuration from parsed config (args override env vars) */
     printf("[Launcher] Setting up RA-TLS configuration...\n");
     
-    /* Use secp256k1 curve for Ethereum compatibility */
-    //set_env("RA_TLS_CERT_ALGORITHM", "secp256k1", 1);
+    /* Apply RA-TLS settings from config (command-line args take priority) */
+    if (config.ra_tls_cert_algorithm && strlen(config.ra_tls_cert_algorithm) > 0) {
+        set_env("RA_TLS_CERT_ALGORITHM", config.ra_tls_cert_algorithm, 1);
+    }
+    if (config.ratls_enable_verify && strlen(config.ratls_enable_verify) > 0) {
+        set_env("RATLS_ENABLE_VERIFY", config.ratls_enable_verify, 1);
+    } else {
+        set_env("RATLS_ENABLE_VERIFY", "1", 1);  /* Default: enable verification */
+    }
+    if (config.ratls_require_peer_cert && strlen(config.ratls_require_peer_cert) > 0) {
+        set_env("RATLS_REQUIRE_PEER_CERT", config.ratls_require_peer_cert, 1);
+    } else {
+        set_env("RATLS_REQUIRE_PEER_CERT", "1", 1);  /* Default: require peer cert */
+    }
+    if (config.ra_tls_allow_outdated_tcb && strlen(config.ra_tls_allow_outdated_tcb) > 0) {
+        set_env("RA_TLS_ALLOW_OUTDATED_TCB_INSECURE", config.ra_tls_allow_outdated_tcb, 1);
+    }
+    if (config.ra_tls_allow_hw_config_needed && strlen(config.ra_tls_allow_hw_config_needed) > 0) {
+        set_env("RA_TLS_ALLOW_HW_CONFIG_NEEDED", config.ra_tls_allow_hw_config_needed, 1);
+    }
+    if (config.ra_tls_allow_sw_hardening_needed && strlen(config.ra_tls_allow_sw_hardening_needed) > 0) {
+        set_env("RA_TLS_ALLOW_SW_HARDENING_NEEDED", config.ra_tls_allow_sw_hardening_needed, 1);
+    }
     
-    /* Enable RA-TLS verification and require peer certificate */
-    set_env("RATLS_ENABLE_VERIFY", "1", 1);
-    set_env("RATLS_REQUIRE_PEER_CERT", "1", 1);
+    /* Set certificate and key paths */
+    set_env("RATLS_CERT_PATH", config.cert_path, 1);
+    set_env("RATLS_KEY_PATH", config.key_path, 1);
     
-    /* Set default certificate and key paths */
-    set_env_default("RATLS_CERT_PATH", DEFAULT_CERT_PATH);
-    set_env_default("RATLS_KEY_PATH", DEFAULT_KEY_PATH);
-    
-    /* Get the actual paths being used */
-    const char *cert_path = getenv("RATLS_CERT_PATH");
-    const char *key_path = getenv("RATLS_KEY_PATH");
+    /* Use paths from config */
+    const char *cert_path = config.cert_path;
+    const char *key_path = config.key_path;
     
     /* Create directories for certificate and key */
     char cert_dir[MAX_PATH_LEN];
@@ -682,8 +1424,7 @@ int main(int argc, char *argv[]) {
     }
     
     /* Create data directory inside the enclave (encrypted partition) */
-    const char *data_dir_env = getenv("MYSQL_DATA_DIR");
-    const char *data_dir_to_create = data_dir_env ? data_dir_env : DEFAULT_DATA_DIR;
+    const char *data_dir_to_create = config.data_dir;
     printf("[Launcher] Creating data directory: %s\n", data_dir_to_create);
     if (mkdir_p(data_dir_to_create) != 0) {
         fprintf(stderr, "[Launcher] Warning: Failed to create data directory: %s\n", strerror(errno));
@@ -717,15 +1458,15 @@ int main(int argc, char *argv[]) {
     /* Handle whitelist configuration */
     printf("\n[Launcher] Whitelist Configuration:\n");
     
-    if (contract_address && strlen(contract_address) > 0) {
-        printf("[Launcher] Contract address specified: %s\n", contract_address);
+    if (config.contract_address && strlen(config.contract_address) > 0) {
+        printf("[Launcher] Contract address specified: %s\n", config.contract_address);
         
-        if (!rpc_url || strlen(rpc_url) == 0) {
+        if (!config.rpc_url || strlen(config.rpc_url) == 0) {
             fprintf(stderr, "[Launcher] Warning: RPC_URL not set, cannot read from contract\n");
             printf("[Launcher] Falling back to environment-based whitelist (if set)\n");
         } else {
             /* Try to read whitelist from contract */
-            char *whitelist = read_whitelist_from_contract(contract_address, rpc_url);
+            char *whitelist = read_whitelist_from_contract(config.contract_address, config.rpc_url);
             
             if (whitelist) {
                 set_env("RATLS_WHITELIST_CONFIG", whitelist, 1);
@@ -758,24 +1499,105 @@ int main(int argc, char *argv[]) {
     printf("Starting MySQL Server via execve()\n");
     printf("==========================================\n\n");
     
-    const char *data_dir = getenv("MYSQL_DATA_DIR");
-    if (!data_dir) data_dir = DEFAULT_DATA_DIR;
+    const char *data_dir = config.data_dir;
     
     /* Check if this is first boot (need to initialize users) */
     int first_boot = !is_mysql_initialized(data_dir);
     char init_sql_path[MAX_PATH_LEN] = {0};
     char init_file_arg[MAX_PATH_LEN] = {0};
     
+    /* Group Replication variables */
+    int gr_enabled = (config.gr_group_name && strlen(config.gr_group_name) > 0);
+    char gr_config_path[MAX_PATH_LEN] = {0};
+    char defaults_extra_file_arg[MAX_PATH_LEN] = {0};
+    char lan_ip[MAX_IP_LEN] = {0};
+    char public_ip[MAX_IP_LEN] = {0};
+    char seeds_list[MAX_SEEDS_LEN] = {0};
+    uint32_t server_id = 0;
+    
+    /* Handle Group Replication setup if enabled */
+    if (gr_enabled) {
+        printf("\n[Launcher] Group Replication Configuration:\n");
+        printf("[Launcher] Group name: %s\n", config.gr_group_name);
+        printf("[Launcher] Bootstrap mode: %s\n", config.gr_bootstrap ? "YES" : "NO");
+        
+        /* Get LAN IP - use test override if provided */
+        if (config.test_lan_ip && strlen(config.test_lan_ip) > 0) {
+            strncpy(lan_ip, config.test_lan_ip, sizeof(lan_ip) - 1);
+            printf("[Launcher] Using test LAN IP: %s\n", lan_ip);
+        } else if (get_lan_ip(lan_ip, sizeof(lan_ip)) != 0) {
+            fprintf(stderr, "[Launcher] Warning: Could not detect LAN IP\n");
+        } else {
+            printf("[Launcher] Detected LAN IP: %s\n", lan_ip);
+        }
+        
+        /* Get public IP - use test override if provided */
+        if (config.test_public_ip && strlen(config.test_public_ip) > 0) {
+            strncpy(public_ip, config.test_public_ip, sizeof(public_ip) - 1);
+            printf("[Launcher] Using test public IP: %s\n", public_ip);
+        } else if (get_public_ip(public_ip, sizeof(public_ip)) != 0) {
+            fprintf(stderr, "[Launcher] Warning: Could not detect public IP\n");
+        } else {
+            printf("[Launcher] Detected public IP: %s\n", public_ip);
+        }
+        
+        /* Get or create stable server ID */
+        server_id = get_or_create_server_id(lan_ip, public_ip);
+        printf("[Launcher] Server ID: %u\n", server_id);
+        
+        /* Build seeds list (self IPs + extra seeds, deduplicated) */
+        build_seeds_list(seeds_list, sizeof(seeds_list), lan_ip, public_ip, config.gr_seeds, GR_DEFAULT_PORT);
+        printf("[Launcher] Seeds list: %s\n", seeds_list);
+        
+        /* Determine local address for GR */
+        char gr_local_address[MAX_IP_LEN + 16] = {0};
+        if (config.gr_local_address && strlen(config.gr_local_address) > 0) {
+            strncpy(gr_local_address, config.gr_local_address, sizeof(gr_local_address) - 1);
+        } else if (strlen(lan_ip) > 0) {
+            snprintf(gr_local_address, sizeof(gr_local_address), "%s:%d", lan_ip, GR_DEFAULT_PORT);
+        } else {
+            fprintf(stderr, "[Launcher] ERROR: Cannot determine local address for Group Replication\n");
+            return 1;
+        }
+        printf("[Launcher] GR local address: %s\n", gr_local_address);
+        
+        /* Create GR config file */
+        strncpy(gr_config_path, GR_CONFIG_FILE, sizeof(gr_config_path) - 1);
+        if (create_gr_config(GR_CONFIG_FILE, server_id,
+                            config.gr_group_name, gr_local_address, seeds_list,
+                            config.gr_bootstrap, cert_path, key_path) != 0) {
+            fprintf(stderr, "[Launcher] ERROR: Failed to create GR config file\n");
+            return 1;
+        }
+        
+        /* Prepare --defaults-extra-file argument */
+        snprintf(defaults_extra_file_arg, sizeof(defaults_extra_file_arg),
+                 "--defaults-extra-file=%s", GR_CONFIG_FILE);
+    }
+    
     if (first_boot) {
         printf("[Launcher] First boot detected - will create X.509 users\n");
         
         /* Create the init SQL file in the encrypted data directory */
-        if (create_init_sql(data_dir, init_sql_path, sizeof(init_sql_path)) == 0) {
-            snprintf(init_file_arg, sizeof(init_file_arg), "--init-file=%s", init_sql_path);
-            printf("[Launcher] Will execute init SQL on startup: %s\n", init_sql_path);
+        if (gr_enabled) {
+            /* GR mode: create init SQL with GR setup */
+            if (create_gr_init_sql(data_dir, init_sql_path, sizeof(init_sql_path),
+                                   config.gr_bootstrap, cert_path, key_path) == 0) {
+                snprintf(init_file_arg, sizeof(init_file_arg), "--init-file=%s", init_sql_path);
+                printf("[Launcher] Will execute GR init SQL on startup: %s\n", init_sql_path);
+            } else {
+                fprintf(stderr, "[Launcher] Warning: Could not create GR init SQL file\n");
+                first_boot = 0;
+            }
         } else {
-            fprintf(stderr, "[Launcher] Warning: Could not create init SQL file\n");
-            first_boot = 0;  /* Don't add --init-file if we couldn't create the file */
+            /* Non-GR mode: create standard init SQL */
+            if (create_init_sql(data_dir, init_sql_path, sizeof(init_sql_path)) == 0) {
+                snprintf(init_file_arg, sizeof(init_file_arg), "--init-file=%s", init_sql_path);
+                printf("[Launcher] Will execute init SQL on startup: %s\n", init_sql_path);
+            } else {
+                fprintf(stderr, "[Launcher] Warning: Could not create init SQL file\n");
+                first_boot = 0;  /* Don't add --init-file if we couldn't create the file */
+            }
         }
         
         /* Create sentinel file to mark as initialized */
@@ -787,13 +1609,19 @@ int main(int argc, char *argv[]) {
     }
     
     /* Build argument list for mysqld */
-    /* We need: mysqld --datadir=... --ssl-cert=... --ssl-key=... --require-secure-transport=ON --log-error=... --console [--init-file=...] [user args] */
+    /* We need: mysqld [--defaults-extra-file=...] --datadir=... --ssl-cert=... --ssl-key=... --require-secure-transport=ON --log-error=... --console [--init-file=...] */
     /* Note: No --user=mysql since we run as root in container (user said it's not needed) */
     /* Note: --log-error is needed to override any config file setting that points to encrypted partition */
     /* Note: --console outputs logs to stderr for easier debugging in container environments */
+    /* Note: --defaults-extra-file MUST be the first argument after mysqld */
     
-    int extra_args = first_boot ? 8 : 7;  /* Add 1 for --init-file on first boot, +1 for --log-error, +1 for --console */
-    int new_argc = argc + extra_args;
+    /* Calculate number of arguments needed */
+    int base_args = 7;  /* mysqld, datadir, ssl-cert, ssl-key, require-secure-transport, log-error, console */
+    int extra_args = 0;
+    if (gr_enabled) extra_args++;  /* --defaults-extra-file */
+    if (first_boot && init_file_arg[0] != '\0') extra_args++;  /* --init-file */
+    
+    int new_argc = base_args + extra_args;
     char **new_argv = malloc((new_argc + 1) * sizeof(char *));
     if (!new_argv) {
         fprintf(stderr, "[Launcher] Failed to allocate memory for arguments\n");
@@ -811,6 +1639,12 @@ int main(int argc, char *argv[]) {
     
     int idx = 0;
     new_argv[idx++] = MYSQLD_PATH;
+    
+    /* --defaults-extra-file MUST be the first argument after mysqld */
+    if (gr_enabled && defaults_extra_file_arg[0] != '\0') {
+        new_argv[idx++] = defaults_extra_file_arg;
+    }
+    
     new_argv[idx++] = datadir_arg;
     new_argv[idx++] = ssl_cert_arg;
     new_argv[idx++] = ssl_key_arg;
@@ -823,10 +1657,6 @@ int main(int argc, char *argv[]) {
         new_argv[idx++] = init_file_arg;
     }
     
-    /* Copy any additional arguments from command line */
-    for (int i = 1; i < argc; i++) {
-        new_argv[idx++] = argv[i];
-    }
     new_argv[idx] = NULL;
     
     /* Set LD_PRELOAD for mysqld to load the RA-TLS library */
@@ -850,10 +1680,33 @@ int main(int argc, char *argv[]) {
     if (ratls_lib) {
         printf("[Launcher]   LD_PRELOAD: %s\n", ratls_lib);
     }
+    if (gr_enabled) {
+        printf("[Launcher]   GR config: %s\n", gr_config_path);
+        printf("[Launcher]   GR mode: %s\n", config.gr_bootstrap ? "BOOTSTRAP" : "JOIN");
+    }
     if (first_boot && init_file_arg[0] != '\0') {
         printf("[Launcher]   Init file: %s\n", init_sql_path);
     }
     printf("\n");
+    
+    /* Print full command line that would be executed */
+    printf("[Launcher] Full command line:\n");
+    printf("  ");
+    for (int i = 0; new_argv[i] != NULL; i++) {
+        printf("%s ", new_argv[i]);
+    }
+    printf("\n\n");
+    
+    /* In dry-run mode, skip execve() and exit successfully */
+    if (config.dry_run) {
+        printf("==========================================\n");
+        printf("DRY RUN MODE - Skipping execve()\n");
+        printf("==========================================\n");
+        printf("[Launcher] All configuration generated successfully.\n");
+        printf("[Launcher] In normal mode, mysqld would be started with the above command.\n");
+        free(new_argv);
+        return 0;
+    }
     
     /* Use execv to replace this process with mysqld */
     /* execv preserves the environment variables we set (including LD_PRELOAD) */

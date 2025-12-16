@@ -176,8 +176,8 @@ RUN rm -rf /opt/mysql-ratls/launcher/*.c \
 # - RATLS_KEY_PATH=/app/wallet/mysql-keys/server-key.pem
 # - MYSQL_DATA_DIR=/app/wallet/mysql-data
 
-# Expose MySQL port
-EXPOSE 3306
+# Expose MySQL port and Group Replication XCom port
+EXPOSE 3306 33061
 
 # Health check
 HEALTHCHECK --interval=30s --timeout=10s --start-period=60s --retries=3 \
