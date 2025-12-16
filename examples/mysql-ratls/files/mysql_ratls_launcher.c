@@ -874,10 +874,8 @@ static void parse_args(int argc, char *argv[], struct launcher_config *config) {
             config->whitelist_config = argv[i] + 19;
         } else if (strncmp(argv[i], "--cert-path=", 12) == 0) {
             config->cert_path = argv[i] + 12;
-        } else if (strncmp(argv[i], "--key-path=", 11) == 0) {
-            config->key_path = argv[i] + 11;
-        } else if (strncmp(argv[i], "--data-dir=", 11) == 0) {
-            config->data_dir = argv[i] + 11;
+        /* NOTE: --key-path and --data-dir are NOT allowed via command-line to prevent data leakage */
+        /* They can only be set via environment variables in the manifest */
         } else if (strncmp(argv[i], "--ra-tls-cert-algorithm=", 24) == 0) {
             config->ra_tls_cert_algorithm = argv[i] + 24;
         } else if (strncmp(argv[i], "--ratls-enable-verify=", 22) == 0) {
@@ -947,10 +945,11 @@ static void print_usage(const char *prog_name) {
     printf("PATH OPTIONS:\n");
     printf("  --cert-path=PATH          Path for RA-TLS certificate\n");
     printf("                            (env: RATLS_CERT_PATH, default: %s)\n", DEFAULT_CERT_PATH);
-    printf("  --key-path=PATH           Path for RA-TLS private key (should be in encrypted partition)\n");
-    printf("                            (env: RATLS_KEY_PATH, default: %s)\n", DEFAULT_KEY_PATH);
-    printf("  --data-dir=PATH           MySQL data directory (should be in encrypted partition)\n");
-    printf("                            (env: MYSQL_DATA_DIR, default: %s)\n\n", DEFAULT_DATA_DIR);
+    printf("\n");
+    printf("  NOTE: The following paths can ONLY be set via manifest environment variables\n");
+    printf("        (not command-line) to prevent data leakage:\n");
+    printf("        - RATLS_KEY_PATH: RA-TLS private key path (default: %s)\n", DEFAULT_KEY_PATH);
+    printf("        - MYSQL_DATA_DIR: MySQL data directory (default: %s)\n\n", DEFAULT_DATA_DIR);
     
     printf("RA-TLS CONFIGURATION OPTIONS:\n");
     printf("  --ra-tls-cert-algorithm=ALG\n");
