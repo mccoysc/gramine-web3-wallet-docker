@@ -334,7 +334,7 @@ START GROUP_REPLICATION;
 - **端口 33061**：用于 Group Replication XCom 通信。必须在节点之间暴露和可访问。
 - **UUID 格式**：`--gr-group-name` 必须是有效的 UUID（例如 `aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee`）。
 - **种子去重**：所有种子（自身 IP + 额外种子）按 ip:port 对去重。
-- **证书认证**：复制使用与客户端连接相同的 RA-TLS 证书（需要 X509）。
+- **双向 TLS 认证**：复制使用与客户端连接相同的 RA-TLS 证书（需要 X509）。启用服务器证书验证以实现节点间双向认证。
 - **多主模式**：所有节点都可以接受写入（互为主从模式）。
 - **明文 Group Name**：`/var/lib/mysql/gr_group_name.txt` 包含 group name 供运维查看。
 
