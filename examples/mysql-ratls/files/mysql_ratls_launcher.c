@@ -43,6 +43,7 @@
 #define GR_DEFAULT_PORT 33061
 #define GR_SERVER_ID_FILE "/app/wallet/.mysql_server_id"
 #define GR_GROUP_NAME_FILE "/app/wallet/.mysql_gr_group_name"
+#define GR_GROUP_NAME_PLAINTEXT_FILE "/var/lib/mysql/gr_group_name.txt"  /* Plaintext copy for ops */
 #define PUBLIC_IP_URL "https://ifconfig.me/ip"
 #define MAX_SEEDS_LEN 4096
 #define MAX_IP_LEN 64
@@ -582,6 +583,21 @@ static void generate_uuid(char *uuid_buf, size_t buf_size) {
         random_bytes[14], random_bytes[15]);
 }
 
+/* Write group name to plaintext file for ops visibility */
+static void write_plaintext_group_name(const char *group_name) {
+    FILE *f = fopen(GR_GROUP_NAME_PLAINTEXT_FILE, "w");
+    if (f) {
+        fprintf(f, "%s\n", group_name);
+        fclose(f);
+        printf("[Launcher] Written plaintext group name to %s (for ops)\n", GR_GROUP_NAME_PLAINTEXT_FILE);
+    } else {
+        fprintf(stderr, "[Launcher] Warning: Could not write plaintext group name to %s: %s\n", 
+                GR_GROUP_NAME_PLAINTEXT_FILE, strerror(errno));
+    }
+    fflush(stdout);
+    fflush(stderr);
+}
+
 /* Get or create Group Replication group name
  * Priority: 1. CLI argument (already in config)
  *           2. Environment variable MYSQL_GR_GROUP_NAME
@@ -598,6 +614,8 @@ static const char *get_or_create_gr_group_name(const char *cli_group_name, int i
         strncpy(group_name_buf, cli_group_name, UUID_LEN);
         group_name_buf[UUID_LEN] = '\0';
         printf("[Launcher] Using group name from command line: %s\n", group_name_buf);
+        fflush(stdout);
+        write_plaintext_group_name(group_name_buf);
         return group_name_buf;
     }
     
@@ -607,6 +625,7 @@ static const char *get_or_create_gr_group_name(const char *cli_group_name, int i
         strncpy(group_name_buf, env_group_name, UUID_LEN);
         group_name_buf[UUID_LEN] = '\0';
         printf("[Launcher] Using group name from environment variable: %s\n", group_name_buf);
+        fflush(stdout);
         
         /* Also persist it for future use */
         FILE *f = fopen(GR_GROUP_NAME_FILE, "w");
@@ -615,6 +634,7 @@ static const char *get_or_create_gr_group_name(const char *cli_group_name, int i
             fclose(f);
             printf("[Launcher] Persisted group name to %s\n", GR_GROUP_NAME_FILE);
         }
+        write_plaintext_group_name(group_name_buf);
         return group_name_buf;
     }
     
@@ -630,6 +650,8 @@ static const char *get_or_create_gr_group_name(const char *cli_group_name, int i
             if (strlen(group_name_buf) > 0) {
                 fclose(f);
                 printf("[Launcher] Using group name from persisted file: %s\n", group_name_buf);
+                fflush(stdout);
+                write_plaintext_group_name(group_name_buf);
                 return group_name_buf;
             }
         }
@@ -639,6 +661,7 @@ static const char *get_or_create_gr_group_name(const char *cli_group_name, int i
     /* Priority 4: Auto-generate new UUID (GR is enabled by default) */
     generate_uuid(group_name_buf, sizeof(group_name_buf));
     printf("[Launcher] Auto-generated new group name: %s\n", group_name_buf);
+    fflush(stdout);
     
     /* Persist the generated UUID for future use */
     f = fopen(GR_GROUP_NAME_FILE, "w");
@@ -649,6 +672,7 @@ static const char *get_or_create_gr_group_name(const char *cli_group_name, int i
     } else {
         fprintf(stderr, "[Launcher] Warning: Could not persist group name to %s\n", GR_GROUP_NAME_FILE);
     }
+    write_plaintext_group_name(group_name_buf);
     return group_name_buf;
 }
 
@@ -838,6 +862,7 @@ static int create_gr_config(const char *config_path, unsigned int server_id,
     printf("[Launcher] ========== GR Config Content ==========\n");
     printf("%s", config_content);
     printf("[Launcher] ======================================\n");
+    fflush(stdout);
     
     return 0;
 }
@@ -1593,6 +1618,25 @@ int main(int argc, char *argv[]) {
     printf("[Launcher] Creating logs directory: /var/log/mysql\n");
     if (mkdir_p("/var/log/mysql") != 0) {
         fprintf(stderr, "[Launcher] Warning: Failed to create logs directory: %s\n", strerror(errno));
+    }
+    
+    /* Create GR config directory for mysql-gr.cnf and gr_group_name.txt */
+    /* This directory is NOT encrypted - GR config doesn't contain secrets (auth is via RA-TLS) */
+    printf("[Launcher] Creating GR config directory: /var/lib/mysql\n");
+    if (mkdir_p("/var/lib/mysql") != 0) {
+        fprintf(stderr, "[Launcher] Warning: Failed to create GR config directory: %s\n", strerror(errno));
+    }
+    
+    /* Create MySQL runtime directory for socket and pid file */
+    printf("[Launcher] Creating MySQL runtime directory: /var/run/mysqld\n");
+    if (mkdir_p("/var/run/mysqld") != 0) {
+        fprintf(stderr, "[Launcher] Warning: Failed to create MySQL runtime directory: %s\n", strerror(errno));
+    }
+    
+    /* Create MySQL secure file operations directory (for LOAD DATA INFILE, etc.) */
+    printf("[Launcher] Creating MySQL secure files directory: /var/lib/mysql-files\n");
+    if (mkdir_p("/var/lib/mysql-files") != 0) {
+        fprintf(stderr, "[Launcher] Warning: Failed to create MySQL secure files directory: %s\n", strerror(errno));
     }
     
     /* Check if MySQL data directory needs initialization */
