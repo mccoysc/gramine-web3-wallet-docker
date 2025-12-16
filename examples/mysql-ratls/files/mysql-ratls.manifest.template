@@ -23,7 +23,7 @@ loader.env.HOME = "/app/wallet/mysql-data"
 # Do NOT set loader.env.LD_PRELOAD here - the launcher handles it dynamically.
 
 # RA-TLS Configuration
-# Use secp256k1 curve for Ethereum compatibility
+# Use secp256r1 curve (widely supported by infrastructure like Node.js, MySQL, etc.)
 loader.env.RA_TLS_CERT_ALGORITHM = "secp256r1"
 
 # Enable RA-TLS verification and require peer certificate for mutual TLS
