@@ -780,7 +780,8 @@ static int build_seeds_list(char *seeds_buf, size_t buf_size,
 static int create_gr_config(const char *config_path, unsigned int server_id,
                             const char *group_name, const char *local_address,
                             const char *seeds, int is_bootstrap,
-                            const char *cert_path, const char *key_path) {
+                            const char *cert_path, const char *key_path,
+                            int gr_debug) {
     FILE *f = fopen(config_path, "w");
     if (!f) {
         fprintf(stderr, "[Launcher] Failed to create GR config file %s: %s\n", config_path, strerror(errno));
@@ -854,6 +855,26 @@ static int create_gr_config(const char *config_path, unsigned int server_id,
     offset += snprintf(config_content + offset, sizeof(config_content) - offset,
         "\n# IP Allowlist\n"
         "loose-group_replication_ip_allowlist=AUTOMATIC\n");
+    
+    /* Verbose logging for GR debugging and troubleshooting (only when --gr-debug is enabled) */
+    if (gr_debug) {
+        offset += snprintf(config_content + offset, sizeof(config_content) - offset,
+            "\n# GR Verbose Logging (enabled via --gr-debug)\n"
+            "# Set maximum verbosity to ensure NOTE-level GR debug messages are visible\n"
+            "log_error_verbosity=3\n"
+            "# Enable all XCom communication debug options\n"
+            "loose-group_replication_communication_debug_options=GCS_DEBUG_ALL\n"
+            "# Member expel timeout (seconds) - how long to wait before expelling unresponsive member\n"
+            "loose-group_replication_member_expel_timeout=5\n"
+            "# Autorejoin tries - number of times to try rejoining after being expelled\n"
+            "loose-group_replication_autorejoin_tries=3\n"
+            "# Exit state action - what to do when member is expelled (READ_ONLY keeps data accessible)\n"
+            "loose-group_replication_exit_state_action=READ_ONLY\n"
+            "# Unreachable majority timeout - how long to wait for majority before taking action\n"
+            "loose-group_replication_unreachable_majority_timeout=0\n");
+        printf("[Launcher] GR debug logging enabled (--gr-debug)\n");
+        printf("[Launcher] GR debug logs will be written to /var/log/mysql/error.log and console (stderr)\n");
+    }
     
     /* Suppress unused variable warning */
     (void)is_bootstrap;
@@ -997,6 +1018,7 @@ struct launcher_config {
     const char *gr_seeds;              /* --gr-seeds */
     const char *gr_local_address;      /* --gr-local-address */
     int gr_bootstrap;                  /* --gr-bootstrap */
+    int gr_debug;                      /* --gr-debug: enable verbose GR logging */
     
     /* Testing options */
     int dry_run;                       /* --dry-run: run all logic but skip execve() */
@@ -1032,6 +1054,7 @@ static void parse_args(int argc, char *argv[], struct launcher_config *config) {
     config->gr_seeds = NULL;
     config->gr_local_address = NULL;
     config->gr_bootstrap = 0;
+    config->gr_debug = 0;
     
     /* Testing options default to NULL/0 */
     config->dry_run = 0;
@@ -1073,6 +1096,8 @@ static void parse_args(int argc, char *argv[], struct launcher_config *config) {
             config->gr_seeds = argv[i] + 11;
         } else if (strcmp(argv[i], "--gr-bootstrap") == 0) {
             config->gr_bootstrap = 1;
+        } else if (strcmp(argv[i], "--gr-debug") == 0) {
+            config->gr_debug = 1;
         } else if (strncmp(argv[i], "--gr-local-address=", 19) == 0) {
             config->gr_local_address = argv[i] + 19;
         } else if (strcmp(argv[i], "--dry-run") == 0) {
@@ -1165,7 +1190,9 @@ static void print_usage(const char *prog_name) {
     printf("  --gr-local-address=ADDR   Override local address for GR communication\n");
     printf("                            Format: host:port (default: auto-detect LAN IP:%d)\n", GR_DEFAULT_PORT);
     printf("  --gr-bootstrap            Bootstrap a new replication group (first node only)\n");
-    printf("                            Without this flag, node will try to join existing group\n\n");
+    printf("                            Without this flag, node will try to join existing group\n");
+    printf("  --gr-debug                Enable verbose GR logging for debugging and troubleshooting\n");
+    printf("                            Logs XCom communication details to MySQL error log\n\n");
     
     printf("TESTING OPTIONS:\n");
     printf("  --dry-run                 Run all logic but skip execve() to mysqld\n");
@@ -2143,7 +2170,8 @@ int main(int argc, char *argv[]) {
         strncpy(gr_config_path, GR_CONFIG_FILE, sizeof(gr_config_path) - 1);
         if (create_gr_config(GR_CONFIG_FILE, server_id,
                             gr_group_name, gr_local_address, seeds_list,
-                            config.gr_bootstrap, cert_path, key_path) != 0) {
+                            config.gr_bootstrap, cert_path, key_path,
+                            config.gr_debug) != 0) {
             fprintf(stderr, "[Launcher] ERROR: Failed to create GR config file\n");
             return 1;
         }
