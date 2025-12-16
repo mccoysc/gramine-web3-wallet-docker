@@ -329,7 +329,7 @@ START GROUP_REPLICATION;
 - **Port 33061**: Used for Group Replication XCom communication. Must be exposed and accessible between nodes.
 - **UUID Format**: The `--gr-group-name` must be a valid UUID (e.g., `aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee`).
 - **Seed Deduplication**: All seeds (self IPs + extra seeds) are deduplicated by ip:port pair.
-- **Mutual TLS Authentication**: Replication uses the same RA-TLS certificate as client connections (X509 required). Server certificate verification is enabled for mutual authentication between nodes.
+- **RA-TLS Security**: Replication uses the same RA-TLS certificate as client connections (X509 required). Security is provided by RA-TLS attestation (SGX quote verification), not PKI certificate chain validation. Each node has its own self-signed cert, so traditional `ssl_verify_server_cert` is OFF.
 - **Multi-Primary Mode**: All nodes can accept writes (mutual primary-replica mode).
 - **Plaintext Group Name**: `/var/lib/mysql/gr_group_name.txt` contains the group name for ops visibility.
 
