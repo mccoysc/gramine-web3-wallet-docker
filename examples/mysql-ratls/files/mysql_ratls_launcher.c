@@ -1620,6 +1620,13 @@ int main(int argc, char *argv[]) {
         fprintf(stderr, "[Launcher] Warning: Failed to create logs directory: %s\n", strerror(errno));
     }
     
+    /* Create GR config directory for mysql-gr.cnf and gr_group_name.txt */
+    /* This directory is NOT encrypted - GR config doesn't contain secrets (auth is via RA-TLS) */
+    printf("[Launcher] Creating GR config directory: /var/lib/mysql\n");
+    if (mkdir_p("/var/lib/mysql") != 0) {
+        fprintf(stderr, "[Launcher] Warning: Failed to create GR config directory: %s\n", strerror(errno));
+    }
+    
     /* Check if MySQL data directory needs initialization */
     /* Instead of running mysqld --initialize-insecure inside the enclave (which was failing),
      * we copy pre-initialized data from a template directory that was created during Docker build.

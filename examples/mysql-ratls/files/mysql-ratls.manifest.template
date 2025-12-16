@@ -101,6 +101,10 @@ fs.mounts = [
   # Note: This is a trade-off - logs are readable but may contain sensitive query data
   { path = "/var/log/mysql", uri = "file:/var/log/mysql" },
   
+  # GR config directory (for mysql-gr.cnf and gr_group_name.txt)
+  # Not encrypted - GR config doesn't contain secrets (auth is via RA-TLS)
+  { path = "/var/lib/mysql", uri = "file:/var/lib/mysql" },
+  
   # Encrypted storage for MySQL data, private keys, and sensitive files
   # MySQL data directory MUST be in encrypted partition to prevent data leakage
   { type = "encrypted", path = "/app/wallet", uri = "file:/app/wallet", key_name = "_sgx_mrenclave" },
@@ -163,4 +167,8 @@ sgx.allowed_files = [
   # MySQL logs directory (outside encrypted partition for debugging visibility)
   # Note: This is a trade-off - logs are readable but may contain sensitive query data
   "file:/var/log/mysql/",
+  
+  # GR config directory (for mysql-gr.cnf and gr_group_name.txt)
+  # Not encrypted - GR config doesn't contain secrets (auth is via RA-TLS)
+  "file:/var/lib/mysql/",
 ]
