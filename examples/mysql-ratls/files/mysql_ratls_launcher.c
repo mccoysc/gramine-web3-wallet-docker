@@ -739,7 +739,8 @@ static int create_gr_init_sql(const char *data_dir, char *init_sql_path, size_t 
     }
     
     /* Build SQL content in memory so we can both write and print it */
-    char sql_content[16384];
+    /* Buffer reduced since INSTALL PLUGIN logic moved to cnf file */
+    char sql_content[8192];
     int offset = 0;
     
     offset += snprintf(sql_content + offset, sizeof(sql_content) - offset,
@@ -759,18 +760,8 @@ static int create_gr_init_sql(const char *data_dir, char *init_sql_path, size_t 
     offset += snprintf(sql_content + offset, sizeof(sql_content) - offset,
         "FLUSH PRIVILEGES;\n\n");
     
-    /* Install Group Replication plugin (idempotent - check if already installed) */
-    /* INSTALL PLUGIN doesn't have IF NOT EXISTS, so we use a conditional approach */
-    offset += snprintf(sql_content + offset, sizeof(sql_content) - offset,
-        "-- Install Group Replication plugin (idempotent)\n"
-        "-- Check if plugin is already installed before attempting to install\n"
-        "SET @gr_plugin_installed = (SELECT COUNT(*) FROM information_schema.plugins WHERE plugin_name = 'group_replication');\n"
-        "SET @install_sql = IF(@gr_plugin_installed = 0, \n"
-        "    'INSTALL PLUGIN group_replication SONAME \"group_replication.so\"', \n"
-        "    'SELECT \"Group Replication plugin already installed\" AS status');\n"
-        "PREPARE install_stmt FROM @install_sql;\n"
-        "EXECUTE install_stmt;\n"
-        "DEALLOCATE PREPARE install_stmt;\n\n");
+    /* Note: Group Replication plugin is loaded via plugin_load_add in mysql-gr.cnf */
+    /* No need for INSTALL PLUGIN here - the plugin is already loaded at startup */
     
     /* Group Replication recovery channel setup */
     /* CHANGE REPLICATION SOURCE is idempotent - it just updates the configuration */
