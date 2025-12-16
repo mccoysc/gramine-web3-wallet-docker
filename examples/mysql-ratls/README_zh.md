@@ -276,6 +276,7 @@ docker run -d \
 | `--gr-bootstrap` | 引导新的复制组（仅第一个节点）。 |
 | `--gr-seeds=SEEDS` | 逗号分隔的种子节点列表（格式：`host1:port,host2:port`）。未指定端口时默认为 33061。 |
 | `--gr-local-address=ADDR` | 覆盖 GR 通信的本地地址（默认：自动检测局域网 IP:33061）。 |
+| `--gr-debug` | 启用详细的 GR 日志用于调试和故障排查。将 XCom 通信详情输出到 MySQL 错误日志和控制台。 |
 
 ### 验证 GR 配置
 

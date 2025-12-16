@@ -271,6 +271,7 @@ docker run -d \
 | `--gr-bootstrap` | Bootstrap a new replication group (first node only). |
 | `--gr-seeds=SEEDS` | Comma-separated list of seed nodes (format: `host1:port,host2:port`). Port defaults to 33061 if not specified. |
 | `--gr-local-address=ADDR` | Override local address for GR communication (default: auto-detect LAN IP:33061). |
+| `--gr-debug` | Enable verbose GR logging for debugging and troubleshooting. Logs XCom communication details to MySQL error log and console. |
 
 ### Verifying GR Configuration
 
