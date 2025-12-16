@@ -1,5 +1,7 @@
 # MySQL 8 with RA-TLS Support
 
+[中文版](README_zh.md)
+
 This example provides a MySQL 8 server image with transparent RA-TLS (Remote Attestation TLS) support for SGX-based mutual authentication.
 
 ## Self-Contained Dockerfile
@@ -16,6 +18,8 @@ This example uses a **self-contained Dockerfile** - no external files are needed
 - **Pre-compiled Manifest**: Gramine manifest is pre-compiled and signed during Docker build
 - **Encrypted Data Storage**: MySQL data and logs are stored in encrypted partition
 - **Group Replication Support**: Multi-node mutual primary-replica mode with automatic IP detection
+- **Default GR Mode**: Group Replication is enabled by default, no parameters required
+- **Auto-Generated Group Name**: UUID is auto-generated on first run and persisted for reuse
 
 ## How It Works
 
@@ -109,7 +113,7 @@ docker run -d \
 | `CONTRACT_ADDRESS` | No | Ethereum contract address to read whitelist from |
 | `RPC_URL` | No* | Ethereum RPC endpoint (*required if CONTRACT_ADDRESS is set) |
 | `RATLS_WHITELIST_CONFIG` | No | Manual whitelist (Base64-encoded CSV) |
-| `MYSQL_DATA_DIR` | No | MySQL data directory (default: `/var/lib/mysql`) |
+| `MYSQL_GR_GROUP_NAME` | No | Group Replication group name (UUID). Auto-generated if not set. |
 | `RATLS_CERT_PATH` | No | Path to RA-TLS certificate (default: `/var/lib/mysql-ssl/server-cert.pem`) |
 | `RATLS_KEY_PATH` | No | Path to RA-TLS private key, must be in encrypted partition (default: `/app/wallet/mysql-keys/server-key.pem`) |
 
@@ -183,6 +187,32 @@ If SGX devices are not available:
 
 This image supports MySQL 8 Group Replication for multi-node deployments with mutual primary-replica mode.
 
+### Default Behavior (GR Enabled by Default)
+
+**Group Replication is enabled by default** - no parameters required:
+
+```bash
+# First node - auto-generates and persists group name
+docker run -d --name mysql-gr-node1 \
+  --device=/dev/sgx_enclave --device=/dev/sgx_provision \
+  -e PCCS_API_KEY=your_intel_api_key \
+  -p 3306:3306 -p 33061:33061 \
+  mysql-ratls --gr-bootstrap
+```
+
+The group name is:
+- **Auto-generated** as a UUID v4 on first run
+- **Persisted** to `/app/wallet/.mysql_gr_group_name` (encrypted partition)
+- **Plaintext copy** written to `/var/lib/mysql/gr_group_name.txt` (for ops visibility)
+
+### Group Name Priority Chain
+
+The group name is resolved in this order:
+1. `--gr-group-name` command-line parameter (highest priority)
+2. `MYSQL_GR_GROUP_NAME` environment variable
+3. Persisted file `/app/wallet/.mysql_gr_group_name`
+4. Auto-generate new UUID (first run only)
+
 ### How Group Replication Works
 
 1. **Automatic IP Detection**: The launcher automatically detects:
@@ -208,22 +238,27 @@ docker run -d \
   -p 3306:3306 \
   -p 33061:33061 \
   mysql-ratls \
-  --gr-group-name=aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee \
   --gr-bootstrap
+```
+
+After starting, get the auto-generated group name:
+```bash
+docker exec mysql-gr-node1 cat /var/lib/mysql/gr_group_name.txt
 ```
 
 #### Join Additional Nodes
 
 ```bash
+# Use the group name from the first node
 docker run -d \
   --name mysql-gr-node2 \
   --device=/dev/sgx_enclave \
   --device=/dev/sgx_provision \
   -e PCCS_API_KEY=your_intel_api_key \
+  -e MYSQL_GR_GROUP_NAME=<uuid-from-node1> \
   -p 3307:3306 \
   -p 33062:33061 \
   mysql-ratls \
-  --gr-group-name=aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee \
   --gr-seeds=192.168.1.100:33061
 ```
 
@@ -231,10 +266,62 @@ docker run -d \
 
 | Parameter | Description |
 |-----------|-------------|
-| `--gr-group-name=UUID` | Group Replication group name (UUID format). Required to enable GR. |
+| `--gr-group-name=UUID` | Group Replication group name (UUID format). Auto-generated if not specified. |
 | `--gr-bootstrap` | Bootstrap a new replication group (first node only). |
 | `--gr-seeds=SEEDS` | Comma-separated list of seed nodes (format: `host1:port,host2:port`). Port defaults to 33061 if not specified. |
 | `--gr-local-address=ADDR` | Override local address for GR communication (default: auto-detect LAN IP:33061). |
+
+### Verifying GR Configuration
+
+After MySQL starts, verify the configuration:
+
+```sql
+-- Check if GR plugin is loaded
+SELECT plugin_name, plugin_status FROM information_schema.plugins 
+WHERE plugin_name = 'group_replication';
+
+-- View all GR variables
+SHOW VARIABLES LIKE 'group_replication%';
+
+-- Check key settings
+SHOW VARIABLES WHERE Variable_name IN (
+  'gtid_mode',
+  'enforce_gtid_consistency',
+  'log_bin',
+  'binlog_format',
+  'server_id'
+);
+
+-- Check GR member status
+SELECT * FROM performance_schema.replication_group_members;
+```
+
+### Runtime Configuration Changes
+
+Some GR settings can be modified at runtime (requires stopping GR first):
+
+```sql
+-- Stop GR
+STOP GROUP_REPLICATION;
+
+-- Modify seeds
+SET GLOBAL group_replication_group_seeds = '192.168.1.100:33061,192.168.1.101:33061';
+
+-- Modify local address
+SET GLOBAL group_replication_local_address = '192.168.1.100:33061';
+
+-- Modify group name (joins a different group!)
+SET GLOBAL group_replication_group_name = 'aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee';
+
+-- Restart GR
+START GROUP_REPLICATION;
+```
+
+**Settings that require MySQL restart:**
+- `gtid_mode`
+- `enforce_gtid_consistency`
+- `server_id`
+- `plugin_load_add`
 
 ### Group Replication Notes
 
@@ -243,6 +330,7 @@ docker run -d \
 - **Seed Deduplication**: All seeds (self IPs + extra seeds) are deduplicated by ip:port pair.
 - **Certificate Authentication**: Replication uses the same RA-TLS certificate as client connections (X509 required).
 - **Multi-Primary Mode**: All nodes can accept writes (mutual primary-replica mode).
+- **Plaintext Group Name**: `/var/lib/mysql/gr_group_name.txt` contains the group name for ops visibility.
 
 ## Command-Line Parameters
 
@@ -283,6 +371,19 @@ The launcher validates configuration and handles mutual exclusions:
 - If `--rpc-url` is specified, `--whitelist-config` is ignored (contract whitelist takes precedence)
 - Group Replication parameters (`--gr-bootstrap`, `--gr-seeds`, `--gr-local-address`) require `--gr-group-name`
 - Warnings are printed when configurations are ignored due to precedence
+
+## File Locations
+
+| Path | Description | Encrypted |
+|------|-------------|-----------|
+| `/app/wallet/mysql-data` | MySQL data directory | Yes |
+| `/app/wallet/mysql-keys/server-key.pem` | RA-TLS private key | Yes |
+| `/app/wallet/.mysql_gr_group_name` | Persisted GR group name | Yes |
+| `/app/wallet/.mysql_server_id` | Persisted server ID | Yes |
+| `/var/lib/mysql-ssl/server-cert.pem` | RA-TLS certificate | No |
+| `/var/lib/mysql/mysql-gr.cnf` | GR configuration file | No |
+| `/var/lib/mysql/gr_group_name.txt` | Plaintext group name (ops) | No |
+| `/var/log/mysql/error.log` | MySQL error log | No |
 
 ## License
 
