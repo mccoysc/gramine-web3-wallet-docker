@@ -15,6 +15,7 @@ This example uses a **self-contained Dockerfile** - no external files are needed
 - **Smart Contract Whitelist**: Optional whitelist configuration from Ethereum smart contract
 - **Pre-compiled Manifest**: Gramine manifest is pre-compiled and signed during Docker build
 - **Encrypted Data Storage**: MySQL data and logs are stored in encrypted partition
+- **Group Replication Support**: Multi-node mutual primary-replica mode with automatic IP detection
 
 ## How It Works
 
@@ -177,6 +178,111 @@ If SGX devices are not available:
 - Ensure the host has SGX enabled in BIOS
 - Run container with `--device=/dev/sgx_enclave --device=/dev/sgx_provision`
 - Check that SGX drivers are installed on the host
+
+## Group Replication
+
+This image supports MySQL 8 Group Replication for multi-node deployments with mutual primary-replica mode.
+
+### How Group Replication Works
+
+1. **Automatic IP Detection**: The launcher automatically detects:
+   - Local LAN IP address (via UDP socket trick)
+   - Public IP address (via https://ifconfig.me/ip)
+
+2. **Seed Node Configuration**: Seeds list is built from:
+   - Self IPs (LAN + public, deduplicated by ip:port pair)
+   - Additional seeds specified via `--gr-seeds` parameter
+
+3. **RA-TLS for Replication**: The `app` user is used for replication with X509 certificate authentication (same RA-TLS certificate as client connections).
+
+### Starting a Group Replication Cluster
+
+#### Bootstrap First Node
+
+```bash
+docker run -d \
+  --name mysql-gr-node1 \
+  --device=/dev/sgx_enclave \
+  --device=/dev/sgx_provision \
+  -e PCCS_API_KEY=your_intel_api_key \
+  -p 3306:3306 \
+  -p 33061:33061 \
+  mysql-ratls \
+  --gr-group-name=aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee \
+  --gr-bootstrap
+```
+
+#### Join Additional Nodes
+
+```bash
+docker run -d \
+  --name mysql-gr-node2 \
+  --device=/dev/sgx_enclave \
+  --device=/dev/sgx_provision \
+  -e PCCS_API_KEY=your_intel_api_key \
+  -p 3307:3306 \
+  -p 33062:33061 \
+  mysql-ratls \
+  --gr-group-name=aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee \
+  --gr-seeds=192.168.1.100:33061
+```
+
+### Group Replication Parameters
+
+| Parameter | Description |
+|-----------|-------------|
+| `--gr-group-name=UUID` | Group Replication group name (UUID format). Required to enable GR. |
+| `--gr-bootstrap` | Bootstrap a new replication group (first node only). |
+| `--gr-seeds=SEEDS` | Comma-separated list of seed nodes (format: `host1:port,host2:port`). Port defaults to 33061 if not specified. |
+| `--gr-local-address=ADDR` | Override local address for GR communication (default: auto-detect LAN IP:33061). |
+
+### Group Replication Notes
+
+- **Port 33061**: Used for Group Replication XCom communication. Must be exposed and accessible between nodes.
+- **UUID Format**: The `--gr-group-name` must be a valid UUID (e.g., `aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee`).
+- **Seed Deduplication**: All seeds (self IPs + extra seeds) are deduplicated by ip:port pair.
+- **Certificate Authentication**: Replication uses the same RA-TLS certificate as client connections (X509 required).
+- **Multi-Primary Mode**: All nodes can accept writes (mutual primary-replica mode).
+
+## Command-Line Parameters
+
+All environment variables can also be specified via command-line parameters. Parameters take priority over environment variables.
+
+### General Options
+
+| Parameter | Environment Variable | Description |
+|-----------|---------------------|-------------|
+| `--help`, `-h` | - | Show help message |
+| `--contract-address=ADDR` | `CONTRACT_ADDRESS` | Smart contract address for whitelist |
+| `--rpc-url=URL` | `RPC_URL` | Ethereum JSON-RPC endpoint URL |
+| `--whitelist-config=CFG` | `RATLS_WHITELIST_CONFIG` | Direct whitelist configuration (Base64-encoded CSV) |
+
+### Path Options
+
+| Parameter | Environment Variable | Default | Description |
+|-----------|---------------------|---------|-------------|
+| `--cert-path=PATH` | `RATLS_CERT_PATH` | `/var/lib/mysql-ssl/server-cert.pem` | Path for RA-TLS certificate |
+| `--key-path=PATH` | `RATLS_KEY_PATH` | `/app/wallet/mysql-keys/server-key.pem` | Path for RA-TLS private key |
+| `--data-dir=PATH` | `MYSQL_DATA_DIR` | `/app/wallet/mysql-data` | MySQL data directory |
+
+### RA-TLS Configuration Options
+
+| Parameter | Environment Variable | Default | Description |
+|-----------|---------------------|---------|-------------|
+| `--ra-tls-cert-algorithm=ALG` | `RA_TLS_CERT_ALGORITHM` | - | Certificate algorithm (e.g., secp256r1, secp256k1) |
+| `--ratls-enable-verify=0\|1` | `RATLS_ENABLE_VERIFY` | `1` | Enable RA-TLS verification |
+| `--ratls-require-peer-cert=0\|1` | `RATLS_REQUIRE_PEER_CERT` | `1` | Require peer certificate for mutual TLS |
+| `--ra-tls-allow-outdated-tcb=0\|1` | `RA_TLS_ALLOW_OUTDATED_TCB_INSECURE` | from manifest | Allow outdated TCB (INSECURE) |
+| `--ra-tls-allow-hw-config-needed=0\|1` | `RA_TLS_ALLOW_HW_CONFIG_NEEDED` | from manifest | Allow HW configuration needed status |
+| `--ra-tls-allow-sw-hardening-needed=0\|1` | `RA_TLS_ALLOW_SW_HARDENING_NEEDED` | from manifest | Allow SW hardening needed status |
+
+### Configuration Validation
+
+The launcher validates configuration and handles mutual exclusions:
+
+- If `--rpc-url` is specified, `--whitelist-config` is ignored (contract whitelist takes precedence)
+- Group Replication parameters (`--gr-bootstrap`, `--gr-seeds`, `--gr-local-address`) require `--gr-group-name`
+- Warnings are printed when configurations are ignored due to precedence
 
 ## License
 
