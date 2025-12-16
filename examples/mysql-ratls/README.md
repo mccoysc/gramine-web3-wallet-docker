@@ -112,7 +112,7 @@ docker run -d \
 | `PCCS_API_KEY` | Yes | Intel PCCS API key for DCAP attestation |
 | `CONTRACT_ADDRESS` | No | Ethereum contract address to read whitelist from |
 | `RPC_URL` | No* | Ethereum RPC endpoint (*required if CONTRACT_ADDRESS is set) |
-| `RATLS_WHITELIST_CONFIG` | No | Manual whitelist (Base64-encoded CSV) |
+| `RATLS_WHITELIST_CONFIG` | No | Manual whitelist (Base64-encoded CSV). Can only be set via manifest env var, not command-line. If both this and contract whitelist are set, they are merged with rule-based deduplication. |
 | `MYSQL_GR_GROUP_NAME` | No | Group Replication group name (UUID). Auto-generated if not set. |
 | `RATLS_CERT_PATH` | No | Path to RA-TLS certificate (default: `/var/lib/mysql-ssl/server-cert.pem`) |
 | `RATLS_KEY_PATH` | No | Path to RA-TLS private key, must be in encrypted partition (default: `/app/wallet/mysql-keys/server-key.pem`) |
@@ -343,7 +343,8 @@ All environment variables can also be specified via command-line parameters. Par
 | `--help`, `-h` | - | Show help message |
 | `--contract-address=ADDR` | `CONTRACT_ADDRESS` | Smart contract address for whitelist |
 | `--rpc-url=URL` | `RPC_URL` | Ethereum JSON-RPC endpoint URL |
-| `--whitelist-config=CFG` | `RATLS_WHITELIST_CONFIG` | Direct whitelist configuration (Base64-encoded CSV) |
+
+**Note**: `RATLS_WHITELIST_CONFIG` can only be set via manifest environment variable (not command-line) for security. If both contract and env var whitelists are set, they are merged with rule-based deduplication (same index across all 5 lines = one rule).
 
 ### Path Options
 
@@ -366,11 +367,12 @@ All environment variables can also be specified via command-line parameters. Par
 
 ### Configuration Validation
 
-The launcher validates configuration and handles mutual exclusions:
+The launcher validates configuration and handles dependencies:
 
-- If `--rpc-url` is specified, `--whitelist-config` is ignored (contract whitelist takes precedence)
-- Group Replication parameters (`--gr-bootstrap`, `--gr-seeds`, `--gr-local-address`) require `--gr-group-name`
-- Warnings are printed when configurations are ignored due to precedence
+- `RATLS_WHITELIST_CONFIG` can only be set via manifest environment variable (not command-line) for security
+- If both contract whitelist and environment whitelist are set, they are merged with rule-based deduplication
+- Group Replication is enabled by default; `--gr-group-name` is auto-generated if not specified
+- Warnings are printed for missing dependencies (e.g., `--contract-address` without `--rpc-url`)
 
 ## File Locations
 

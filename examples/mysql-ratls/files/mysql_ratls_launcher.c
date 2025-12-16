@@ -1044,8 +1044,8 @@ static void parse_args(int argc, char *argv[], struct launcher_config *config) {
             config->contract_address = argv[i] + 19;
         } else if (strncmp(argv[i], "--rpc-url=", 10) == 0) {
             config->rpc_url = argv[i] + 10;
-        } else if (strncmp(argv[i], "--whitelist-config=", 19) == 0) {
-            config->whitelist_config = argv[i] + 19;
+        /* NOTE: --whitelist-config is NOT allowed via command-line for security */
+        /* It can only be set via environment variables in the manifest */
         } else if (strncmp(argv[i], "--cert-path=", 12) == 0) {
             config->cert_path = argv[i] + 12;
         /* NOTE: --key-path and --data-dir are NOT allowed via command-line to prevent data leakage */
@@ -1113,8 +1113,10 @@ static void print_usage(const char *prog_name) {
     printf("                            (env: CONTRACT_ADDRESS)\n");
     printf("  --rpc-url=URL             Ethereum JSON-RPC endpoint URL\n");
     printf("                            (env: RPC_URL)\n");
-    printf("  --whitelist-config=CFG    Direct whitelist configuration (Base64-encoded CSV)\n");
-    printf("                            (env: RATLS_WHITELIST_CONFIG)\n\n");
+    printf("\n");
+    printf("  NOTE: RATLS_WHITELIST_CONFIG can ONLY be set via manifest environment variable\n");
+    printf("        (not command-line) for security. If both contract and env var are set,\n");
+    printf("        their whitelists are merged with column-based deduplication.\n\n");
     
     printf("PATH OPTIONS:\n");
     printf("  --cert-path=PATH          Path for RA-TLS certificate\n");
@@ -1194,26 +1196,24 @@ static int validate_config(struct launcher_config *config) {
     
     printf("\n[Launcher] Validating configuration...\n");
     
-    /* === Whitelist / Contract / RPC precedence === */
-    /* Rule: If --rpc-url is specified, ignore --whitelist-config (will use contract whitelist) */
+    /* === Whitelist / Contract / RPC configuration === */
+    /* Rule: If both contract and env var whitelist are set, they will be merged with column-based deduplication */
+    /* Note: --whitelist-config is NOT allowed via command-line, only via manifest env var */
     if (config->rpc_url && strlen(config->rpc_url) > 0) {
-        if (config->whitelist_config && strlen(config->whitelist_config) > 0) {
-            printf("[Launcher] Warning: --rpc-url specified, ignoring --whitelist-config (will use contract whitelist if available)\n");
-            config->whitelist_config = NULL;  /* Clear whitelist config */
-        }
-        
         /* If rpc-url is set but contract-address is missing, warn */
         if (!config->contract_address || strlen(config->contract_address) == 0) {
             printf("[Launcher] Warning: --rpc-url specified but --contract-address is missing\n");
             printf("[Launcher]          Cannot read whitelist from contract without contract address\n");
+        } else {
+            printf("[Launcher] Contract whitelist configured (will merge with env var if set)\n");
         }
     }
     
-    /* If contract-address is set but rpc-url is missing, warn and fall back to whitelist-config */
+    /* If contract-address is set but rpc-url is missing, warn and fall back to env whitelist */
     if (config->contract_address && strlen(config->contract_address) > 0) {
         if (!config->rpc_url || strlen(config->rpc_url) == 0) {
             printf("[Launcher] Warning: --contract-address specified but --rpc-url is missing\n");
-            printf("[Launcher]          Falling back to --whitelist-config or environment whitelist\n");
+            printf("[Launcher]          Using environment whitelist only (if set)\n");
         }
     }
     
@@ -1504,6 +1504,342 @@ static char *read_whitelist_from_contract(const char *contract_address, const ch
     return whitelist;
 }
 
+/* ============================================
+ * Whitelist Merge Helper Functions
+ * ============================================ */
+
+/* Base64 decoding table */
+static const unsigned char base64_decode_table[256] = {
+    255,255,255,255,255,255,255,255,255,255,255,255,255,255,255,255,
+    255,255,255,255,255,255,255,255,255,255,255,255,255,255,255,255,
+    255,255,255,255,255,255,255,255,255,255,255, 62,255,255,255, 63,
+     52, 53, 54, 55, 56, 57, 58, 59, 60, 61,255,255,255,  0,255,255,
+    255,  0,  1,  2,  3,  4,  5,  6,  7,  8,  9, 10, 11, 12, 13, 14,
+     15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25,255,255,255,255,255,
+    255, 26, 27, 28, 29, 30, 31, 32, 33, 34, 35, 36, 37, 38, 39, 40,
+     41, 42, 43, 44, 45, 46, 47, 48, 49, 50, 51,255,255,255,255,255,
+    255,255,255,255,255,255,255,255,255,255,255,255,255,255,255,255,
+    255,255,255,255,255,255,255,255,255,255,255,255,255,255,255,255,
+    255,255,255,255,255,255,255,255,255,255,255,255,255,255,255,255,
+    255,255,255,255,255,255,255,255,255,255,255,255,255,255,255,255,
+    255,255,255,255,255,255,255,255,255,255,255,255,255,255,255,255,
+    255,255,255,255,255,255,255,255,255,255,255,255,255,255,255,255,
+    255,255,255,255,255,255,255,255,255,255,255,255,255,255,255,255,
+    255,255,255,255,255,255,255,255,255,255,255,255,255,255,255,255
+};
+
+/* Base64 encoding table */
+static const char base64_encode_table[] = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+
+/* Decode Base64 string, returns decoded length or -1 on error */
+static int base64_decode(const char *input, unsigned char *output, size_t output_size) {
+    size_t input_len = strlen(input);
+    size_t output_len = 0;
+    unsigned int buf = 0;
+    int bits = 0;
+    
+    for (size_t i = 0; i < input_len; i++) {
+        unsigned char c = (unsigned char)input[i];
+        if (c == '=' || c == '\n' || c == '\r' || c == ' ') continue;
+        
+        unsigned char val = base64_decode_table[c];
+        if (val == 255) {
+            fprintf(stderr, "[Launcher] Invalid Base64 character: %c\n", c);
+            return -1;
+        }
+        
+        buf = (buf << 6) | val;
+        bits += 6;
+        
+        if (bits >= 8) {
+            bits -= 8;
+            if (output_len >= output_size) return -1;
+            output[output_len++] = (buf >> bits) & 0xFF;
+        }
+    }
+    
+    return (int)output_len;
+}
+
+/* Encode data to Base64 string, returns allocated string or NULL on error */
+static char *base64_encode(const unsigned char *input, size_t input_len) {
+    size_t output_len = ((input_len + 2) / 3) * 4 + 1;
+    char *output = malloc(output_len);
+    if (!output) return NULL;
+    
+    size_t i, j;
+    for (i = 0, j = 0; i < input_len; ) {
+        uint32_t octet_a = i < input_len ? input[i++] : 0;
+        uint32_t octet_b = i < input_len ? input[i++] : 0;
+        uint32_t octet_c = i < input_len ? input[i++] : 0;
+        
+        uint32_t triple = (octet_a << 16) | (octet_b << 8) | octet_c;
+        
+        output[j++] = base64_encode_table[(triple >> 18) & 0x3F];
+        output[j++] = base64_encode_table[(triple >> 12) & 0x3F];
+        output[j++] = (i > input_len + 1) ? '=' : base64_encode_table[(triple >> 6) & 0x3F];
+        output[j++] = (i > input_len) ? '=' : base64_encode_table[triple & 0x3F];
+    }
+    output[j] = '\0';
+    
+    return output;
+}
+
+/* Whitelist CSV structure: 5 lines, each with comma-separated values */
+#define WHITELIST_NUM_LINES 5
+#define MAX_VALUES_PER_LINE 256
+#define MAX_VALUE_LEN 128
+
+struct whitelist_line {
+    char values[MAX_VALUES_PER_LINE][MAX_VALUE_LEN];
+    int count;
+};
+
+struct whitelist_csv {
+    struct whitelist_line lines[WHITELIST_NUM_LINES];
+};
+
+/* Parse CSV line into values array */
+static void parse_csv_line(const char *line, struct whitelist_line *wl_line) {
+    wl_line->count = 0;
+    if (!line || strlen(line) == 0) {
+        /* Empty line: treat as single "0" value */
+        strcpy(wl_line->values[0], "0");
+        wl_line->count = 1;
+        return;
+    }
+    
+    /* Check if line is just "0" */
+    if (strcmp(line, "0") == 0) {
+        strcpy(wl_line->values[0], "0");
+        wl_line->count = 1;
+        return;
+    }
+    
+    const char *start = line;
+    const char *end;
+    
+    while (*start && wl_line->count < MAX_VALUES_PER_LINE) {
+        /* Skip leading whitespace */
+        while (*start == ' ' || *start == '\t') start++;
+        
+        /* Find end of value (comma or end of string) */
+        end = strchr(start, ',');
+        if (!end) end = start + strlen(start);
+        
+        /* Copy value, trimming trailing whitespace */
+        size_t len = end - start;
+        while (len > 0 && (start[len-1] == ' ' || start[len-1] == '\t')) len--;
+        
+        if (len > 0 && len < MAX_VALUE_LEN) {
+            strncpy(wl_line->values[wl_line->count], start, len);
+            wl_line->values[wl_line->count][len] = '\0';
+            wl_line->count++;
+        }
+        
+        if (*end == ',') {
+            start = end + 1;
+        } else {
+            break;
+        }
+    }
+    
+    /* If no values parsed, treat as "0" */
+    if (wl_line->count == 0) {
+        strcpy(wl_line->values[0], "0");
+        wl_line->count = 1;
+    }
+}
+
+/* Parse Base64-encoded CSV whitelist */
+static int parse_whitelist(const char *base64_str, struct whitelist_csv *csv) {
+    if (!base64_str || strlen(base64_str) == 0) {
+        /* Initialize empty whitelist */
+        for (int i = 0; i < WHITELIST_NUM_LINES; i++) {
+            csv->lines[i].count = 0;
+        }
+        return 0;
+    }
+    
+    /* Decode Base64 */
+    size_t decoded_size = strlen(base64_str);
+    unsigned char *decoded = malloc(decoded_size + 1);
+    if (!decoded) return -1;
+    
+    int decoded_len = base64_decode(base64_str, decoded, decoded_size);
+    if (decoded_len < 0) {
+        free(decoded);
+        return -1;
+    }
+    decoded[decoded_len] = '\0';
+    
+    /* Parse lines */
+    char *str = (char *)decoded;
+    char *line;
+    int line_idx = 0;
+    
+    while ((line = strsep(&str, "\n")) != NULL && line_idx < WHITELIST_NUM_LINES) {
+        /* Remove carriage return if present */
+        size_t len = strlen(line);
+        if (len > 0 && line[len-1] == '\r') {
+            line[len-1] = '\0';
+        }
+        parse_csv_line(line, &csv->lines[line_idx]);
+        line_idx++;
+    }
+    
+    /* Fill remaining lines with empty */
+    while (line_idx < WHITELIST_NUM_LINES) {
+        csv->lines[line_idx].count = 0;
+        line_idx++;
+    }
+    
+    free(decoded);
+    return 0;
+}
+
+/* Check if a rule (same index across all lines) already exists in the whitelist */
+static int rule_exists(struct whitelist_csv *csv, const char *values[WHITELIST_NUM_LINES]) {
+    /* Find the maximum count across all lines to determine number of rules */
+    int max_count = 0;
+    for (int i = 0; i < WHITELIST_NUM_LINES; i++) {
+        if (csv->lines[i].count > max_count) {
+            max_count = csv->lines[i].count;
+        }
+    }
+    
+    /* Check each existing rule */
+    for (int rule_idx = 0; rule_idx < max_count; rule_idx++) {
+        int match = 1;
+        for (int line_idx = 0; line_idx < WHITELIST_NUM_LINES; line_idx++) {
+            const char *existing_val = (rule_idx < csv->lines[line_idx].count) 
+                ? csv->lines[line_idx].values[rule_idx] : "0";
+            const char *new_val = values[line_idx] ? values[line_idx] : "0";
+            
+            if (strcmp(existing_val, new_val) != 0) {
+                match = 0;
+                break;
+            }
+        }
+        if (match) return 1;  /* Rule exists */
+    }
+    
+    return 0;  /* Rule does not exist */
+}
+
+/* Merge two whitelists with rule-based deduplication */
+static int merge_whitelists(struct whitelist_csv *dest, struct whitelist_csv *src) {
+    /* Find the maximum count in source to determine number of rules to add */
+    int src_max_count = 0;
+    for (int i = 0; i < WHITELIST_NUM_LINES; i++) {
+        if (src->lines[i].count > src_max_count) {
+            src_max_count = src->lines[i].count;
+        }
+    }
+    
+    /* For each rule in source, check if it exists in dest, if not add it */
+    for (int rule_idx = 0; rule_idx < src_max_count; rule_idx++) {
+        /* Extract rule values from source */
+        const char *rule_values[WHITELIST_NUM_LINES];
+        for (int line_idx = 0; line_idx < WHITELIST_NUM_LINES; line_idx++) {
+            rule_values[line_idx] = (rule_idx < src->lines[line_idx].count)
+                ? src->lines[line_idx].values[rule_idx] : "0";
+        }
+        
+        /* Check if rule already exists in dest */
+        if (!rule_exists(dest, rule_values)) {
+            /* Add rule to dest */
+            for (int line_idx = 0; line_idx < WHITELIST_NUM_LINES; line_idx++) {
+                int dest_idx = dest->lines[line_idx].count;
+                if (dest_idx < MAX_VALUES_PER_LINE) {
+                    strncpy(dest->lines[line_idx].values[dest_idx], 
+                            rule_values[line_idx], MAX_VALUE_LEN - 1);
+                    dest->lines[line_idx].values[dest_idx][MAX_VALUE_LEN - 1] = '\0';
+                    dest->lines[line_idx].count++;
+                }
+            }
+        }
+    }
+    
+    return 0;
+}
+
+/* Serialize whitelist back to Base64-encoded CSV */
+static char *serialize_whitelist(struct whitelist_csv *csv) {
+    /* Calculate required buffer size */
+    size_t buf_size = 0;
+    for (int line_idx = 0; line_idx < WHITELIST_NUM_LINES; line_idx++) {
+        for (int val_idx = 0; val_idx < csv->lines[line_idx].count; val_idx++) {
+            buf_size += strlen(csv->lines[line_idx].values[val_idx]) + 1;  /* +1 for comma */
+        }
+        buf_size += 1;  /* +1 for newline */
+    }
+    buf_size += 1;  /* +1 for null terminator */
+    
+    char *csv_str = malloc(buf_size);
+    if (!csv_str) return NULL;
+    
+    size_t offset = 0;
+    for (int line_idx = 0; line_idx < WHITELIST_NUM_LINES; line_idx++) {
+        for (int val_idx = 0; val_idx < csv->lines[line_idx].count; val_idx++) {
+            if (val_idx > 0) {
+                csv_str[offset++] = ',';
+            }
+            size_t val_len = strlen(csv->lines[line_idx].values[val_idx]);
+            memcpy(csv_str + offset, csv->lines[line_idx].values[val_idx], val_len);
+            offset += val_len;
+        }
+        csv_str[offset++] = '\n';
+    }
+    csv_str[offset] = '\0';
+    
+    /* Encode to Base64 */
+    char *base64_str = base64_encode((unsigned char *)csv_str, offset);
+    free(csv_str);
+    
+    return base64_str;
+}
+
+/* Merge whitelist from contract with whitelist from environment variable */
+static char *merge_whitelist_configs(const char *env_whitelist, const char *contract_whitelist) {
+    struct whitelist_csv env_csv = {0};
+    struct whitelist_csv contract_csv = {0};
+    
+    printf("[Launcher] Merging whitelists...\n");
+    
+    /* Parse environment whitelist */
+    if (env_whitelist && strlen(env_whitelist) > 0) {
+        if (parse_whitelist(env_whitelist, &env_csv) != 0) {
+            fprintf(stderr, "[Launcher] Warning: Failed to parse environment whitelist\n");
+        } else {
+            printf("[Launcher]   Environment whitelist: %d rules\n", 
+                   env_csv.lines[0].count > 0 ? env_csv.lines[0].count : 0);
+        }
+    }
+    
+    /* Parse contract whitelist */
+    if (contract_whitelist && strlen(contract_whitelist) > 0) {
+        if (parse_whitelist(contract_whitelist, &contract_csv) != 0) {
+            fprintf(stderr, "[Launcher] Warning: Failed to parse contract whitelist\n");
+        } else {
+            printf("[Launcher]   Contract whitelist: %d rules\n",
+                   contract_csv.lines[0].count > 0 ? contract_csv.lines[0].count : 0);
+        }
+    }
+    
+    /* Merge contract whitelist into env whitelist (env is base, contract is added) */
+    if (merge_whitelists(&env_csv, &contract_csv) != 0) {
+        fprintf(stderr, "[Launcher] Warning: Failed to merge whitelists\n");
+        return NULL;
+    }
+    
+    printf("[Launcher]   Merged whitelist: %d rules (after deduplication)\n",
+           env_csv.lines[0].count > 0 ? env_csv.lines[0].count : 0);
+    
+    /* Serialize merged whitelist */
+    return serialize_whitelist(&env_csv);
+}
+
 /* Set environment variable with logging */
 static void set_env(const char *name, const char *value, int overwrite) {
     if (setenv(name, value, overwrite) == 0) {
@@ -1658,32 +1994,65 @@ int main(int argc, char *argv[]) {
     }
     
     /* Handle whitelist configuration */
+    /* Note: RATLS_WHITELIST_CONFIG can ONLY be set via manifest environment variable (not command-line) */
+    /* If both contract and env var are set, they are merged with rule-based deduplication */
     printf("\n[Launcher] Whitelist Configuration:\n");
     
-    if (config.contract_address && strlen(config.contract_address) > 0) {
-        printf("[Launcher] Contract address specified: %s\n", config.contract_address);
-        
-        if (!config.rpc_url || strlen(config.rpc_url) == 0) {
-            fprintf(stderr, "[Launcher] Warning: RPC_URL not set, cannot read from contract\n");
-            printf("[Launcher] Falling back to environment-based whitelist (if set)\n");
-        } else {
-            /* Try to read whitelist from contract */
-            char *whitelist = read_whitelist_from_contract(config.contract_address, config.rpc_url);
-            
-            if (whitelist) {
-                set_env("RATLS_WHITELIST_CONFIG", whitelist, 1);
-                free(whitelist);
-            } else {
-                printf("[Launcher] Could not read valid whitelist from contract\n");
-                printf("[Launcher] Using environment-based whitelist (if set)\n");
-            }
-        }
+    /* Get environment whitelist (from manifest) */
+    const char *env_whitelist = config.whitelist_config;  /* Already loaded from getenv in parse_args */
+    char *contract_whitelist = NULL;
+    char *merged_whitelist = NULL;
+    
+    if (env_whitelist && strlen(env_whitelist) > 0) {
+        printf("[Launcher] Environment whitelist is set (from manifest)\n");
     } else {
-        printf("[Launcher] No CONTRACT_ADDRESS specified\n");
-        printf("[Launcher] Using environment-based whitelist (if set)\n");
+        printf("[Launcher] No environment whitelist set\n");
     }
     
-    /* Display whitelist status */
+    /* Try to read whitelist from contract if configured */
+    if (config.contract_address && strlen(config.contract_address) > 0 &&
+        config.rpc_url && strlen(config.rpc_url) > 0) {
+        printf("[Launcher] Contract address specified: %s\n", config.contract_address);
+        printf("[Launcher] RPC URL specified: %s\n", config.rpc_url);
+        
+        contract_whitelist = read_whitelist_from_contract(config.contract_address, config.rpc_url);
+        
+        if (contract_whitelist) {
+            printf("[Launcher] Successfully read whitelist from contract\n");
+        } else {
+            printf("[Launcher] Could not read valid whitelist from contract\n");
+        }
+    } else if (config.contract_address && strlen(config.contract_address) > 0) {
+        printf("[Launcher] Contract address specified but RPC_URL not set, cannot read from contract\n");
+    } else {
+        printf("[Launcher] No CONTRACT_ADDRESS specified\n");
+    }
+    
+    /* Merge whitelists if both are available, otherwise use whichever is set */
+    if (env_whitelist && strlen(env_whitelist) > 0 && contract_whitelist && strlen(contract_whitelist) > 0) {
+        /* Both whitelists available - merge them */
+        merged_whitelist = merge_whitelist_configs(env_whitelist, contract_whitelist);
+        if (merged_whitelist) {
+            set_env("RATLS_WHITELIST_CONFIG", merged_whitelist, 1);
+            free(merged_whitelist);
+        } else {
+            fprintf(stderr, "[Launcher] Warning: Failed to merge whitelists, using environment whitelist only\n");
+            /* env_whitelist is already set in environment from manifest */
+        }
+    } else if (contract_whitelist && strlen(contract_whitelist) > 0) {
+        /* Only contract whitelist available */
+        set_env("RATLS_WHITELIST_CONFIG", contract_whitelist, 1);
+    } else if (env_whitelist && strlen(env_whitelist) > 0) {
+        /* Only environment whitelist available - already set from manifest */
+        printf("[Launcher] Using environment whitelist only\n");
+    }
+    
+    /* Clean up contract whitelist if allocated */
+    if (contract_whitelist) {
+        free(contract_whitelist);
+    }
+    
+    /* Display final whitelist status */
     const char *final_whitelist = getenv("RATLS_WHITELIST_CONFIG");
     if (final_whitelist && strlen(final_whitelist) > 0) {
         printf("[Launcher] RATLS_WHITELIST_CONFIG is set\n");

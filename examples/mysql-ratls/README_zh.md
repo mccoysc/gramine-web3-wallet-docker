@@ -122,7 +122,7 @@ docker run -d \
 | `PCCS_API_KEY` | 是 | 用于 DCAP 证明的 Intel PCCS API 密钥 |
 | `CONTRACT_ADDRESS` | 否 | 用于读取白名单的以太坊合约地址 |
 | `RPC_URL` | 否* | 以太坊 RPC 端点（*如果设置了 CONTRACT_ADDRESS 则必需） |
-| `RATLS_WHITELIST_CONFIG` | 否 | 手动白名单（Base64 编码的 CSV） |
+| `RATLS_WHITELIST_CONFIG` | 否 | 手动白名单（Base64 编码的 CSV）。只能通过 manifest 环境变量设置，不能通过命令行设置。如果同时设置了合约白名单和环境变量白名单，它们会按规则去重后合并。 |
 | `MYSQL_GR_GROUP_NAME` | 否 | Group Replication group name（UUID）。未设置时自动生成。 |
 | `RATLS_CERT_PATH` | 否 | RA-TLS 证书路径（默认：`/var/lib/mysql-ssl/server-cert.pem`） |
 | `RATLS_KEY_PATH` | 否 | RA-TLS 私钥路径，必须在加密分区（默认：`/app/wallet/mysql-keys/server-key.pem`） |
@@ -354,7 +354,8 @@ START GROUP_REPLICATION;
 | `--dry-run` | - | 测试模式：生成所有配置但不启动 mysqld |
 | `--contract-address=ADDR` | `CONTRACT_ADDRESS` | 用于白名单的智能合约地址 |
 | `--rpc-url=URL` | `RPC_URL` | 以太坊 JSON-RPC 端点 URL |
-| `--whitelist-config=CFG` | `RATLS_WHITELIST_CONFIG` | 直接白名单配置（Base64 编码的 CSV） |
+
+**注意**：`RATLS_WHITELIST_CONFIG` 只能通过 manifest 环境变量设置（不能通过命令行），这是出于安全考虑。如果同时设置了合约白名单和环境变量白名单，它们会按规则去重后合并（5 行中相同索引的值组成一条规则）。
 
 ### RA-TLS 配置选项
 
@@ -370,11 +371,12 @@ START GROUP_REPLICATION;
 
 ### 配置验证
 
-启动器验证配置并处理互斥：
+启动器验证配置并处理依赖关系：
 
-- 如果指定了 `--rpc-url`，则忽略 `--whitelist-config`（合约白名单优先）
-- Group Replication 默认启用；使用环境变量或参数指定 group name 以加入现有集群
-- 当配置因优先级被忽略时会打印警告
+- `RATLS_WHITELIST_CONFIG` 只能通过 manifest 环境变量设置（不能通过命令行），这是出于安全考虑
+- 如果同时设置了合约白名单和环境变量白名单，它们会按规则去重后合并
+- Group Replication 默认启用；未指定 `--gr-group-name` 时自动生成
+- 当缺少依赖配置时会打印警告（例如设置了 `--contract-address` 但没有 `--rpc-url`）
 
 ## 文件位置
 
