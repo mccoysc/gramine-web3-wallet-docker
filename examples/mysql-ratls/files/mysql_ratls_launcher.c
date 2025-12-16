@@ -819,6 +819,12 @@ struct launcher_config {
     const char *gr_local_address;      /* --gr-local-address */
     int gr_bootstrap;                  /* --gr-bootstrap */
     
+    /* Testing options */
+    int dry_run;                       /* --dry-run: run all logic but skip execve() */
+    const char *test_lan_ip;           /* --test-lan-ip: override LAN IP for testing */
+    const char *test_public_ip;        /* --test-public-ip: override public IP for testing */
+    const char *test_output_dir;       /* --test-output-dir: override output directory for testing */
+    
     /* Additional MySQL args to pass through */
     int mysql_argc;
     char **mysql_argv;
@@ -847,6 +853,12 @@ static void parse_args(int argc, char *argv[], struct launcher_config *config) {
     config->gr_seeds = NULL;
     config->gr_local_address = NULL;
     config->gr_bootstrap = 0;
+    
+    /* Testing options default to NULL/0 */
+    config->dry_run = 0;
+    config->test_lan_ip = NULL;
+    config->test_public_ip = NULL;
+    config->test_output_dir = NULL;
     
     /* Allocate array for MySQL passthrough args */
     config->mysql_argv = malloc(argc * sizeof(char *));
@@ -886,6 +898,14 @@ static void parse_args(int argc, char *argv[], struct launcher_config *config) {
             config->gr_bootstrap = 1;
         } else if (strncmp(argv[i], "--gr-local-address=", 19) == 0) {
             config->gr_local_address = argv[i] + 19;
+        } else if (strcmp(argv[i], "--dry-run") == 0) {
+            config->dry_run = 1;
+        } else if (strncmp(argv[i], "--test-lan-ip=", 14) == 0) {
+            config->test_lan_ip = argv[i] + 14;
+        } else if (strncmp(argv[i], "--test-public-ip=", 17) == 0) {
+            config->test_public_ip = argv[i] + 17;
+        } else if (strncmp(argv[i], "--test-output-dir=", 18) == 0) {
+            config->test_output_dir = argv[i] + 18;
         } else if (strcmp(argv[i], "--help") == 0 || strcmp(argv[i], "-h") == 0) {
             print_usage(argv[0]);
             exit(0);
@@ -963,6 +983,13 @@ static void print_usage(const char *prog_name) {
     printf("                            Format: host:port (default: auto-detect LAN IP:%d)\n", GR_DEFAULT_PORT);
     printf("  --gr-bootstrap            Bootstrap a new replication group (first node only)\n");
     printf("                            Without this flag, node will try to join existing group\n\n");
+    
+    printf("TESTING OPTIONS:\n");
+    printf("  --dry-run                 Run all logic but skip execve() to mysqld\n");
+    printf("                            Useful for testing configuration generation\n");
+    printf("  --test-lan-ip=IP          Override LAN IP detection (for testing)\n");
+    printf("  --test-public-ip=IP       Override public IP detection (for testing)\n");
+    printf("  --test-output-dir=DIR     Override output directory for config files (for testing)\n\n");
     
     printf("MYSQL OPTIONS:\n");
     printf("  Any unrecognized options are passed through to mysqld.\n\n");
@@ -1495,15 +1522,21 @@ int main(int argc, char *argv[]) {
         printf("[Launcher] Group name: %s\n", config.gr_group_name);
         printf("[Launcher] Bootstrap mode: %s\n", config.gr_bootstrap ? "YES" : "NO");
         
-        /* Get LAN IP */
-        if (get_lan_ip(lan_ip, sizeof(lan_ip)) != 0) {
+        /* Get LAN IP - use test override if provided */
+        if (config.test_lan_ip && strlen(config.test_lan_ip) > 0) {
+            strncpy(lan_ip, config.test_lan_ip, sizeof(lan_ip) - 1);
+            printf("[Launcher] Using test LAN IP: %s\n", lan_ip);
+        } else if (get_lan_ip(lan_ip, sizeof(lan_ip)) != 0) {
             fprintf(stderr, "[Launcher] Warning: Could not detect LAN IP\n");
         } else {
             printf("[Launcher] Detected LAN IP: %s\n", lan_ip);
         }
         
-        /* Get public IP */
-        if (get_public_ip(public_ip, sizeof(public_ip)) != 0) {
+        /* Get public IP - use test override if provided */
+        if (config.test_public_ip && strlen(config.test_public_ip) > 0) {
+            strncpy(public_ip, config.test_public_ip, sizeof(public_ip) - 1);
+            printf("[Launcher] Using test public IP: %s\n", public_ip);
+        } else if (get_public_ip(public_ip, sizeof(public_ip)) != 0) {
             fprintf(stderr, "[Launcher] Warning: Could not detect public IP\n");
         } else {
             printf("[Launcher] Detected public IP: %s\n", public_ip);
@@ -1656,6 +1689,25 @@ int main(int argc, char *argv[]) {
         printf("[Launcher]   Init file: %s\n", init_sql_path);
     }
     printf("\n");
+    
+    /* Print full command line that would be executed */
+    printf("[Launcher] Full command line:\n");
+    printf("  ");
+    for (int i = 0; new_argv[i] != NULL; i++) {
+        printf("%s ", new_argv[i]);
+    }
+    printf("\n\n");
+    
+    /* In dry-run mode, skip execve() and exit successfully */
+    if (config.dry_run) {
+        printf("==========================================\n");
+        printf("DRY RUN MODE - Skipping execve()\n");
+        printf("==========================================\n");
+        printf("[Launcher] All configuration generated successfully.\n");
+        printf("[Launcher] In normal mode, mysqld would be started with the above command.\n");
+        free(new_argv);
+        return 0;
+    }
     
     /* Use execv to replace this process with mysqld */
     /* execv preserves the environment variables we set (including LD_PRELOAD) */
