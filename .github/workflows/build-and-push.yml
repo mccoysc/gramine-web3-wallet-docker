@@ -54,10 +54,8 @@ jobs:
       needs_gramine: ${{ steps.check.outputs.needs_gramine }}
       needs_openssl: ${{ steps.check.outputs.needs_openssl }}
       needs_node: ${{ steps.check.outputs.needs_node }}
-      needs_mysql_gr_plugin: ${{ steps.check.outputs.needs_mysql_gr_plugin }}
       needs_image: ${{ steps.check.outputs.needs_image }}
       dockerfile_changed: ${{ steps.check.outputs.dockerfile_changed }}
-      mysql_gr_patch_changed: ${{ steps.check.outputs.mysql_gr_patch_changed }}
       gramine_owner: ${{ steps.check.outputs.gramine_owner }}
       gramine_sha: ${{ steps.check.outputs.gramine_sha }}
       gramine_sha_short: ${{ steps.check.outputs.gramine_sha_short }}
@@ -226,9 +224,8 @@ jobs:
             const forceRebuild = '${{ github.event.inputs.force_rebuild }}' === 'true';
             
             // 0. Check if Dockerfile or related image files changed
-            console.log('Checking for Dockerfile and MySQL GR patch changes...');
+            console.log('Checking for Dockerfile changes...');
             let dockerfileChanged = false;
-            let mysqlGrPatchChanged = false;
             
             if (context.eventName === 'pull_request') {
               // For PRs, check changed files in the PR
@@ -256,18 +253,6 @@ jobs:
                   )
                   .map(f => f.filename);
                 console.log(`Dockerfile or related files changed: ${changedFiles.join(', ')}`);
-              }
-              
-              // Check if MySQL GR patch files changed
-              mysqlGrPatchChanged = files.some(f => 
-                f.filename.startsWith('examples/mysql-ratls/files/mysql-gr-patch/')
-              );
-              
-              if (mysqlGrPatchChanged) {
-                const changedFiles = files
-                  .filter(f => f.filename.startsWith('examples/mysql-ratls/files/mysql-gr-patch/'))
-                  .map(f => f.filename);
-                console.log(`MySQL GR patch files changed: ${changedFiles.join(', ')}`);
               }
             } else if (context.eventName === 'push') {
               // For push events, compare with previous commit
@@ -299,28 +284,15 @@ jobs:
                       .map(f => f.filename);
                     console.log(`Dockerfile or related files changed: ${changedFiles.join(', ')}`);
                   }
-                  
-                  // Check if MySQL GR patch files changed
-                  mysqlGrPatchChanged = (comparison.data.files || []).some(f =>
-                    f.filename.startsWith('examples/mysql-ratls/files/mysql-gr-patch/')
-                  );
-                  
-                  if (mysqlGrPatchChanged) {
-                    const changedFiles = (comparison.data.files || [])
-                      .filter(f => f.filename.startsWith('examples/mysql-ratls/files/mysql-gr-patch/'))
-                      .map(f => f.filename);
-                    console.log(`MySQL GR patch files changed: ${changedFiles.join(', ')}`);
-                  }
                 } catch (error) {
                   console.log(`Warning: Could not compare commits: ${error.message}`);
                   // On error, assume no Dockerfile changes (schedule events have no before commit)
                 }
               }
             }
-            // For schedule and workflow_dispatch events, dockerfileChanged and mysqlGrPatchChanged remain false
+            // For schedule and workflow_dispatch events, dockerfileChanged remains false
             
             console.log(`Dockerfile changed: ${dockerfileChanged}`);
-            console.log(`MySQL GR patch changed: ${mysqlGrPatchChanged}`);
             
             // 0.5. Determine Gramine repository owner (fork-friendly)
             console.log('Determining Gramine repository owner...');
@@ -450,21 +422,9 @@ jobs:
             }
             console.log(`Node.js: current=${currentNode || 'none'}, latest=${latestNode || 'unknown'}, changed=${nodeChanged}, exists_in_releases=${nodeExists}, needs_build=${needsNode}`);
             
-            // 4. Determine if MySQL GR plugin needs rebuild
-            // Check if prebuilt plugin exists in Releases
-            const mysqlGrPluginTag = 'mysql-gr-plugin-8.0.44';
-            const mysqlGrPluginAsset = 'mysql-gr-plugin-8.0.44-sgx.tar.gz';
-            const mysqlGrPluginExists = await releaseAssetExists(mysqlGrPluginTag, mysqlGrPluginAsset);
-            
-            // Need to build plugin if: force rebuild, patch files changed, or plugin doesn't exist in releases
-            const needsMysqlGrPlugin = forceRebuild || mysqlGrPatchChanged || !mysqlGrPluginExists;
-            console.log(`MySQL GR plugin: patch_changed=${mysqlGrPatchChanged}, exists_in_releases=${mysqlGrPluginExists}, needs_build=${needsMysqlGrPlugin}`);
-            
-            // 5. Determine if image needs rebuild
+            // 4. Determine if image needs rebuild
             // Use version change signals instead of needs_* flags to ensure image rebuilds
             // when dependencies change, even if prebuilt assets exist
-            // Note: MySQL GR patch changes do NOT trigger base image rebuild - they only trigger
-            // the build-mysql-gr-plugin job which publishes to GitHub Releases for mysql-ratls Dockerfile
             const needsImage = dockerfileChanged || gramineChanged || opensslChanged || nodeChanged;
             console.log(`Docker image needs rebuild: ${needsImage} (dockerfile_changed=${dockerfileChanged}, gramine_changed=${gramineChanged}, openssl_changed=${opensslChanged}, node_changed=${nodeChanged})`);
             
@@ -472,10 +432,8 @@ jobs:
             core.setOutput('needs_gramine', needsGramine.toString());
             core.setOutput('needs_openssl', needsOpenSSL.toString());
             core.setOutput('needs_node', needsNode.toString());
-            core.setOutput('needs_mysql_gr_plugin', needsMysqlGrPlugin.toString());
             core.setOutput('needs_image', needsImage.toString());
             core.setOutput('dockerfile_changed', dockerfileChanged.toString());
-            core.setOutput('mysql_gr_patch_changed', mysqlGrPatchChanged.toString());
             core.setOutput('gramine_owner', gramineOwner);
             core.setOutput('gramine_sha', latestGramineSha);
             core.setOutput('gramine_sha_short', latestGramineShaShort);
@@ -500,7 +458,6 @@ jobs:
                 ['Gramine', currentGramineSha.substring(0,8) || 'none', `${latestGramineShaShort} (${gramineOwner})`, needsGramine ? '✅' : '⏭️'],
                 ['OpenSSL', currentOpenSSL || 'none', latestOpenSSL || 'unknown', needsOpenSSL ? '✅' : '⏭️'],
                 ['Node.js', currentNode || 'none', latestNode || 'unknown', needsNode ? '✅' : '⏭️'],
-                ['MySQL GR Plugin', mysqlGrPluginExists ? 'exists' : 'none', '8.0.44', needsMysqlGrPlugin ? '✅' : '⏭️'],
                 ['Dockerfile', '-', '-', dockerfileChanged ? '✅ Changed' : '⏭️'],
                 ['Docker Image', '-', '-', needsImage ? `✅ (${imageReason})` : '⏭️']
               ])
@@ -845,197 +802,7 @@ jobs:
           path: /opt/node-install-${{ needs.check-versions.outputs.node_version }}.tar.gz
           retention-days: 1
 
-  # Job 5: Build MySQL Group Replication plugin for SGX/Gramine
-  build-mysql-gr-plugin:
-    runs-on: ubuntu-22.04
-    needs: check-versions
-    if: needs.check-versions.outputs.needs_mysql_gr_plugin == 'true'
-    permissions:
-      contents: write
-    
-    steps:
-      - name: Checkout repository
-        uses: actions/checkout@v4
-
-      - name: Install build dependencies
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y \
-            build-essential \
-            cmake \
-            libssl-dev \
-            libncurses5-dev \
-            libtirpc-dev \
-            bison \
-            pkg-config \
-            libudev-dev \
-            libldap2-dev \
-            libsasl2-dev \
-            libevent-dev \
-            libcurl4-openssl-dev \
-            liblz4-dev \
-            zlib1g-dev \
-            libzstd-dev \
-            libprotobuf-dev \
-            protobuf-compiler \
-            rapidjson-dev \
-            dpkg-dev
-
-      - name: Download MySQL source
-        run: |
-          MYSQL_VERSION="8.0.44"
-          MYSQL_UBUNTU_VERSION="8.0.44-0ubuntu0.22.04.2"
-          echo "Downloading MySQL ${MYSQL_VERSION} source..."
-          
-          # Enable source repositories
-          sudo sed -i 's/^# deb-src/deb-src/' /etc/apt/sources.list
-          sudo apt-get update
-          
-          # Download MySQL source from Ubuntu package
-          mkdir -p mysql-source
-          cd mysql-source
-          
-          # Get the source package
-          apt-get source mysql-server-8.0=${MYSQL_UBUNTU_VERSION} 2>/dev/null || {
-            # Fallback: download from MySQL archives
-            echo "apt-get source failed, downloading from MySQL archives..."
-            wget -q "https://downloads.mysql.com/archives/get/p/23/file/mysql-${MYSQL_VERSION}.tar.gz"
-            tar xzf mysql-${MYSQL_VERSION}.tar.gz
-            mv mysql-${MYSQL_VERSION} mysql-8.0-${MYSQL_VERSION}
-          }
-          
-          echo "MySQL source downloaded"
-          ls -la
-
-      - name: Apply patches
-        run: |
-          MYSQL_DIR=$(find mysql-source -maxdepth 1 -type d -name "mysql-8.0*" | head -1)
-          echo "MySQL source directory: $MYSQL_DIR"
-          
-          PATCH_DIR="${{ github.workspace }}/examples/mysql-ratls/files/mysql-gr-patch"
-          
-          # Copy gr_getifaddrs files to xcom directory
-          XCOM_DIR="$MYSQL_DIR/plugin/group_replication/libmysqlgcs/src/bindings/xcom/xcom"
-          cp "$PATCH_DIR/gr_getifaddrs.h" "$XCOM_DIR/"
-          cp "$PATCH_DIR/gr_getifaddrs.cc" "$XCOM_DIR/"
-          cp "$PATCH_DIR/sock_probe_ix.h" "$XCOM_DIR/"
-          
-          # Copy recovery_endpoints.cc
-          cp "$PATCH_DIR/recovery_endpoints.cc" "$MYSQL_DIR/plugin/group_replication/src/plugin_variables/"
-          
-          # Copy CMakeLists.txt for libmysqlgcs
-          cp "$PATCH_DIR/CMakeLists.txt" "$MYSQL_DIR/plugin/group_replication/libmysqlgcs/"
-          
-          echo "Patches applied successfully"
-
-      - name: Configure MySQL build
-        run: |
-          MYSQL_DIR=$(find mysql-source -maxdepth 1 -type d -name "mysql-8.0*" | head -1)
-          
-          mkdir -p mysql-build
-          cd mysql-build
-          
-          cmake "../$MYSQL_DIR" \
-            -DCMAKE_BUILD_TYPE=Release \
-            -DWITH_SSL=system \
-            -DWITH_ZLIB=system \
-            -DWITH_LZ4=system \
-            -DWITH_ZSTD=system \
-            -DWITH_PROTOBUF=system \
-            -DWITH_RAPIDJSON=system \
-            -DWITH_BOOST=../boost \
-            -DDOWNLOAD_BOOST=1 \
-            -DWITH_UNIT_TESTS=OFF \
-            -DWITH_DEBUG=OFF \
-            -DFORCE_INSOURCE_BUILD=1
-
-      - name: Build Group Replication plugin
-        run: |
-          cd mysql-build
-          
-          # Build only the group_replication plugin and its dependencies
-          make -j$(nproc) group_replication
-          
-          echo "Build completed"
-          
-          # Find the built plugin
-          find . -name "group_replication.so" -type f
-
-      - name: Package plugin
-        id: package
-        run: |
-          mkdir -p plugin-package
-          
-          # Find and copy the built plugin
-          PLUGIN_PATH=$(find mysql-build -name "group_replication.so" -type f | head -1)
-          if [ -z "$PLUGIN_PATH" ]; then
-            echo "ERROR: group_replication.so not found!"
-            exit 1
-          fi
-          
-          cp "$PLUGIN_PATH" plugin-package/
-          
-          # Create version info
-          echo "MySQL Version: 8.0.44" > plugin-package/VERSION.txt
-          echo "Ubuntu Package: 8.0.44-0ubuntu0.22.04.2" >> plugin-package/VERSION.txt
-          echo "Build Date: $(date -u +%Y-%m-%dT%H:%M:%SZ)" >> plugin-package/VERSION.txt
-          echo "Commit: ${{ github.sha }}" >> plugin-package/VERSION.txt
-          
-          # Create tarball
-          PACKAGE_NAME="mysql-gr-plugin-8.0.44-sgx.tar.gz"
-          tar -czvf "$PACKAGE_NAME" -C plugin-package .
-          
-          echo "package_name=$PACKAGE_NAME" >> $GITHUB_OUTPUT
-          echo "Package created: $PACKAGE_NAME"
-
-      - name: Upload artifact
-        uses: actions/upload-artifact@v4
-        with:
-          name: mysql-gr-plugin
-          path: mysql-gr-plugin-*.tar.gz
-          retention-days: 30
-
-      - name: Create or update release
-        if: github.event_name != 'pull_request'
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: |
-          PACKAGE_NAME="${{ steps.package.outputs.package_name }}"
-          TAG_NAME="mysql-gr-plugin-8.0.44"
-          
-          # Check if release exists
-          if gh release view "$TAG_NAME" > /dev/null 2>&1; then
-            echo "Updating existing release $TAG_NAME..."
-            # Delete old asset if exists
-            gh release delete-asset "$TAG_NAME" "$PACKAGE_NAME" --yes 2>/dev/null || true
-            # Upload new asset
-            gh release upload "$TAG_NAME" "$PACKAGE_NAME" --clobber
-          else
-            echo "Creating new release $TAG_NAME..."
-            gh release create "$TAG_NAME" \
-              --title "MySQL Group Replication Plugin 8.0.44 (SGX/Gramine)" \
-              --notes "MySQL Group Replication plugin patched for SGX/Gramine environments.
-
-This plugin includes a custom gr_getifaddrs() implementation that works in Gramine where the standard getifaddrs() is not available.
-
-## Features
-- Supports GR_LOCAL_IP environment variable (comma-separated list)
-- Auto-detects local IP via UDP socket if env var not set
-- Compatible with MySQL 8.0.44-0ubuntu0.22.04.2
-
-## Usage
-Replace /usr/lib/mysql/plugin/group_replication.so with this version.
-
-Set GR_LOCAL_IP environment variable:
-\`\`\`bash
-export GR_LOCAL_IP=192.168.1.100,203.0.113.50
-\`\`\`" \
-              "$PACKAGE_NAME"
-          fi
-          
-          echo "Release $TAG_NAME updated with $PACKAGE_NAME"
-
-  # Job 6: Update VERSION files in repository
+  # Job 5: Update VERSION files in repository
   update-versions:
     runs-on: ubuntu-latest
     needs: [check-versions, build-gramine, build-openssl, build-node]
@@ -1137,7 +904,7 @@ export GR_LOCAL_IP=192.168.1.100,203.0.113.50
             
             console.log('VERSION files updated successfully');
 
-  # Job 7: Build and push Docker image
+  # Job 6: Build and push Docker image
   build-image:
     runs-on: ubuntu-latest
     needs: [check-versions, build-gramine, build-openssl, build-node]
