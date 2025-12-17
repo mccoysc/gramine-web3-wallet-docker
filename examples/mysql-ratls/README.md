@@ -330,7 +330,8 @@ START GROUP_REPLICATION;
 - **Port 33061**: Used for Group Replication XCom communication. Must be exposed and accessible between nodes.
 - **UUID Format**: The `--gr-group-name` must be a valid UUID (e.g., `aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee`).
 - **Seed Deduplication**: All seeds (self IPs + extra seeds) are deduplicated by ip:port pair.
-- **RA-TLS Security**: Replication uses the same RA-TLS certificate as client connections (X509 required). Security is provided by RA-TLS attestation (SGX quote verification), not PKI certificate chain validation. Each node has its own self-signed cert, so traditional `ssl_verify_server_cert` is OFF.
+- **Mutual TLS with RA-TLS**: Recovery channel uses mutual TLS with certificate verification enabled (`ssl_verify_server_cert=ON`). Each node has its own self-signed RA-TLS certificate with SGX quote embedded. The `libratls-quote-verify.so` library intercepts TLS handshakes and verifies SGX quotes, providing attestation-based trust instead of traditional PKI certificate chain validation.
+- **Recovery User Credentials**: The `app` user (with `REQUIRE X509` and empty password) is used for distributed recovery. Credentials are specified via `START GROUP_REPLICATION USER='app' PASSWORD=''` instead of `CHANGE REPLICATION SOURCE` (which causes error 3139 on the GR-managed recovery channel).
 - **Multi-Primary Mode**: All nodes can accept writes (mutual primary-replica mode).
 - **Plaintext Group Name**: `/var/lib/mysql/gr_group_name.txt` contains the group name for ops visibility.
 
