@@ -1,0 +1,14 @@
+--- a/plugin/group_replication/src/plugin.cc
++++ b/plugin/group_replication/src/plugin.cc
+@@ -2712,7 +2712,9 @@ int build_gcs_parameters(Gcs_interface_parameters &gcs_module_parameters) {
+     gcs_module_parameters.add_parameter("server_cert_file", ssl_cert);
+     gcs_module_parameters.add_parameter("client_key_file", ssl_key);
+     gcs_module_parameters.add_parameter("client_cert_file", ssl_cert);
+-    gcs_module_parameters.add_parameter("ca_file", ssl_ca);
++    // Fix: Only add ca_file if ssl_ca is not empty to avoid SSL initialization failure
++    // when using self-signed certificates without a CA (e.g., RA-TLS in SGX enclaves)
++    if (!ssl_ca.empty())
++      gcs_module_parameters.add_parameter("ca_file", ssl_ca);
+     if (!ssl_capath.empty())
+       gcs_module_parameters.add_parameter("ca_path",
+                                           ssl_capath); /* purecov: inspected */
