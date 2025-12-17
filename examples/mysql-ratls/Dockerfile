@@ -55,6 +55,27 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     libcurl4-openssl-dev \
     && rm -rf /var/lib/apt/lists/*
 
+# Download and install the patched Group Replication plugin for SGX/Gramine
+# This plugin has a custom gr_getifaddrs() implementation that works in Gramine
+# where the standard getifaddrs() is not available due to netlink socket limitations
+ARG MYSQL_GR_PLUGIN_VERSION=8.0.44
+RUN set -eux && \
+    PLUGIN_URL="https://github.com/mccoysc/gramine-web3-wallet-docker/releases/download/mysql-gr-plugin-${MYSQL_GR_PLUGIN_VERSION}/mysql-gr-plugin-${MYSQL_GR_PLUGIN_VERSION}-sgx.tar.gz" && \
+    echo "Downloading patched GR plugin from ${PLUGIN_URL}..." && \
+    mkdir -p /tmp/gr-plugin && \
+    if curl -fsSL "${PLUGIN_URL}" -o /tmp/gr-plugin/plugin.tar.gz; then \
+        echo "Extracting and installing patched GR plugin..." && \
+        tar -xzf /tmp/gr-plugin/plugin.tar.gz -C /tmp/gr-plugin && \
+        cp /tmp/gr-plugin/group_replication.so /usr/lib/mysql/plugin/group_replication.so && \
+        chmod 644 /usr/lib/mysql/plugin/group_replication.so && \
+        echo "Patched GR plugin installed successfully" && \
+        cat /tmp/gr-plugin/VERSION.txt; \
+    else \
+        echo "WARNING: Could not download patched GR plugin. Using default plugin." && \
+        echo "Group Replication may not work in SGX/Gramine environment."; \
+    fi && \
+    rm -rf /tmp/gr-plugin
+
 # Clean up default MySQL data directory (we use encrypted partition at runtime)
 # and remove policy-rc.d since we're done with apt installations
 RUN rm -rf /var/lib/mysql/* && rm -f /usr/sbin/policy-rc.d
