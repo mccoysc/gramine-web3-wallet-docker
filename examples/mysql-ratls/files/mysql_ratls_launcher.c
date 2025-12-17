@@ -2213,6 +2213,35 @@ int main(int argc, char *argv[]) {
         }
         printf("[Launcher] GR local address: %s\n", gr_local_address);
         
+        /* Set GR_LOCAL_IP environment variable for the getifaddrs shim in libratls-quote-verify.so
+         * This allows MySQL Group Replication to work in Gramine/SGX environments where
+         * the real getifaddrs() fails because it uses netlink sockets.
+         * The shim intercepts getifaddrs() and returns fake interface data based on this IP.
+         */
+        char gr_local_ip[MAX_IP_LEN] = {0};
+        if (config.gr_local_address && strlen(config.gr_local_address) > 0) {
+            /* Extract IP from gr_local_address (which may include port) */
+            const char *colon = strchr(config.gr_local_address, ':');
+            if (colon) {
+                size_t ip_len = colon - config.gr_local_address;
+                if (ip_len < sizeof(gr_local_ip)) {
+                    strncpy(gr_local_ip, config.gr_local_address, ip_len);
+                    gr_local_ip[ip_len] = '\0';
+                }
+            } else {
+                strncpy(gr_local_ip, config.gr_local_address, sizeof(gr_local_ip) - 1);
+            }
+        } else if (strlen(lan_ip) > 0) {
+            strncpy(gr_local_ip, lan_ip, sizeof(gr_local_ip) - 1);
+        }
+        
+        if (strlen(gr_local_ip) > 0) {
+            set_env("GR_LOCAL_IP", gr_local_ip, 1);
+            printf("[Launcher] Set GR_LOCAL_IP=%s for getifaddrs shim\n", gr_local_ip);
+        } else {
+            fprintf(stderr, "[Launcher] Warning: Could not determine IP for GR_LOCAL_IP environment variable\n");
+        }
+        
         /* Create GR config file */
         strncpy(gr_config_path, GR_CONFIG_FILE, sizeof(gr_config_path) - 1);
         if (create_gr_config(GR_CONFIG_FILE, server_id,
