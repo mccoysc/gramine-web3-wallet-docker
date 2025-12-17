@@ -821,6 +821,10 @@ static int create_gr_config(const char *config_path, unsigned int server_id,
     offset += snprintf(config_content + offset, sizeof(config_content) - offset,
         "transaction_write_set_extraction=XXHASH64\n");
     
+    /* Event scheduler (required for delayed GR startup via EVENTs) */
+    offset += snprintf(config_content + offset, sizeof(config_content) - offset,
+        "event_scheduler=ON\n");
+    
     /* Group Replication plugin settings */
     offset += snprintf(config_content + offset, sizeof(config_content) - offset,
         "\n# Group Replication Settings\n"
@@ -944,25 +948,61 @@ static int create_gr_init_sql(const char *data_dir, char *init_sql_path, size_t 
      * - Client side: group_replication_recovery_ssl_verify_server_cert=ON in cnf
      * - RA-TLS: libratls-quote-verify.so verifies SGX quotes in certificates */
     
-    /* Start Group Replication with user credentials
-     * Note: START GROUP_REPLICATION does not support prepared statements (error 1295),
-     * so we execute it directly. If GR is already running, MySQL will return an error
-     * but this won't cause mysqld to exit - init-file errors are logged but non-fatal
-     * for most statements. The 'app' user uses X509 certificate authentication. */
+    /* Start Group Replication using delayed EVENTs
+     * 
+     * Problem: Executing START GROUP_REPLICATION directly in init-file causes error
+     * MY-011706 "maximum number of retries exceeded when waiting for the internal
+     * server session state to be operating" because GR's internal session mechanism
+     * is not ready during init-file execution.
+     * 
+     * Solution: Use MySQL EVENT scheduler to delay GR startup until the server is
+     * fully operational. Each EVENT has a single-statement body because init-file
+     * does not support DELIMITER, so we cannot use BEGIN...END blocks.
+     * 
+     * For bootstrap: 3 separate EVENTs with staggered execution times:
+     *   +10s: SET GLOBAL group_replication_bootstrap_group=ON
+     *   +12s: START GROUP_REPLICATION USER='app'
+     *   +14s: SET GLOBAL group_replication_bootstrap_group=OFF
+     * 
+     * For join: 1 EVENT at +10s to start GR
+     * 
+     * ON COMPLETION NOT PRESERVE ensures EVENTs are automatically dropped after execution.
+     * If GR is already running on restart, the START command will fail but mysqld continues. */
     if (is_bootstrap) {
         offset += snprintf(sql_content + offset, sizeof(sql_content) - offset,
-            "-- Bootstrap the group (first node)\n"
-            "-- Note: These commands don't support prepared statements, so we execute directly\n"
-            "-- If GR is already running, errors are logged but mysqld continues\n"
-            "SET GLOBAL group_replication_bootstrap_group=ON;\n"
-            "START GROUP_REPLICATION USER='app';\n"
-            "SET GLOBAL group_replication_bootstrap_group=OFF;\n");
+            "-- Bootstrap the group (first node) using delayed EVENTs\n"
+            "-- EVENTs are used because GR internal session is not ready during init-file execution\n"
+            "-- Each EVENT has single-statement body (init-file doesn't support DELIMITER)\n\n"
+            "-- Drop any existing events from previous failed starts\n"
+            "DROP EVENT IF EXISTS gr_bootstrap_on;\n"
+            "DROP EVENT IF EXISTS gr_start;\n"
+            "DROP EVENT IF EXISTS gr_bootstrap_off;\n\n"
+            "-- EVENT 1: Enable bootstrap mode (+10 seconds)\n"
+            "CREATE EVENT gr_bootstrap_on\n"
+            "  ON SCHEDULE AT CURRENT_TIMESTAMP + INTERVAL 10 SECOND\n"
+            "  ON COMPLETION NOT PRESERVE\n"
+            "  DO SET GLOBAL group_replication_bootstrap_group=ON;\n\n"
+            "-- EVENT 2: Start Group Replication (+12 seconds)\n"
+            "CREATE EVENT gr_start\n"
+            "  ON SCHEDULE AT CURRENT_TIMESTAMP + INTERVAL 12 SECOND\n"
+            "  ON COMPLETION NOT PRESERVE\n"
+            "  DO START GROUP_REPLICATION USER='app';\n\n"
+            "-- EVENT 3: Disable bootstrap mode (+14 seconds)\n"
+            "CREATE EVENT gr_bootstrap_off\n"
+            "  ON SCHEDULE AT CURRENT_TIMESTAMP + INTERVAL 14 SECOND\n"
+            "  ON COMPLETION NOT PRESERVE\n"
+            "  DO SET GLOBAL group_replication_bootstrap_group=OFF;\n");
     } else {
         offset += snprintf(sql_content + offset, sizeof(sql_content) - offset,
-            "-- Join existing group\n"
-            "-- Note: START GROUP_REPLICATION doesn't support prepared statements\n"
-            "-- If GR is already running, the error is logged but mysqld continues\n"
-            "START GROUP_REPLICATION USER='app';\n");
+            "-- Join existing group using delayed EVENT\n"
+            "-- EVENT is used because GR internal session is not ready during init-file execution\n\n"
+            "-- Drop any existing event from previous failed starts\n"
+            "DROP EVENT IF EXISTS gr_start;\n\n"
+            "-- Start Group Replication (+10 seconds after server is ready)\n"
+            "CREATE EVENT gr_start\n"
+            "  ON SCHEDULE AT CURRENT_TIMESTAMP + INTERVAL 10 SECOND\n"
+            "  ON COMPLETION NOT PRESERVE\n"
+            "  DO START GROUP_REPLICATION USER='app';\n");
     }
     
     /* Write to file */
