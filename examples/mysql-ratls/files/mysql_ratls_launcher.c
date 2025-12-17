@@ -838,17 +838,19 @@ static int create_gr_config(const char *config_path, unsigned int server_id,
         "loose-group_replication_enforce_update_everywhere_checks=ON\n");
     
     /* Recovery channel SSL settings (use same certs as main connection) */
-    /* Note: ssl_verify_server_cert=OFF because each node has its own self-signed RA-TLS cert.
-     * PKI-style server cert verification requires a shared CA, which we don't have.
-     * Security is provided by RA-TLS attestation (SGX quote verification) via libratls-quote-verify.so,
-     * not by traditional PKI certificate chain validation. */
+    /* Note: ssl_verify_server_cert=ON enables mutual TLS verification.
+     * Each node has its own self-signed RA-TLS cert with SGX quote embedded.
+     * The libratls-quote-verify.so library (via LD_PRELOAD) intercepts TLS handshakes
+     * and verifies SGX quotes in certificates, providing attestation-based trust
+     * instead of traditional PKI certificate chain validation. */
     offset += snprintf(config_content + offset, sizeof(config_content) - offset,
-        "\n# Recovery Channel SSL Settings\n"
-        "# Note: ssl_verify_server_cert=OFF - RA-TLS attestation provides security, not PKI\n"
+        "\n# Recovery Channel SSL Settings (Mutual TLS with RA-TLS attestation)\n"
+        "# ssl_verify_server_cert=ON enables certificate verification\n"
+        "# RA-TLS library handles SGX quote verification for self-signed certs\n"
         "loose-group_replication_recovery_use_ssl=ON\n"
         "loose-group_replication_recovery_ssl_cert=%s\n"
         "loose-group_replication_recovery_ssl_key=%s\n"
-        "loose-group_replication_recovery_ssl_verify_server_cert=OFF\n",
+        "loose-group_replication_recovery_ssl_verify_server_cert=ON\n",
         cert_path, key_path);
     
     /* IP allowlist - allow all private networks and public IPs */
@@ -895,7 +897,7 @@ static int create_gr_config(const char *config_path, unsigned int server_id,
 
 /* Create Group Replication init SQL (stored in encrypted partition) */
 static int create_gr_init_sql(const char *data_dir, char *init_sql_path, size_t path_size,
-                              int is_bootstrap, const char *cert_path, const char *key_path) {
+                              int is_bootstrap) {
     /* SQL file is stored in data_dir which is in encrypted partition (/app/wallet/mysql-data) */
     snprintf(init_sql_path, path_size, "%s/%s", data_dir, INIT_SQL_FILE);
     
@@ -930,20 +932,19 @@ static int create_gr_init_sql(const char *data_dir, char *init_sql_path, size_t 
     /* Note: Group Replication plugin is loaded via plugin_load_add in mysql-gr.cnf */
     /* No need for INSTALL PLUGIN here - the plugin is already loaded at startup */
     
-    /* Group Replication recovery channel setup */
-    /* CHANGE REPLICATION SOURCE is idempotent - it just updates the configuration */
-    offset += snprintf(sql_content + offset, sizeof(sql_content) - offset,
-        "-- Group Replication Setup\n"
-        "-- Configure recovery channel to use certificate authentication (idempotent)\n"
-        "CHANGE REPLICATION SOURCE TO\n"
-        "  SOURCE_USER='app',\n"
-        "  SOURCE_SSL=1,\n"
-        "  SOURCE_SSL_CERT='%s',\n"
-        "  SOURCE_SSL_KEY='%s'\n"
-        "  FOR CHANNEL 'group_replication_recovery';\n\n",
-        cert_path, key_path);
+    /* Note: Recovery channel SSL settings are configured via group_replication_recovery_ssl_*
+     * options in mysql-gr.cnf. We do NOT use CHANGE REPLICATION SOURCE ... FOR CHANNEL
+     * 'group_replication_recovery' because MySQL 8 does not allow direct modification
+     * of this GR-managed channel (error 3139).
+     * 
+     * Instead, we specify recovery user credentials via START GROUP_REPLICATION USER/PASSWORD.
+     * The 'app' user has REQUIRE X509 with empty password, so we use PASSWORD=''.
+     * Mutual TLS is enforced by:
+     * - Server side: 'app' user with REQUIRE X509
+     * - Client side: group_replication_recovery_ssl_verify_server_cert=ON in cnf
+     * - RA-TLS: libratls-quote-verify.so verifies SGX quotes in certificates */
     
-    /* Start Group Replication (idempotent - check if already running) */
+    /* Start Group Replication with user credentials (idempotent - check if already running) */
     if (is_bootstrap) {
         offset += snprintf(sql_content + offset, sizeof(sql_content) - offset,
             "-- Bootstrap the group (first node) - idempotent\n"
@@ -955,9 +956,10 @@ static int create_gr_init_sql(const char *data_dir, char *init_sql_path, size_t 
             "PREPARE bootstrap_stmt FROM @bootstrap_sql;\n"
             "EXECUTE bootstrap_stmt;\n"
             "DEALLOCATE PREPARE bootstrap_stmt;\n\n"
-            "-- Start GR if not running\n"
+            "-- Start GR with recovery user credentials if not running\n"
+            "-- USER='app' PASSWORD='' matches the X509-required user we created\n"
             "SET @start_sql = IF(@gr_running = 0, \n"
-            "    'START GROUP_REPLICATION', \n"
+            "    'START GROUP_REPLICATION USER=\\'app\\' PASSWORD=\\'\\'', \n"
             "    'SELECT \"Group Replication already started\" AS status');\n"
             "PREPARE start_stmt FROM @start_sql;\n"
             "EXECUTE start_stmt;\n"
@@ -974,8 +976,10 @@ static int create_gr_init_sql(const char *data_dir, char *init_sql_path, size_t 
             "-- Join existing group - idempotent\n"
             "-- Only start GR if not already running\n"
             "SET @gr_running = (SELECT COUNT(*) FROM performance_schema.replication_group_members WHERE member_state = 'ONLINE');\n"
+            "-- Start GR with recovery user credentials\n"
+            "-- USER='app' PASSWORD='' matches the X509-required user we created\n"
             "SET @start_sql = IF(@gr_running = 0, \n"
-            "    'START GROUP_REPLICATION', \n"
+            "    'START GROUP_REPLICATION USER=\\'app\\' PASSWORD=\\'\\'', \n"
             "    'SELECT \"Group Replication already running\" AS status');\n"
             "PREPARE start_stmt FROM @start_sql;\n"
             "EXECUTE start_stmt;\n"
@@ -2198,7 +2202,7 @@ int main(int argc, char *argv[]) {
     if (gr_enabled) {
         /* GR mode: create init SQL with GR setup */
         if (create_gr_init_sql(data_dir, init_sql_path, sizeof(init_sql_path),
-                               config.gr_bootstrap, cert_path, key_path) == 0) {
+                               config.gr_bootstrap) == 0) {
             snprintf(init_file_arg, sizeof(init_file_arg), "--init-file=%s", init_sql_path);
             printf("[Launcher] Will execute GR init SQL on startup: %s\n", init_sql_path);
             init_sql_created = 1;
