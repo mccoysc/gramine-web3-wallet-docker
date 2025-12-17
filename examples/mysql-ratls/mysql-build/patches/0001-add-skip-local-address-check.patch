@@ -1,0 +1,136 @@
+From: Devin AI <devin@cognition.ai>
+Subject: [PATCH 1/4] Add group_replication_skip_local_address_check parameter
+
+This patch adds a new system variable group_replication_skip_local_address_check
+that allows skipping the local IP address validation during Group Replication
+startup. This is necessary for SGX/Gramine environments where getifaddrs()
+fails because netlink sockets are not available.
+
+When enabled, the parameter skips the check in is_parameters_syntax_correct()
+that verifies the local_node address matches one of the host's IP addresses.
+
+---
+ plugin/group_replication/include/plugin_variables.h                    |  3 +++
+ plugin/group_replication/src/plugin.cc                                 | 25 +++++++++++++++++++++++++
+ plugin/group_replication/libmysqlgcs/src/bindings/xcom/gcs_xcom_utils.cc | 18 ++++++++++++++++++
+ plugin/group_replication/libmysqlgcs/src/bindings/xcom/gcs_xcom_utils.h  |  6 ++++++
+ 4 files changed, 52 insertions(+)
+
+diff --git a/plugin/group_replication/include/plugin_variables.h b/plugin/group_replication/include/plugin_variables.h
+index 1234567..abcdefg 100644
+--- a/plugin/group_replication/include/plugin_variables.h
++++ b/plugin/group_replication/include/plugin_variables.h
+@@ -296,6 +296,9 @@ struct plugin_options_variables {
+       nullptr};
+   ulong communication_stack_var;
+ 
++  /* Skip local address check for SGX/Gramine environments */
++  bool skip_local_address_check_var;
++
+   bool allow_single_leader_var{false};
+ };
+ 
+diff --git a/plugin/group_replication/src/plugin.cc b/plugin/group_replication/src/plugin.cc
+index 1234567..abcdefg 100644
+--- a/plugin/group_replication/src/plugin.cc
++++ b/plugin/group_replication/src/plugin.cc
+@@ -2633,6 +2633,12 @@ int build_gcs_parameters(Gcs_interface_parameters &gcs_module_parameters) {
+   gcs_module_parameters.add_parameter("communication_debug_path",
+                                       mysql_real_data_home);
+ 
++  /* Skip local address check parameter for SGX/Gramine environments */
++  const std::string skip_local_address_check_string =
++      ov.skip_local_address_check_var ? "true" : "false";
++  gcs_module_parameters.add_parameter("skip_local_address_check",
++                                      skip_local_address_check_string);
++
+   sv.deinit();
+   return result;
+ }
+@@ -5240,6 +5246,17 @@ static MYSQL_SYSVAR_ENUM(
+     &ov.communication_stack_values_typelib_t /* type lib */
+ );
+ 
++static MYSQL_SYSVAR_BOOL(
++    skip_local_address_check,        /* name */
++    ov.skip_local_address_check_var, /* var */
++    PLUGIN_VAR_OPCMDARG | PLUGIN_VAR_PERSIST_AS_READ_ONLY, /* optional var */
++    "Skip local IP address validation during Group Replication startup. "
++    "This is useful for SGX/Gramine environments where getifaddrs() is not "
++    "available. Default: FALSE.",
++    nullptr, /* check func*/
++    nullptr, /* update func*/
++    false);  /* default*/
++
+ static SYS_VAR *group_replication_system_vars[] = {
+     MYSQL_SYSVAR(group_name),
+     MYSQL_SYSVAR(start_on_boot),
+@@ -5316,6 +5333,7 @@ static SYS_VAR *group_replication_system_vars[] = {
+     MYSQL_SYSVAR(view_change_uuid),
+     MYSQL_SYSVAR(communication_stack),
+     MYSQL_SYSVAR(paxos_single_leader),
++    MYSQL_SYSVAR(skip_local_address_check),
+     nullptr,
+ };
+ 
+diff --git a/plugin/group_replication/libmysqlgcs/src/bindings/xcom/gcs_xcom_utils.h b/plugin/group_replication/libmysqlgcs/src/bindings/xcom/gcs_xcom_utils.h
+index 1234567..abcdefg 100644
+--- a/plugin/group_replication/libmysqlgcs/src/bindings/xcom/gcs_xcom_utils.h
++++ b/plugin/group_replication/libmysqlgcs/src/bindings/xcom/gcs_xcom_utils.h
+@@ -150,4 +150,10 @@ std::string gcs_protocol_to_mysql_version(Gcs_protocol_version protocol);
+  */
+ bool is_valid_protocol(std::string const &protocol_string);
+ 
++/**
++  Check if local address validation should be skipped.
++  @return true if skip_local_address_check parameter is enabled
++*/
++bool should_skip_local_address_check(const Gcs_interface_parameters &params);
++
+ #endif /* GCS_XCOM_UTILS_INCLUDED */
+diff --git a/plugin/group_replication/libmysqlgcs/src/bindings/xcom/gcs_xcom_utils.cc b/plugin/group_replication/libmysqlgcs/src/bindings/xcom/gcs_xcom_utils.cc
+index 1234567..abcdefg 100644
+--- a/plugin/group_replication/libmysqlgcs/src/bindings/xcom/gcs_xcom_utils.cc
++++ b/plugin/group_replication/libmysqlgcs/src/bindings/xcom/gcs_xcom_utils.cc
+@@ -318,6 +318,17 @@ bool is_valid_protocol(std::string const &protocol_string) {
+   return result;
+ }
+ 
++bool should_skip_local_address_check(const Gcs_interface_parameters &params) {
++  const std::string *skip_check_str =
++      params.get_parameter("skip_local_address_check");
++  if (skip_check_str != nullptr) {
++    std::string flag(*skip_check_str);
++    std::transform(flag.begin(), flag.end(), flag.begin(), ::tolower);
++    return (flag.compare("true") == 0 || flag.compare("on") == 0);
++  }
++  return false;
++}
++
+ bool is_parameters_syntax_correct(
+     const Gcs_interface_parameters &interface_params,
+     Network_namespace_manager *netns_manager) {
+@@ -428,6 +439,13 @@ bool is_parameters_syntax_correct(
+ 
+   // local peer address
+   if (local_node_str != nullptr) {
++    /* Check if we should skip local address validation (for SGX/Gramine) */
++    if (should_skip_local_address_check(interface_params)) {
++      MYSQL_GCS_LOG_INFO(
++          "Skipping local address validation (skip_local_address_check=ON)");
++      goto skip_local_address_check;
++    }
++
+     bool matches_local_ip = false;
+     std::map<std::string, int> ips, namespace_ips;
+     std::map<std::string, int>::iterator it;
+@@ -533,6 +551,7 @@ bool is_parameters_syntax_correct(
+       error = GCS_NOK;
+       goto end;
+     }
++skip_local_address_check:;
+   }
+ 
+   // poll spin loops
+-- 
+2.39.0

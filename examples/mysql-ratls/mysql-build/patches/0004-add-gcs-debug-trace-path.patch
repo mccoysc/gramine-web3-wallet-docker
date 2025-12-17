@@ -1,0 +1,96 @@
+From: Devin AI <devin@cognition.ai>
+Subject: [PATCH 4/4] Add group_replication_communication_debug_path parameter
+
+This patch adds a new system variable group_replication_communication_debug_path
+that allows configuring the path where GCS debug trace files are written.
+By default, MySQL writes GCS debug files to the data directory, but in
+SGX/Gramine environments, this may need to be changed to a writable location
+within the encrypted partition.
+
+---
+ plugin/group_replication/include/plugin_variables.h |  3 +++
+ plugin/group_replication/src/plugin.cc              | 35 +++++++++++++++++++++++++++++++++++
+ 2 files changed, 38 insertions(+)
+
+diff --git a/plugin/group_replication/include/plugin_variables.h b/plugin/group_replication/include/plugin_variables.h
+index 1234567..abcdefg 100644
+--- a/plugin/group_replication/include/plugin_variables.h
++++ b/plugin/group_replication/include/plugin_variables.h
+@@ -305,6 +305,9 @@ struct plugin_options_variables {
+   /* Allow self-signed certificates */
+   bool ssl_allow_self_signed_var;
+ 
++  /* Custom path for GCS debug trace files */
++  char *communication_debug_path_var;
++
+   bool allow_single_leader_var{false};
+ };
+ 
+diff --git a/plugin/group_replication/src/plugin.cc b/plugin/group_replication/src/plugin.cc
+index 1234567..abcdefg 100644
+--- a/plugin/group_replication/src/plugin.cc
++++ b/plugin/group_replication/src/plugin.cc
+@@ -2627,10 +2627,18 @@ int build_gcs_parameters(Gcs_interface_parameters &gcs_module_parameters) {
+   gcs_module_parameters.add_parameter("communication_debug_file",
+                                       GCS_DEBUG_TRACE_FILE);
+ 
+-  /*
+-    By default debug files will be created in a path relative to
+-    the data directory.
+-  */
+-  gcs_module_parameters.add_parameter("communication_debug_path",
+-                                      mysql_real_data_home);
++  /* Use custom debug path if configured, otherwise use data directory */
++  if (ov.communication_debug_path_var != nullptr &&
++      strlen(ov.communication_debug_path_var) > 0) {
++    gcs_module_parameters.add_parameter("communication_debug_path",
++                                        ov.communication_debug_path_var);
++    LogPluginErr(INFORMATION_LEVEL, ER_GRP_RPL_COMMUNICATION_DEBUG_LOG_PATH,
++                 ov.communication_debug_path_var);
++  } else {
++    /*
++      By default debug files will be created in a path relative to
++      the data directory.
++    */
++    gcs_module_parameters.add_parameter("communication_debug_path",
++                                        mysql_real_data_home);
++  }
+ 
+   /* Skip local address check parameter for SGX/Gramine environments */
+   const std::string skip_local_address_check_string =
+@@ -5291,6 +5299,25 @@ static MYSQL_SYSVAR_BOOL(
+     nullptr, /* update func*/
+     false);  /* default*/
+ 
++static MYSQL_SYSVAR_STR(
++    communication_debug_path,        /* name */
++    ov.communication_debug_path_var, /* var */
++    /* optional var | malloc string | no set default */
++    PLUGIN_VAR_OPCMDARG | PLUGIN_VAR_MEMALLOC | PLUGIN_VAR_NODEFAULT |
++        PLUGIN_VAR_PERSIST_AS_READ_ONLY,
++    "Path where GCS debug trace files (GCS_DEBUG_TRACE) will be written. "
++    "By default, debug files are written to the MySQL data directory. "
++    "In SGX/Gramine environments, this may need to be set to a writable "
++    "location within the encrypted partition. "
++    "Example: /app/wallet/mysql-data/gcs-debug. "
++    "Note: This is different from communication_debug_options which controls "
++    "what debug information is logged. This parameter only controls where "
++    "the debug files are stored. "
++    "Default: MySQL data directory (mysql_real_data_home).",
++    nullptr, /* check func*/
++    nullptr, /* update func*/
++    nullptr); /* default - use mysql_real_data_home */
++
+ static SYS_VAR *group_replication_system_vars[] = {
+     MYSQL_SYSVAR(group_name),
+     MYSQL_SYSVAR(start_on_boot),
+@@ -5370,6 +5397,7 @@ static SYS_VAR *group_replication_system_vars[] = {
+     MYSQL_SYSVAR(skip_local_address_check),
+     MYSQL_SYSVAR(ssl_require_peer_cert),
+     MYSQL_SYSVAR(ssl_allow_self_signed),
++    MYSQL_SYSVAR(communication_debug_path),
+     nullptr,
+ };
+ 
+-- 
+2.39.0
