@@ -463,9 +463,10 @@ jobs:
             // 5. Determine if image needs rebuild
             // Use version change signals instead of needs_* flags to ensure image rebuilds
             // when dependencies change, even if prebuilt assets exist
-            // Also rebuild when MySQL GR patch changes
-            const needsImage = dockerfileChanged || gramineChanged || opensslChanged || nodeChanged || mysqlGrPatchChanged;
-            console.log(`Docker image needs rebuild: ${needsImage} (dockerfile_changed=${dockerfileChanged}, gramine_changed=${gramineChanged}, openssl_changed=${opensslChanged}, node_changed=${nodeChanged}, mysql_gr_patch_changed=${mysqlGrPatchChanged})`);
+            // Note: MySQL GR patch changes do NOT trigger base image rebuild - they only trigger
+            // the build-mysql-gr-plugin job which publishes to GitHub Releases for mysql-ratls Dockerfile
+            const needsImage = dockerfileChanged || gramineChanged || opensslChanged || nodeChanged;
+            console.log(`Docker image needs rebuild: ${needsImage} (dockerfile_changed=${dockerfileChanged}, gramine_changed=${gramineChanged}, openssl_changed=${opensslChanged}, node_changed=${nodeChanged})`);
             
             // Set outputs
             core.setOutput('needs_gramine', needsGramine.toString());
@@ -489,7 +490,6 @@ jobs:
               if (needsGramine) reasons.push('Gramine updated');
               if (needsOpenSSL) reasons.push('OpenSSL updated');
               if (needsNode) reasons.push('Node.js updated');
-              if (mysqlGrPatchChanged) reasons.push('MySQL GR patch changed');
               imageReason = reasons.join(', ');
             }
             
@@ -1038,12 +1038,12 @@ export GR_LOCAL_IP=192.168.1.100,203.0.113.50
   # Job 6: Update VERSION files in repository
   update-versions:
     runs-on: ubuntu-latest
-    needs: [check-versions, build-gramine, build-openssl, build-node, build-mysql-gr-plugin]
+    needs: [check-versions, build-gramine, build-openssl, build-node]
     if: |
       always() &&
       github.event_name != 'pull_request' &&
       (github.ref == 'refs/heads/main' || github.ref == 'refs/heads/master') &&
-      (needs.build-gramine.result == 'success' || needs.build-openssl.result == 'success' || needs.build-node.result == 'success' || needs.build-mysql-gr-plugin.result == 'success')
+      (needs.build-gramine.result == 'success' || needs.build-openssl.result == 'success' || needs.build-node.result == 'success')
     permissions:
       contents: write
     concurrency:
@@ -1140,14 +1140,13 @@ export GR_LOCAL_IP=192.168.1.100,203.0.113.50
   # Job 7: Build and push Docker image
   build-image:
     runs-on: ubuntu-latest
-    needs: [check-versions, build-gramine, build-openssl, build-node, build-mysql-gr-plugin]
+    needs: [check-versions, build-gramine, build-openssl, build-node]
     if: |
       always() &&
       needs.check-versions.outputs.needs_image == 'true' &&
       (needs.build-gramine.result == 'success' || needs.build-gramine.result == 'skipped') &&
       (needs.build-openssl.result == 'success' || needs.build-openssl.result == 'skipped') &&
-      (needs.build-node.result == 'success' || needs.build-node.result == 'skipped') &&
-      (needs.build-mysql-gr-plugin.result == 'success' || needs.build-mysql-gr-plugin.result == 'skipped')
+      (needs.build-node.result == 'success' || needs.build-node.result == 'skipped')
     permissions:
       contents: read
       packages: write
