@@ -195,7 +195,6 @@ jobs:
             build-essential \
             cmake \
             pkg-config \
-            libssl-dev \
             libncurses5-dev \
             libudev-dev \
             libtirpc-dev \
@@ -218,7 +217,53 @@ jobs:
             wget \
             ca-certificates \
             git \
-            patch
+            patch \
+            curl \
+            jq
+          # Note: libssl-dev removed - we use pre-compiled OpenSSL from repository
+
+      - name: Download pre-compiled OpenSSL
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          # Get OpenSSL version from repository
+          OPENSSL_VERSION=$(cat "${GITHUB_WORKSPACE}/prebuilt/openssl/VERSION" 2>/dev/null || echo "3.2.1")
+          echo "Using OpenSSL version: ${OPENSSL_VERSION}"
+          
+          # Download pre-compiled OpenSSL from GitHub Releases
+          OPENSSL_TAG="prebuilt-openssl-${OPENSSL_VERSION}"
+          OPENSSL_ASSET="openssl-install-${OPENSSL_VERSION}.tar.gz"
+          
+          echo "Downloading OpenSSL from release ${OPENSSL_TAG}..."
+          
+          # Install gh CLI for downloading release assets
+          apt-get install -y gh || {
+            # Fallback: download gh CLI manually
+            curl -fsSL https://cli.github.com/packages/githubcli-archive-keyring.gpg | dd of=/usr/share/keyrings/githubcli-archive-keyring.gpg
+            echo "deb [arch=$(dpkg --print-architecture) signed-by=/usr/share/keyrings/githubcli-archive-keyring.gpg] https://cli.github.com/packages stable main" | tee /etc/apt/sources.list.d/github-cli.list > /dev/null
+            apt-get update && apt-get install -y gh
+          }
+          
+          cd /opt
+          gh release download "${OPENSSL_TAG}" \
+            -R "${{ github.repository }}" \
+            -p "${OPENSSL_ASSET}" \
+            -D . || {
+            echo "Failed to download pre-compiled OpenSSL from release ${OPENSSL_TAG}"
+            echo "Falling back to system OpenSSL..."
+            apt-get install -y libssl-dev
+            echo "OPENSSL_ROOT=" >> $GITHUB_ENV
+            exit 0
+          }
+          
+          # Extract OpenSSL
+          tar -xzf "${OPENSSL_ASSET}"
+          rm -f "${OPENSSL_ASSET}"
+          
+          # Set environment variables for MySQL build
+          echo "OPENSSL_ROOT=/opt/openssl-install" >> $GITHUB_ENV
+          echo "OpenSSL installed to /opt/openssl-install"
+          ls -la /opt/openssl-install/
 
       - name: Download MySQL source
         run: |
@@ -259,10 +304,23 @@ jobs:
           mkdir -p build
           cd build
           
+          # Configure OpenSSL options based on whether pre-compiled OpenSSL is available
+          if [ -n "${OPENSSL_ROOT}" ] && [ -d "${OPENSSL_ROOT}" ]; then
+            echo "Using pre-compiled OpenSSL from ${OPENSSL_ROOT}"
+            SSL_OPTIONS="-DWITH_SSL=${OPENSSL_ROOT} -DOPENSSL_ROOT_DIR=${OPENSSL_ROOT}"
+            
+            # Set library paths for dynamic linking
+            export LD_LIBRARY_PATH="${OPENSSL_ROOT}/lib:${OPENSSL_ROOT}/lib64:${LD_LIBRARY_PATH}"
+            export PKG_CONFIG_PATH="${OPENSSL_ROOT}/lib/pkgconfig:${OPENSSL_ROOT}/lib64/pkgconfig:${PKG_CONFIG_PATH}"
+          else
+            echo "Using system OpenSSL"
+            SSL_OPTIONS="-DWITH_SSL=system"
+          fi
+          
           cmake .. \
             -DCMAKE_INSTALL_PREFIX=/opt/mysql-install \
             -DCMAKE_BUILD_TYPE=RelWithDebInfo \
-            -DWITH_SSL=system \
+            ${SSL_OPTIONS} \
             -DWITH_ZLIB=bundled \
             -DWITH_LZ4=bundled \
             -DWITH_ZSTD=bundled \

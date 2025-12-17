@@ -13,21 +13,19 @@ within the encrypted partition.
  2 files changed, 38 insertions(+)
 
 diff --git a/plugin/group_replication/include/plugin_variables.h b/plugin/group_replication/include/plugin_variables.h
-index 1234567..abcdefg 100644
 --- a/plugin/group_replication/include/plugin_variables.h
 +++ b/plugin/group_replication/include/plugin_variables.h
-@@ -305,6 +305,9 @@ struct plugin_options_variables {
+@@ -304,6 +304,9 @@ struct plugin_options_variables {
    /* Allow self-signed certificates */
-   bool ssl_allow_self_signed_var;
- 
+   bool ssl_allow_self_signed_var{false};
+
 +  /* Custom path for GCS debug trace files */
-+  char *communication_debug_path_var;
++  char *communication_debug_path_var{nullptr};
 +
    bool allow_single_leader_var{false};
- };
- 
+};
+
 diff --git a/plugin/group_replication/src/plugin.cc b/plugin/group_replication/src/plugin.cc
-index 1234567..abcdefg 100644
 --- a/plugin/group_replication/src/plugin.cc
 +++ b/plugin/group_replication/src/plugin.cc
 @@ -2627,10 +2627,18 @@ int build_gcs_parameters(Gcs_interface_parameters &gcs_module_parameters) {

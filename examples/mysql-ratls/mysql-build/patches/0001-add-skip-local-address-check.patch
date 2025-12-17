@@ -10,28 +10,26 @@ When enabled, the parameter skips the check in is_parameters_syntax_correct()
 that verifies the local_node address matches one of the host's IP addresses.
 
 ---
- plugin/group_replication/include/plugin_variables.h                    |  3 +++
- plugin/group_replication/src/plugin.cc                                 | 25 +++++++++++++++++++++++++
+ plugin/group_replication/include/plugin_variables.h                      |  3 +++
+ plugin/group_replication/src/plugin.cc                                   | 25 +++++++++++++++++++++++++
  plugin/group_replication/libmysqlgcs/src/bindings/xcom/gcs_xcom_utils.cc | 18 ++++++++++++++++++
  plugin/group_replication/libmysqlgcs/src/bindings/xcom/gcs_xcom_utils.h  |  6 ++++++
  4 files changed, 52 insertions(+)
 
 diff --git a/plugin/group_replication/include/plugin_variables.h b/plugin/group_replication/include/plugin_variables.h
-index 1234567..abcdefg 100644
 --- a/plugin/group_replication/include/plugin_variables.h
 +++ b/plugin/group_replication/include/plugin_variables.h
-@@ -296,6 +296,9 @@ struct plugin_options_variables {
+@@ -295,6 +295,9 @@ struct plugin_options_variables {
        nullptr};
    ulong communication_stack_var;
  
 +  /* Skip local address check for SGX/Gramine environments */
-+  bool skip_local_address_check_var;
++  bool skip_local_address_check_var{false};
 +
    bool allow_single_leader_var{false};
  };
  
 diff --git a/plugin/group_replication/src/plugin.cc b/plugin/group_replication/src/plugin.cc
-index 1234567..abcdefg 100644
 --- a/plugin/group_replication/src/plugin.cc
 +++ b/plugin/group_replication/src/plugin.cc
 @@ -2633,6 +2633,12 @@ int build_gcs_parameters(Gcs_interface_parameters &gcs_module_parameters) {
@@ -74,22 +72,18 @@ index 1234567..abcdefg 100644
  };
  
 diff --git a/plugin/group_replication/libmysqlgcs/src/bindings/xcom/gcs_xcom_utils.h b/plugin/group_replication/libmysqlgcs/src/bindings/xcom/gcs_xcom_utils.h
-index 1234567..abcdefg 100644
 --- a/plugin/group_replication/libmysqlgcs/src/bindings/xcom/gcs_xcom_utils.h
 +++ b/plugin/group_replication/libmysqlgcs/src/bindings/xcom/gcs_xcom_utils.h
-@@ -150,4 +150,10 @@ std::string gcs_protocol_to_mysql_version(Gcs_protocol_version protocol);
-  */
- bool is_valid_protocol(std::string const &protocol_string);
- 
+@@ -146,4 +146,10 @@ bool is_parameters_syntax_correct(const Gcs_interface_parameters &params,
+                                   Network_namespace_manager *netns_manager);
++
 +/**
 +  Check if local address validation should be skipped.
 +  @return true if skip_local_address_check parameter is enabled
 +*/
 +bool should_skip_local_address_check(const Gcs_interface_parameters &params);
-+
  #endif /* GCS_XCOM_UTILS_INCLUDED */
 diff --git a/plugin/group_replication/libmysqlgcs/src/bindings/xcom/gcs_xcom_utils.cc b/plugin/group_replication/libmysqlgcs/src/bindings/xcom/gcs_xcom_utils.cc
-index 1234567..abcdefg 100644
 --- a/plugin/group_replication/libmysqlgcs/src/bindings/xcom/gcs_xcom_utils.cc
 +++ b/plugin/group_replication/libmysqlgcs/src/bindings/xcom/gcs_xcom_utils.cc
 @@ -318,6 +318,17 @@ bool is_valid_protocol(std::string const &protocol_string) {

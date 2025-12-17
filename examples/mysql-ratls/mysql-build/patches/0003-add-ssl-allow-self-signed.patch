@@ -19,21 +19,19 @@ there is no traditional CA hierarchy.
  5 files changed, 101 insertions(+)
 
 diff --git a/plugin/group_replication/include/plugin_variables.h b/plugin/group_replication/include/plugin_variables.h
-index 1234567..abcdefg 100644
 --- a/plugin/group_replication/include/plugin_variables.h
 +++ b/plugin/group_replication/include/plugin_variables.h
-@@ -302,6 +302,9 @@ struct plugin_options_variables {
+@@ -301,6 +301,9 @@ struct plugin_options_variables {
    /* Require peer certificate for strict mutual TLS */
-   bool ssl_require_peer_cert_var;
+   bool ssl_require_peer_cert_var{false};
  
 +  /* Allow self-signed certificates */
-+  bool ssl_allow_self_signed_var;
++  bool ssl_allow_self_signed_var{false};
 +
    bool allow_single_leader_var{false};
  };
  
 diff --git a/plugin/group_replication/src/plugin.cc b/plugin/group_replication/src/plugin.cc
-index 1234567..abcdefg 100644
 --- a/plugin/group_replication/src/plugin.cc
 +++ b/plugin/group_replication/src/plugin.cc
 @@ -2645,6 +2645,12 @@ int build_gcs_parameters(Gcs_interface_parameters &gcs_module_parameters) {
@@ -76,63 +74,53 @@ index 1234567..abcdefg 100644
  };
  
 diff --git a/plugin/group_replication/libmysqlgcs/src/bindings/xcom/xcom/network/network_provider_manager.h b/plugin/group_replication/libmysqlgcs/src/bindings/xcom/xcom/network/network_provider_manager.h
-index 1234567..abcdefg 100644
 --- a/plugin/group_replication/libmysqlgcs/src/bindings/xcom/xcom/network/network_provider_manager.h
 +++ b/plugin/group_replication/libmysqlgcs/src/bindings/xcom/xcom/network/network_provider_manager.h
-@@ -153,6 +153,9 @@ class Network_provider_manager {
-   void xcom_set_ssl_require_peer_cert(bool require) { m_ssl_require_peer_cert = require; }
+@@ -366,6 +366,12 @@ class Network_provider_manager : public Network_provider_manager_interface {
+   }
    bool xcom_get_ssl_require_peer_cert() { return m_ssl_require_peer_cert; }
  
-+  void xcom_set_ssl_allow_self_signed(bool allow) { m_ssl_allow_self_signed = allow; }
++  /* SSL allow self-signed certificates getter/setter */
++  void xcom_set_ssl_allow_self_signed(bool allow) {
++    m_ssl_allow_self_signed = allow;
++  }
 +  bool xcom_get_ssl_allow_self_signed() { return m_ssl_allow_self_signed; }
 +
-  private:
-   Network_provider_manager()
+   /**
+    * @brief Cleans up SSL context.
+    */
+@@ -379,6 +385,7 @@ class Network_provider_manager : public Network_provider_manager_interface {
        : m_running_protocol(XCOM_PROTOCOL),
-@@ -163,6 +166,7 @@ class Network_provider_manager {
-         m_ssl_fips_mode(0),
-         m_network_namespace_manager(nullptr),
-         m_ssl_require_peer_cert(false),
+         m_incoming_connections_protocol(XCOM_PROTOCOL),
+         m_ssl_mode(SSL_DISABLED),
 +        m_ssl_allow_self_signed(false),
-         m_initialized(false) {}
+         m_ssl_require_peer_cert(false),
+         m_ssl_fips_mode(FIPS_MODE_OFF) {}
+   virtual ~Network_provider_manager() override { m_network_providers.clear(); }
+@@ -395,6 +402,7 @@ class Network_provider_manager : public Network_provider_manager_interface {
  
-   enum_transport_protocol m_running_protocol;
-@@ -173,6 +177,7 @@ class Network_provider_manager {
+   int m_ssl_mode;
    int m_ssl_fips_mode;
-   Network_namespace_manager *m_network_namespace_manager;
-   bool m_ssl_require_peer_cert;
 +  bool m_ssl_allow_self_signed;
-   bool m_initialized;
- };
+   bool m_ssl_require_peer_cert;
+ 
+   Network_configuration_parameters m_active_provider_configuration;
  
 diff --git a/plugin/group_replication/libmysqlgcs/src/bindings/xcom/xcom/network/network_provider_manager.cc b/plugin/group_replication/libmysqlgcs/src/bindings/xcom/xcom/network/network_provider_manager.cc
-index 1234567..abcdefg 100644
 --- a/plugin/group_replication/libmysqlgcs/src/bindings/xcom/xcom/network/network_provider_manager.cc
 +++ b/plugin/group_replication/libmysqlgcs/src/bindings/xcom/xcom/network/network_provider_manager.cc
-@@ -115,6 +115,21 @@ bool Network_provider_manager::configure_active_provider_ssl(
-     }
-   }
+@@ -203,6 +203,9 @@ bool Network_provider_manager::configure_active_provider_secure_connections(
+   /* Set ssl_require_peer_cert flag */
+   m_ssl_require_peer_cert = params.ssl_params.ssl_require_peer_cert;
  
-+  /* Configure SSL allow self-signed */
-+  {
-+    const std::string *ssl_allow_self_signed_str =
-+        params.get_parameter("ssl_allow_self_signed");
-+    if (ssl_allow_self_signed_str != nullptr) {
-+      std::string flag(*ssl_allow_self_signed_str);
-+      std::transform(flag.begin(), flag.end(), flag.begin(), ::tolower);
-+      bool allow_self_signed =
-+          (flag.compare("true") == 0 || flag.compare("on") == 0);
-+      xcom_set_ssl_allow_self_signed(allow_self_signed);
-+      G_DEBUG("SSL allow self-signed set to: %s",
-+              allow_self_signed ? "true" : "false");
-+    }
-+  }
++  /* Set ssl_allow_self_signed flag */
++  m_ssl_allow_self_signed = params.ssl_params.ssl_allow_self_signed;
 +
-   return false;
- }
+   bool config_ssl_ok = true;
+   auto net_provider = get_active_provider();
+   if (net_provider && is_xcom_using_ssl()) {
  
 diff --git a/plugin/group_replication/libmysqlgcs/src/bindings/xcom/xcom/network/xcom_network_provider_ssl_native_lib.cc b/plugin/group_replication/libmysqlgcs/src/bindings/xcom/xcom/network/xcom_network_provider_ssl_native_lib.cc
-index 1234567..abcdefg 100644
 --- a/plugin/group_replication/libmysqlgcs/src/bindings/xcom/xcom/network/xcom_network_provider_ssl_native_lib.cc
 +++ b/plugin/group_replication/libmysqlgcs/src/bindings/xcom/xcom/network/xcom_network_provider_ssl_native_lib.cc
 @@ -159,6 +159,43 @@ static DH *get_dh2048(void) {

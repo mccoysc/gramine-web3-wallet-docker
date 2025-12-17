@@ -13,26 +13,24 @@ their enclave identity through certificate-based attestation.
  plugin/group_replication/include/plugin_variables.h                                              |  3 +++
  plugin/group_replication/src/plugin.cc                                                           | 25 +++++++++++++++++++++++++
  plugin/group_replication/libmysqlgcs/src/bindings/xcom/xcom/network/xcom_network_provider_ssl_native_lib.cc | 35 +++++++++++++++++++++++++++++++++++
- plugin/group_replication/libmysqlgcs/src/bindings/xcom/xcom/network/network_provider_manager.h   |  3 +++
+ plugin/group_replication/libmysqlgcs/src/bindings/xcom/xcom/network/network_provider_manager.h   | 12 ++++++++++++
  plugin/group_replication/libmysqlgcs/src/bindings/xcom/xcom/network/network_provider_manager.cc  | 15 +++++++++++++++
- 5 files changed, 81 insertions(+)
+ 5 files changed, 90 insertions(+)
 
 diff --git a/plugin/group_replication/include/plugin_variables.h b/plugin/group_replication/include/plugin_variables.h
-index 1234567..abcdefg 100644
 --- a/plugin/group_replication/include/plugin_variables.h
 +++ b/plugin/group_replication/include/plugin_variables.h
-@@ -299,6 +299,9 @@ struct plugin_options_variables {
+@@ -298,6 +298,9 @@ struct plugin_options_variables {
    /* Skip local address check for SGX/Gramine environments */
-   bool skip_local_address_check_var;
+   bool skip_local_address_check_var{false};
  
 +  /* Require peer certificate for strict mutual TLS */
-+  bool ssl_require_peer_cert_var;
++  bool ssl_require_peer_cert_var{false};
 +
    bool allow_single_leader_var{false};
  };
  
 diff --git a/plugin/group_replication/src/plugin.cc b/plugin/group_replication/src/plugin.cc
-index 1234567..abcdefg 100644
 --- a/plugin/group_replication/src/plugin.cc
 +++ b/plugin/group_replication/src/plugin.cc
 @@ -2639,6 +2639,12 @@ int build_gcs_parameters(Gcs_interface_parameters &gcs_module_parameters) {
@@ -75,73 +73,81 @@ index 1234567..abcdefg 100644
  };
  
 diff --git a/plugin/group_replication/libmysqlgcs/src/bindings/xcom/xcom/network/network_provider_manager.h b/plugin/group_replication/libmysqlgcs/src/bindings/xcom/xcom/network/network_provider_manager.h
-index 1234567..abcdefg 100644
 --- a/plugin/group_replication/libmysqlgcs/src/bindings/xcom/xcom/network/network_provider_manager.h
 +++ b/plugin/group_replication/libmysqlgcs/src/bindings/xcom/xcom/network/network_provider_manager.h
-@@ -150,6 +150,9 @@ class Network_provider_manager {
-   void xcom_set_ssl_fips_mode(int mode) { m_ssl_fips_mode = mode; }
-   int xcom_get_ssl_fips_mode() { return m_ssl_fips_mode; }
+@@ -360,6 +360,12 @@ class Network_provider_manager : public Network_provider_manager_interface {
+   */
+   int xcom_get_ssl_fips_mode() override;
  
-+  void xcom_set_ssl_require_peer_cert(bool require) { m_ssl_require_peer_cert = require; }
++  /* SSL require peer certificate getter/setter for strict mutual TLS */
++  void xcom_set_ssl_require_peer_cert(bool require) {
++    m_ssl_require_peer_cert = require;
++  }
 +  bool xcom_get_ssl_require_peer_cert() { return m_ssl_require_peer_cert; }
 +
-  private:
-   Network_provider_manager()
+   /**
+    * @brief Cleans up SSL context.
+    */
+@@ -373,6 +379,7 @@ class Network_provider_manager : public Network_provider_manager_interface {
        : m_running_protocol(XCOM_PROTOCOL),
-@@ -159,6 +162,7 @@ class Network_provider_manager {
+         m_incoming_connections_protocol(XCOM_PROTOCOL),
          m_ssl_mode(SSL_DISABLED),
-         m_ssl_fips_mode(0),
-         m_network_namespace_manager(nullptr),
 +        m_ssl_require_peer_cert(false),
-         m_initialized(false) {}
+         m_ssl_fips_mode(FIPS_MODE_OFF) {}
+   virtual ~Network_provider_manager() override { m_network_providers.clear(); }
  
-   enum_transport_protocol m_running_protocol;
-@@ -168,6 +172,7 @@ class Network_provider_manager {
+@@ -388,6 +395,7 @@ class Network_provider_manager : public Network_provider_manager_interface {
+ 
    int m_ssl_mode;
    int m_ssl_fips_mode;
-   Network_namespace_manager *m_network_namespace_manager;
 +  bool m_ssl_require_peer_cert;
-   bool m_initialized;
- };
  
+   Network_configuration_parameters m_active_provider_configuration;
+   Network_configuration_parameters
 diff --git a/plugin/group_replication/libmysqlgcs/src/bindings/xcom/xcom/network/network_provider_manager.cc b/plugin/group_replication/libmysqlgcs/src/bindings/xcom/xcom/network/network_provider_manager.cc
-index 1234567..abcdefg 100644
 --- a/plugin/group_replication/libmysqlgcs/src/bindings/xcom/xcom/network/network_provider_manager.cc
 +++ b/plugin/group_replication/libmysqlgcs/src/bindings/xcom/xcom/network/network_provider_manager.cc
-@@ -100,6 +100,21 @@ bool Network_provider_manager::configure_active_provider_ssl(
-     }
-   }
- 
-+  /* Configure SSL require peer cert */
-+  {
-+    const std::string *ssl_require_peer_cert_str =
-+        params.get_parameter("ssl_require_peer_cert");
-+    if (ssl_require_peer_cert_str != nullptr) {
-+      std::string flag(*ssl_require_peer_cert_str);
-+      std::transform(flag.begin(), flag.end(), flag.begin(), ::tolower);
-+      bool require_peer_cert =
-+          (flag.compare("true") == 0 || flag.compare("on") == 0);
-+      xcom_set_ssl_require_peer_cert(require_peer_cert);
-+      G_DEBUG("SSL require peer cert set to: %s",
-+              require_peer_cert ? "true" : "false");
-+    }
-+  }
-+
-   return false;
+@@ -167,6 +167,21 @@ bool Network_provider_manager::configure_active_provider(
+   return config_ok;
  }
  
++/* Parse ssl_require_peer_cert from GCS parameters */
++static bool parse_ssl_require_peer_cert(
++    const Gcs_interface_parameters &params) {
++  const std::string *ssl_require_peer_cert_str =
++      params.get_parameter("ssl_require_peer_cert");
++  if (ssl_require_peer_cert_str != nullptr) {
++    std::string flag(*ssl_require_peer_cert_str);
++    std::transform(flag.begin(), flag.end(), flag.begin(), ::tolower);
++    if (flag.compare("true") == 0 || flag.compare("on") == 0) {
++      return true;
++    }
++  }
++  return false;
++}
++
+ bool Network_provider_manager::configure_active_provider_secure_connections(
+     Network_configuration_parameters &params) {
+   m_active_provider_secure_connections_configuration.ssl_params.ssl_mode =
+@@ -185,6 +200,9 @@ bool Network_provider_manager::configure_active_provider_secure_connections(
+   DEEP_COPY_NET_PARAMS_FIELD(tls_params.tls_version);
+   DEEP_COPY_NET_PARAMS_FIELD(tls_params.tls_ciphersuites);
+ 
++  /* Set ssl_require_peer_cert flag */
++  m_ssl_require_peer_cert = params.ssl_params.ssl_require_peer_cert;
++
+   bool config_ssl_ok = true;
+   auto net_provider = get_active_provider();
+   if (net_provider && is_xcom_using_ssl()) {
 diff --git a/plugin/group_replication/libmysqlgcs/src/bindings/xcom/xcom/network/xcom_network_provider_ssl_native_lib.cc b/plugin/group_replication/libmysqlgcs/src/bindings/xcom/xcom/network/xcom_network_provider_ssl_native_lib.cc
-index 1234567..abcdefg 100644
 --- a/plugin/group_replication/libmysqlgcs/src/bindings/xcom/xcom/network/xcom_network_provider_ssl_native_lib.cc
 +++ b/plugin/group_replication/libmysqlgcs/src/bindings/xcom/xcom/network/xcom_network_provider_ssl_native_lib.cc
-@@ -508,9 +508,26 @@ int Xcom_network_provider_ssl_library::xcom_init_ssl(
-   if (init_ssl(server_key_file, server_cert_file, ca_file, ca_path, crl_file,
+@@ -510,8 +510,22 @@ int Xcom_network_provider_ssl_library::xcom_init_ssl(
                 crl_path, cipher, tls_version, tls_ciphersuites, server_ctx))
      goto error;
  
 -  if (Network_provider_manager::getInstance().xcom_get_ssl_mode() !=
 -      SSL_REQUIRED)
--    verify_server = SSL_VERIFY_PEER | SSL_VERIFY_CLIENT_ONCE;
 +  /* Configure server SSL verification mode */
 +  {
 +    int ssl_mode = Network_provider_manager::getInstance().xcom_get_ssl_mode();
@@ -157,21 +163,17 @@ index 1234567..abcdefg 100644
 +      verify_server |= SSL_VERIFY_PEER | SSL_VERIFY_FAIL_IF_NO_PEER_CERT;
 +      G_DEBUG("Server SSL: Adding SSL_VERIFY_FAIL_IF_NO_PEER_CERT flag");
 +    }
-+
-+    G_DEBUG("Server SSL verification mode: 0x%x (require_peer_cert=%s)",
-+            verify_server, require_peer_cert ? "true" : "false");
 +  }
    SSL_CTX_set_verify(server_ctx, verify_server, nullptr);
  
-   G_DEBUG("Configuring SSL for the client")
-@@ -525,9 +542,24 @@ int Xcom_network_provider_ssl_library::xcom_init_ssl(
+@@ -527,9 +541,22 @@ int Xcom_network_provider_ssl_library::xcom_init_ssl(
    if (init_ssl(client_key_file, client_cert_file, ca_file, ca_path, crl_file,
                 crl_path, cipher, tls_version, tls_ciphersuites, client_ctx))
      goto error;
- 
+-
 -  if (Network_provider_manager::getInstance().xcom_get_ssl_mode() !=
 -      SSL_REQUIRED) {
--    verify_client = SSL_VERIFY_PEER;
++
 +  /* Configure client SSL verification mode */
 +  {
 +    int ssl_mode = Network_provider_manager::getInstance().xcom_get_ssl_mode();
@@ -187,11 +189,7 @@ index 1234567..abcdefg 100644
 +      verify_client |= SSL_VERIFY_PEER | SSL_VERIFY_FAIL_IF_NO_PEER_CERT;
 +      G_DEBUG("Client SSL: Adding SSL_VERIFY_FAIL_IF_NO_PEER_CERT flag");
 +    }
-+
-+    G_DEBUG("Client SSL verification mode: 0x%x (require_peer_cert=%s)",
-+            verify_client, require_peer_cert ? "true" : "false");
-   }
++  }
    SSL_CTX_set_verify(client_ctx, verify_client, nullptr);
- 
 -- 
 2.39.0
