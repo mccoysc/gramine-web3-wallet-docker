@@ -100,33 +100,41 @@ jobs:
               
               echo "=== Installing build dependencies ==="
               apt-get update
-              apt-get install -y \
-                build-essential \
-                cmake \
-                libssl-dev \
-                libncurses5-dev \
-                libtirpc-dev \
-                bison \
-                pkg-config \
-                libudev-dev \
-                libldap2-dev \
-                libsasl2-dev \
-                libevent-dev \
-                libcurl4-openssl-dev \
-                liblz4-dev \
-                zlib1g-dev \
-                libzstd-dev \
-                libprotobuf-dev \
-                libprotoc-dev \
-                protobuf-compiler \
-                rapidjson-dev \
-                dpkg-dev \
-                wget
               
-              echo "=== Downloading MySQL source ==="
-              # Enable source repositories
+              # Enable source repositories for build-dep
               sed -i "s/^# deb-src/deb-src/" /etc/apt/sources.list
               apt-get update
+              
+              # Install MySQL build dependencies using Ubuntu authoritative set
+              # This ensures we have ALL required dependencies
+              DEBIAN_FRONTEND=noninteractive apt-get build-dep -y mysql-server-8.0 || {
+                echo "build-dep failed, installing manual dependency list..."
+                apt-get install -y \
+                  build-essential \
+                  cmake \
+                  libssl-dev \
+                  libncurses5-dev \
+                  libtirpc-dev \
+                  bison \
+                  pkg-config \
+                  libudev-dev \
+                  libldap2-dev \
+                  libsasl2-dev \
+                  libevent-dev \
+                  libcurl4-openssl-dev \
+                  liblz4-dev \
+                  zlib1g-dev \
+                  libzstd-dev \
+                  libprotobuf-dev \
+                  libprotoc-dev \
+                  protobuf-compiler \
+                  rapidjson-dev
+              }
+              
+              # Ensure essential tools are installed
+              apt-get install -y dpkg-dev wget
+              
+              echo "=== Downloading MySQL source ==="
               
               mkdir -p /tmp/mysql-source
               cd /tmp/mysql-source
@@ -173,7 +181,7 @@ jobs:
                 -DWITH_LZ4=system \
                 -DWITH_ZSTD=system \
                 -DWITH_PROTOBUF=system \
-                -DWITH_RAPIDJSON=system \
+                -DWITH_RAPIDJSON=bundled \
                 -DWITH_BOOST=/tmp/boost \
                 -DDOWNLOAD_BOOST=1 \
                 -DWITH_UNIT_TESTS=OFF \
