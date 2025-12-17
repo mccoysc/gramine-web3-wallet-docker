@@ -1,0 +1,248 @@
+name: Build MySQL GR Plugin
+
+on:
+  push:
+    branches: [main, master]
+    paths:
+      - 'examples/mysql-ratls/files/mysql-gr-patch/**'
+  pull_request:
+    branches: [main, master]
+    paths:
+      - 'examples/mysql-ratls/files/mysql-gr-patch/**'
+  workflow_dispatch:
+    inputs:
+      force_rebuild:
+        description: 'Force rebuild even if plugin exists'
+        required: false
+        default: 'false'
+        type: choice
+        options:
+          - 'true'
+          - 'false'
+
+concurrency:
+  group: ${{ github.repository }}-mysql-gr-plugin-${{ github.ref }}
+  cancel-in-progress: false
+
+env:
+  MYSQL_VERSION: '8.0.44'
+  MYSQL_UBUNTU_VERSION: '8.0.44-0ubuntu0.22.04.2'
+  PLUGIN_TAG: 'mysql-gr-plugin-8.0.44'
+  PLUGIN_ASSET: 'mysql-gr-plugin-8.0.44-sgx.tar.gz'
+
+jobs:
+  check-plugin:
+    runs-on: ubuntu-latest
+    outputs:
+      needs_build: ${{ steps.check.outputs.needs_build }}
+    steps:
+      - name: Check if plugin exists in releases
+        id: check
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          FORCE_REBUILD="${{ github.event.inputs.force_rebuild }}"
+          
+          if [ "$FORCE_REBUILD" = "true" ]; then
+            echo "Force rebuild requested"
+            echo "needs_build=true" >> $GITHUB_OUTPUT
+            exit 0
+          fi
+          
+          # Check if release asset exists
+          if gh release view "${{ env.PLUGIN_TAG }}" --repo "${{ github.repository }}" > /dev/null 2>&1; then
+            ASSET_EXISTS=$(gh release view "${{ env.PLUGIN_TAG }}" --repo "${{ github.repository }}" --json assets -q '.assets[].name' | grep -c "${{ env.PLUGIN_ASSET }}" || true)
+            if [ "$ASSET_EXISTS" -gt 0 ]; then
+              echo "Plugin already exists in releases"
+              echo "needs_build=false" >> $GITHUB_OUTPUT
+            else
+              echo "Release exists but asset not found"
+              echo "needs_build=true" >> $GITHUB_OUTPUT
+            fi
+          else
+            echo "Release does not exist"
+            echo "needs_build=true" >> $GITHUB_OUTPUT
+          fi
+
+  build-plugin:
+    runs-on: ubuntu-22.04
+    needs: check-plugin
+    if: needs.check-plugin.outputs.needs_build == 'true'
+    permissions:
+      contents: write
+    
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Install build dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            build-essential \
+            cmake \
+            libssl-dev \
+            libncurses5-dev \
+            libtirpc-dev \
+            bison \
+            pkg-config \
+            libudev-dev \
+            libldap2-dev \
+            libsasl2-dev \
+            libevent-dev \
+            libcurl4-openssl-dev \
+            liblz4-dev \
+            zlib1g-dev \
+            libzstd-dev \
+            libprotobuf-dev \
+            protobuf-compiler \
+            rapidjson-dev \
+            dpkg-dev
+
+      - name: Download MySQL source
+        run: |
+          echo "Downloading MySQL ${{ env.MYSQL_VERSION }} source..."
+          
+          # Enable source repositories
+          sudo sed -i 's/^# deb-src/deb-src/' /etc/apt/sources.list
+          sudo apt-get update
+          
+          # Download MySQL source from Ubuntu package
+          mkdir -p mysql-source
+          cd mysql-source
+          
+          # Get the source package
+          apt-get source mysql-server-8.0=${{ env.MYSQL_UBUNTU_VERSION }} 2>/dev/null || {
+            # Fallback: download from MySQL archives
+            echo "apt-get source failed, downloading from MySQL archives..."
+            wget -q "https://downloads.mysql.com/archives/get/p/23/file/mysql-${{ env.MYSQL_VERSION }}.tar.gz"
+            tar xzf mysql-${{ env.MYSQL_VERSION }}.tar.gz
+            mv mysql-${{ env.MYSQL_VERSION }} mysql-8.0-${{ env.MYSQL_VERSION }}
+          }
+          
+          echo "MySQL source downloaded"
+          ls -la
+
+      - name: Apply patches
+        run: |
+          MYSQL_DIR=$(find mysql-source -maxdepth 1 -type d -name "mysql-8.0*" | head -1)
+          echo "MySQL source directory: $MYSQL_DIR"
+          
+          PATCH_DIR="${{ github.workspace }}/examples/mysql-ratls/files/mysql-gr-patch"
+          
+          # Copy gr_getifaddrs files to xcom directory
+          XCOM_DIR="$MYSQL_DIR/plugin/group_replication/libmysqlgcs/src/bindings/xcom/xcom"
+          cp "$PATCH_DIR/gr_getifaddrs.h" "$XCOM_DIR/"
+          cp "$PATCH_DIR/gr_getifaddrs.cc" "$XCOM_DIR/"
+          cp "$PATCH_DIR/sock_probe_ix.h" "$XCOM_DIR/"
+          
+          # Copy recovery_endpoints.cc
+          cp "$PATCH_DIR/recovery_endpoints.cc" "$MYSQL_DIR/plugin/group_replication/src/plugin_variables/"
+          
+          # Copy CMakeLists.txt for libmysqlgcs
+          cp "$PATCH_DIR/CMakeLists.txt" "$MYSQL_DIR/plugin/group_replication/libmysqlgcs/"
+          
+          echo "Patches applied successfully"
+
+      - name: Configure MySQL build
+        run: |
+          MYSQL_DIR=$(find mysql-source -maxdepth 1 -type d -name "mysql-8.0*" | head -1)
+          
+          mkdir -p mysql-build
+          cd mysql-build
+          
+          cmake "../$MYSQL_DIR" \
+            -DCMAKE_BUILD_TYPE=Release \
+            -DWITH_SSL=system \
+            -DWITH_ZLIB=system \
+            -DWITH_LZ4=system \
+            -DWITH_ZSTD=system \
+            -DWITH_PROTOBUF=system \
+            -DWITH_RAPIDJSON=system \
+            -DWITH_BOOST=../boost \
+            -DDOWNLOAD_BOOST=1 \
+            -DWITH_UNIT_TESTS=OFF \
+            -DWITH_DEBUG=OFF \
+            -DFORCE_INSOURCE_BUILD=1
+
+      - name: Build Group Replication plugin
+        run: |
+          cd mysql-build
+          
+          # Build only the group_replication plugin and its dependencies
+          make -j$(nproc) group_replication
+          
+          echo "Build completed"
+          
+          # Find the built plugin
+          find . -name "group_replication.so" -type f
+
+      - name: Package plugin
+        id: package
+        run: |
+          mkdir -p plugin-package
+          
+          # Find and copy the built plugin
+          PLUGIN_PATH=$(find mysql-build -name "group_replication.so" -type f | head -1)
+          if [ -z "$PLUGIN_PATH" ]; then
+            echo "ERROR: group_replication.so not found!"
+            exit 1
+          fi
+          
+          cp "$PLUGIN_PATH" plugin-package/
+          
+          # Create version info
+          echo "MySQL Version: ${{ env.MYSQL_VERSION }}" > plugin-package/VERSION.txt
+          echo "Ubuntu Package: ${{ env.MYSQL_UBUNTU_VERSION }}" >> plugin-package/VERSION.txt
+          echo "Build Date: $(date -u +%Y-%m-%dT%H:%M:%SZ)" >> plugin-package/VERSION.txt
+          echo "Commit: ${{ github.sha }}" >> plugin-package/VERSION.txt
+          
+          # Create tarball
+          tar -czvf "${{ env.PLUGIN_ASSET }}" -C plugin-package .
+          
+          echo "Package created: ${{ env.PLUGIN_ASSET }}"
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: mysql-gr-plugin
+          path: ${{ env.PLUGIN_ASSET }}
+          retention-days: 30
+
+      - name: Create or update release
+        if: github.event_name != 'pull_request'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          # Check if release exists
+          if gh release view "${{ env.PLUGIN_TAG }}" --repo "${{ github.repository }}" > /dev/null 2>&1; then
+            echo "Updating existing release ${{ env.PLUGIN_TAG }}..."
+            # Delete old asset if exists
+            gh release delete-asset "${{ env.PLUGIN_TAG }}" "${{ env.PLUGIN_ASSET }}" --repo "${{ github.repository }}" --yes 2>/dev/null || true
+            # Upload new asset
+            gh release upload "${{ env.PLUGIN_TAG }}" "${{ env.PLUGIN_ASSET }}" --repo "${{ github.repository }}" --clobber
+          else
+            echo "Creating new release ${{ env.PLUGIN_TAG }}..."
+            gh release create "${{ env.PLUGIN_TAG }}" \
+              --repo "${{ github.repository }}" \
+              --title "MySQL Group Replication Plugin ${{ env.MYSQL_VERSION }} (SGX/Gramine)" \
+              --notes "MySQL Group Replication plugin patched for SGX/Gramine environments.
+
+This plugin includes a custom gr_getifaddrs() implementation that works in Gramine where the standard getifaddrs() is not available.
+
+## Features
+- Supports GR_LOCAL_IP environment variable (comma-separated list)
+- Auto-detects local IP via UDP socket if env var not set
+- Compatible with MySQL ${{ env.MYSQL_UBUNTU_VERSION }}
+
+## Usage
+Replace /usr/lib/mysql/plugin/group_replication.so with this version.
+
+Set GR_LOCAL_IP environment variable:
+\`\`\`bash
+export GR_LOCAL_IP=192.168.1.100,203.0.113.50
+\`\`\`" \
+              "${{ env.PLUGIN_ASSET }}"
+          fi
+          
+          echo "Release ${{ env.PLUGIN_TAG }} updated with ${{ env.PLUGIN_ASSET }}"
