@@ -876,6 +876,20 @@ static int create_gr_config(const char *config_path, unsigned int server_id,
         "\n# IP Allowlist (explicit to avoid interface enumeration in SGX enclave)\n"
         "loose-group_replication_ip_allowlist=0.0.0.0/0,::/0\n");
     
+    /* SGX/Gramine-specific GR parameters (requires patched MySQL)
+     * These parameters are added via custom patches to MySQL source code:
+     * - skip_local_address_check: Skip local IP validation (getifaddrs fails in Gramine)
+     * - ssl_require_peer_cert: Enforce strict mutual TLS (both sides must present cert)
+     * - ssl_allow_self_signed: Accept self-signed RA-TLS certificates */
+    offset += snprintf(config_content + offset, sizeof(config_content) - offset,
+        "\n# SGX/Gramine-specific GR Parameters (requires patched MySQL)\n"
+        "# Skip local IP address validation (getifaddrs uses netlink, unavailable in Gramine)\n"
+        "loose-group_replication_skip_local_address_check=ON\n"
+        "# Enforce strict mutual TLS - both client and server must present certificates\n"
+        "loose-group_replication_ssl_require_peer_cert=ON\n"
+        "# Accept self-signed certificates (RA-TLS generates self-signed certs with SGX quotes)\n"
+        "loose-group_replication_ssl_allow_self_signed=ON\n");
+    
     /* Verbose logging for GR debugging and troubleshooting (only when --gr-debug is enabled) */
     if (gr_debug) {
         offset += snprintf(config_content + offset, sizeof(config_content) - offset,
