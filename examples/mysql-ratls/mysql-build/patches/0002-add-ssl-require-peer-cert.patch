@@ -12,10 +12,12 @@ their enclave identity through certificate-based attestation.
 ---
  plugin/group_replication/include/plugin_variables.h                                              |  3 +++
  plugin/group_replication/src/plugin.cc                                                           | 25 +++++++++++++++++++++++++
+ plugin/group_replication/libmysqlgcs/src/bindings/xcom/xcom/network/include/network_provider.h   |  1 +
+ plugin/group_replication/libmysqlgcs/src/bindings/xcom/gcs_xcom_interface.cc                     |  8 ++++++++
  plugin/group_replication/libmysqlgcs/src/bindings/xcom/xcom/network/xcom_network_provider_ssl_native_lib.cc | 35 +++++++++++++++++++++++++++++++++++
  plugin/group_replication/libmysqlgcs/src/bindings/xcom/xcom/network/network_provider_manager.h   | 12 ++++++++++++
- plugin/group_replication/libmysqlgcs/src/bindings/xcom/xcom/network/network_provider_manager.cc  | 15 +++++++++++++++
- 5 files changed, 90 insertions(+)
+ plugin/group_replication/libmysqlgcs/src/bindings/xcom/xcom/network/network_provider_manager.cc  |  3 +++
+ 7 files changed, 87 insertions(+)
 
 diff --git a/plugin/group_replication/include/plugin_variables.h b/plugin/group_replication/include/plugin_variables.h
 --- a/plugin/group_replication/include/plugin_variables.h
@@ -72,6 +74,42 @@ diff --git a/plugin/group_replication/src/plugin.cc b/plugin/group_replication/s
      nullptr,
  };
  
+diff --git a/plugin/group_replication/libmysqlgcs/src/bindings/xcom/xcom/network/include/network_provider.h b/plugin/group_replication/libmysqlgcs/src/bindings/xcom/xcom/network/include/network_provider.h
+--- a/plugin/group_replication/libmysqlgcs/src/bindings/xcom/xcom/network/include/network_provider.h
++++ b/plugin/group_replication/libmysqlgcs/src/bindings/xcom/xcom/network/include/network_provider.h
+@@ -180,6 +180,7 @@ struct ssl_parameters {
+   const char *crl_file;
+   const char *crl_path;
+   const char *cipher;
++  bool ssl_require_peer_cert;
+ };
+ struct tls_parameters {
+   const char *tls_version;
+diff --git a/plugin/group_replication/libmysqlgcs/src/bindings/xcom/gcs_xcom_interface.cc b/plugin/group_replication/libmysqlgcs/src/bindings/xcom/gcs_xcom_interface.cc
+--- a/plugin/group_replication/libmysqlgcs/src/bindings/xcom/gcs_xcom_interface.cc
++++ b/plugin/group_replication/libmysqlgcs/src/bindings/xcom/gcs_xcom_interface.cc
+@@ -1058,6 +1058,11 @@ bool Gcs_xcom_interface::initialize_xcom(
+     const std::string *tls_ciphersuites =
+         interface_params.get_parameter("tls_ciphersuites");
+ 
++    /* Parse ssl_require_peer_cert parameter */
++    const std::string *ssl_require_peer_cert_str =
++        interface_params.get_parameter("ssl_require_peer_cert");
++    bool ssl_require_peer_cert = ssl_require_peer_cert_str &&
++        (*ssl_require_peer_cert_str == "true" || *ssl_require_peer_cert_str == "on");
+     ssl_parameters ssl_configuration = {
+         ssl_mode_int,
+         server_key_file ? server_key_file->c_str() : nullptr,
+@@ -1068,7 +1073,8 @@ bool Gcs_xcom_interface::initialize_xcom(
+         ca_path ? ca_path->c_str() : nullptr,
+         crl_file ? crl_file->c_str() : nullptr,
+         crl_path ? crl_path->c_str() : nullptr,
+-        cipher ? cipher->c_str() : nullptr};
++        cipher ? cipher->c_str() : nullptr,
++        ssl_require_peer_cert};
+     tls_parameters tls_configuration = {
+         tls_version ? tls_version->c_str() : nullptr,
+         tls_ciphersuites ? tls_ciphersuites->c_str() : nullptr};
 diff --git a/plugin/group_replication/libmysqlgcs/src/bindings/xcom/xcom/network/network_provider_manager.h b/plugin/group_replication/libmysqlgcs/src/bindings/xcom/xcom/network/network_provider_manager.h
 --- a/plugin/group_replication/libmysqlgcs/src/bindings/xcom/xcom/network/network_provider_manager.h
 +++ b/plugin/group_replication/libmysqlgcs/src/bindings/xcom/xcom/network/network_provider_manager.h
@@ -107,33 +145,11 @@ diff --git a/plugin/group_replication/libmysqlgcs/src/bindings/xcom/xcom/network
 diff --git a/plugin/group_replication/libmysqlgcs/src/bindings/xcom/xcom/network/network_provider_manager.cc b/plugin/group_replication/libmysqlgcs/src/bindings/xcom/xcom/network/network_provider_manager.cc
 --- a/plugin/group_replication/libmysqlgcs/src/bindings/xcom/xcom/network/network_provider_manager.cc
 +++ b/plugin/group_replication/libmysqlgcs/src/bindings/xcom/xcom/network/network_provider_manager.cc
-@@ -167,6 +167,21 @@ bool Network_provider_manager::configure_active_provider(
-   return config_ok;
- }
- 
-+/* Parse ssl_require_peer_cert from GCS parameters */
-+static bool parse_ssl_require_peer_cert(
-+    const Gcs_interface_parameters &params) {
-+  const std::string *ssl_require_peer_cert_str =
-+      params.get_parameter("ssl_require_peer_cert");
-+  if (ssl_require_peer_cert_str != nullptr) {
-+    std::string flag(*ssl_require_peer_cert_str);
-+    std::transform(flag.begin(), flag.end(), flag.begin(), ::tolower);
-+    if (flag.compare("true") == 0 || flag.compare("on") == 0) {
-+      return true;
-+    }
-+  }
-+  return false;
-+}
-+
- bool Network_provider_manager::configure_active_provider_secure_connections(
-     Network_configuration_parameters &params) {
-   m_active_provider_secure_connections_configuration.ssl_params.ssl_mode =
-@@ -185,6 +200,9 @@ bool Network_provider_manager::configure_active_provider_secure_connections(
+@@ -185,6 +185,9 @@ bool Network_provider_manager::configure_active_provider_secure_connections(
    DEEP_COPY_NET_PARAMS_FIELD(tls_params.tls_version);
    DEEP_COPY_NET_PARAMS_FIELD(tls_params.tls_ciphersuites);
  
-+  /* Set ssl_require_peer_cert flag */
++  /* Set ssl_require_peer_cert flag from ssl_parameters struct */
 +  m_ssl_require_peer_cert = params.ssl_params.ssl_require_peer_cert;
 +
    bool config_ssl_ok = true;
