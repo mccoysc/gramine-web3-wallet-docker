@@ -1,6 +1,6 @@
 --- a/plugin/group_replication/src/plugin.cc
 +++ b/plugin/group_replication/src/plugin.cc
-@@ -2712,7 +2712,9 @@ int build_gcs_parameters(Gcs_interface_parameters &gcs_module_parameters) {
+@@ -2712,7 +2712,10 @@ int build_gcs_parameters(Gcs_interface_parameters &gcs_module_parameters) {
      gcs_module_parameters.add_parameter("server_cert_file", ssl_cert);
      gcs_module_parameters.add_parameter("client_key_file", ssl_key);
      gcs_module_parameters.add_parameter("client_cert_file", ssl_cert);
