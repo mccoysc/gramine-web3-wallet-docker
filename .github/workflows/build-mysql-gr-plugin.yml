@@ -233,6 +233,30 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
+          # Create release notes file to avoid YAML quoting issues
+          cat > /tmp/release-notes.md << 'EOF'
+          MySQL Group Replication plugin patched for SGX/Gramine environments.
+
+          This plugin includes a custom gr_getifaddrs() implementation that works in Gramine where the standard getifaddrs() is not available.
+
+          ## Features
+          - Supports GR_LOCAL_IP environment variable (comma-separated list)
+          - Auto-detects local IP via UDP socket if env var not set
+          - Compatible with MySQL ${{ env.MYSQL_UBUNTU_VERSION }}
+          - Built using the repository base Docker image for environment consistency
+
+          ## Usage
+          Replace /usr/lib/mysql/plugin/group_replication.so with this version.
+
+          Set GR_LOCAL_IP environment variable:
+          ```bash
+          export GR_LOCAL_IP=192.168.1.100,203.0.113.50
+          ```
+          EOF
+          
+          # Remove leading whitespace from heredoc
+          sed -i 's/^          //' /tmp/release-notes.md
+          
           # Check if release exists
           if gh release view "${{ env.PLUGIN_TAG }}" --repo "${{ github.repository }}" > /dev/null 2>&1; then
             echo "Updating existing release ${{ env.PLUGIN_TAG }}..."
@@ -245,23 +269,7 @@ jobs:
             gh release create "${{ env.PLUGIN_TAG }}" \
               --repo "${{ github.repository }}" \
               --title "MySQL Group Replication Plugin ${{ env.MYSQL_VERSION }} (SGX/Gramine)" \
-              --notes "MySQL Group Replication plugin patched for SGX/Gramine environments.
-
-This plugin includes a custom gr_getifaddrs() implementation that works in Gramine where the standard getifaddrs() is not available.
-
-## Features
-- Supports GR_LOCAL_IP environment variable (comma-separated list)
-- Auto-detects local IP via UDP socket if env var not set
-- Compatible with MySQL ${{ env.MYSQL_UBUNTU_VERSION }}
-- Built using the repository base Docker image for environment consistency
-
-## Usage
-Replace /usr/lib/mysql/plugin/group_replication.so with this version.
-
-Set GR_LOCAL_IP environment variable:
-\`\`\`bash
-export GR_LOCAL_IP=192.168.1.100,203.0.113.50
-\`\`\`" \
+              --notes-file /tmp/release-notes.md \
               "${{ env.PLUGIN_ASSET }}"
           fi
           
