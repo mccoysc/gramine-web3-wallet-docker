@@ -841,6 +841,19 @@ static int create_gr_config(const char *config_path, unsigned int server_id,
         "loose-group_replication_single_primary_mode=OFF\n"
         "loose-group_replication_enforce_update_everywhere_checks=ON\n");
     
+    /* Group communication SSL settings (XCom protocol between nodes) */
+    /* Note: This is different from recovery channel SSL - this encrypts
+     * the group communication (consensus, membership, etc.) between nodes.
+     * We use the same RA-TLS cert/key for both. */
+    offset += snprintf(config_content + offset, sizeof(config_content) - offset,
+        "\n# Group Communication SSL Settings (XCom protocol between nodes)\n"
+        "# ssl_mode=REQUIRED ensures all group communication is encrypted\n"
+        "# RA-TLS library handles SGX quote verification for self-signed certs\n"
+        "loose-group_replication_ssl_mode=REQUIRED\n"
+        "loose-group_replication_ssl_cert=%s\n"
+        "loose-group_replication_ssl_key=%s\n",
+        cert_path, key_path);
+    
     /* Recovery channel SSL settings (use same certs as main connection) */
     /* Note: ssl_verify_server_cert=ON enables mutual TLS verification.
      * Each node has its own self-signed RA-TLS cert with SGX quote embedded.
@@ -857,10 +870,12 @@ static int create_gr_config(const char *config_path, unsigned int server_id,
         "loose-group_replication_recovery_ssl_verify_server_cert=ON\n",
         cert_path, key_path);
     
-    /* IP allowlist - allow all private networks and public IPs */
+    /* IP allowlist - explicit list to avoid "Unable to get local IP addresses" error in Gramine
+     * When set to AUTOMATIC, MySQL tries to enumerate local network interfaces which fails
+     * inside SGX enclaves. We use a permissive CIDR that allows all IPs. */
     offset += snprintf(config_content + offset, sizeof(config_content) - offset,
-        "\n# IP Allowlist\n"
-        "loose-group_replication_ip_allowlist=AUTOMATIC\n");
+        "\n# IP Allowlist (explicit to avoid interface enumeration in SGX enclave)\n"
+        "loose-group_replication_ip_allowlist=0.0.0.0/0,::/0\n");
     
     /* Verbose logging for GR debugging and troubleshooting (only when --gr-debug is enabled) */
     if (gr_debug) {
@@ -2212,6 +2227,24 @@ int main(int argc, char *argv[]) {
         /* Prepare --defaults-extra-file argument */
         snprintf(defaults_extra_file_arg, sizeof(defaults_extra_file_arg),
                  "--defaults-extra-file=%s", GR_CONFIG_FILE);
+        
+        /* Create symlink for GCS_DEBUG_TRACE to redirect debug logs to non-encrypted partition
+         * MySQL writes GCS debug trace to ${datadir}/GCS_DEBUG_TRACE by default.
+         * Since datadir is in encrypted partition, we redirect to /var/log/mysql/ */
+        if (config.gr_debug) {
+            char gcs_trace_link[MAX_PATH_LEN];
+            snprintf(gcs_trace_link, sizeof(gcs_trace_link), "%s/GCS_DEBUG_TRACE", data_dir);
+            
+            /* Remove existing file/symlink if present */
+            unlink(gcs_trace_link);
+            
+            /* Create symlink to non-encrypted log directory */
+            if (symlink("/var/log/mysql/GCS_DEBUG_TRACE", gcs_trace_link) == 0) {
+                printf("[Launcher] Created symlink: %s -> /var/log/mysql/GCS_DEBUG_TRACE\n", gcs_trace_link);
+            } else {
+                fprintf(stderr, "[Launcher] Warning: Could not create GCS_DEBUG_TRACE symlink: %s\n", strerror(errno));
+            }
+        }
     }
     
     if (first_boot) {
