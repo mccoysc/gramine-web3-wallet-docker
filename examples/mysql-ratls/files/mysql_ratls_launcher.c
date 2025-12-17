@@ -944,46 +944,25 @@ static int create_gr_init_sql(const char *data_dir, char *init_sql_path, size_t 
      * - Client side: group_replication_recovery_ssl_verify_server_cert=ON in cnf
      * - RA-TLS: libratls-quote-verify.so verifies SGX quotes in certificates */
     
-    /* Start Group Replication with user credentials (idempotent - check if already running) */
+    /* Start Group Replication with user credentials
+     * Note: START GROUP_REPLICATION does not support prepared statements (error 1295),
+     * so we execute it directly. If GR is already running, MySQL will return an error
+     * but this won't cause mysqld to exit - init-file errors are logged but non-fatal
+     * for most statements. The 'app' user uses X509 certificate authentication. */
     if (is_bootstrap) {
         offset += snprintf(sql_content + offset, sizeof(sql_content) - offset,
-            "-- Bootstrap the group (first node) - idempotent\n"
-            "-- Only bootstrap if GR is not already running\n"
-            "SET @gr_running = (SELECT COUNT(*) FROM performance_schema.replication_group_members WHERE member_state = 'ONLINE');\n"
-            "SET @bootstrap_sql = IF(@gr_running = 0, \n"
-            "    'SET GLOBAL group_replication_bootstrap_group=ON', \n"
-            "    'SELECT \"Group Replication already running, skipping bootstrap\" AS status');\n"
-            "PREPARE bootstrap_stmt FROM @bootstrap_sql;\n"
-            "EXECUTE bootstrap_stmt;\n"
-            "DEALLOCATE PREPARE bootstrap_stmt;\n\n"
-            "-- Start GR with recovery user credentials if not running\n"
-            "-- USER='app' uses X509 certificate authentication (no password needed)\n"
-            "SET @start_sql = IF(@gr_running = 0, \n"
-            "    'START GROUP_REPLICATION USER=\\'app\\'', \n"
-            "    'SELECT \"Group Replication already started\" AS status');\n"
-            "PREPARE start_stmt FROM @start_sql;\n"
-            "EXECUTE start_stmt;\n"
-            "DEALLOCATE PREPARE start_stmt;\n\n"
-            "-- Turn off bootstrap mode\n"
-            "SET @unbootstrap_sql = IF(@gr_running = 0, \n"
-            "    'SET GLOBAL group_replication_bootstrap_group=OFF', \n"
-            "    'SELECT 1');\n"
-            "PREPARE unbootstrap_stmt FROM @unbootstrap_sql;\n"
-            "EXECUTE unbootstrap_stmt;\n"
-            "DEALLOCATE PREPARE unbootstrap_stmt;\n");
+            "-- Bootstrap the group (first node)\n"
+            "-- Note: These commands don't support prepared statements, so we execute directly\n"
+            "-- If GR is already running, errors are logged but mysqld continues\n"
+            "SET GLOBAL group_replication_bootstrap_group=ON;\n"
+            "START GROUP_REPLICATION USER='app';\n"
+            "SET GLOBAL group_replication_bootstrap_group=OFF;\n");
     } else {
         offset += snprintf(sql_content + offset, sizeof(sql_content) - offset,
-            "-- Join existing group - idempotent\n"
-            "-- Only start GR if not already running\n"
-            "SET @gr_running = (SELECT COUNT(*) FROM performance_schema.replication_group_members WHERE member_state = 'ONLINE');\n"
-            "-- Start GR with recovery user credentials\n"
-            "-- USER='app' uses X509 certificate authentication (no password needed)\n"
-            "SET @start_sql = IF(@gr_running = 0, \n"
-            "    'START GROUP_REPLICATION USER=\\'app\\'', \n"
-            "    'SELECT \"Group Replication already running\" AS status');\n"
-            "PREPARE start_stmt FROM @start_sql;\n"
-            "EXECUTE start_stmt;\n"
-            "DEALLOCATE PREPARE start_stmt;\n");
+            "-- Join existing group\n"
+            "-- Note: START GROUP_REPLICATION doesn't support prepared statements\n"
+            "-- If GR is already running, the error is logged but mysqld continues\n"
+            "START GROUP_REPLICATION USER='app';\n");
     }
     
     /* Write to file */
