@@ -168,7 +168,7 @@ jobs:
               cmake "$MYSQL_DIR" \
                 -DCMAKE_BUILD_TYPE=Release \
                 -DWITH_SSL=system \
-                -DWITH_ZLIB=system \
+                -DWITH_ZLIB=bundled \
                 -DWITH_LZ4=system \
                 -DWITH_ZSTD=system \
                 -DWITH_PROTOBUF=system \
