@@ -32,34 +32,133 @@ jobs:
     runs-on: ubuntu-latest
     outputs:
       needs_build: ${{ steps.check.outputs.needs_build }}
+      patch_changed: ${{ steps.check.outputs.patch_changed }}
     steps:
-      - name: Check if plugin exists in releases
+      - name: Check if plugin needs rebuild
         id: check
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: |
-          FORCE_REBUILD="${{ github.event.inputs.force_rebuild }}"
-          
-          if [ "$FORCE_REBUILD" = "true" ]; then
-            echo "Force rebuild requested"
-            echo "needs_build=true" >> $GITHUB_OUTPUT
-            exit 0
-          fi
-          
-          # Check if release asset exists
-          if gh release view "${{ env.PLUGIN_TAG }}" --repo "${{ github.repository }}" > /dev/null 2>&1; then
-            ASSET_EXISTS=$(gh release view "${{ env.PLUGIN_TAG }}" --repo "${{ github.repository }}" --json assets -q '.assets[].name' | grep -c "${{ env.PLUGIN_ASSET }}" || true)
-            if [ "$ASSET_EXISTS" -gt 0 ]; then
-              echo "Plugin already exists in releases"
-              echo "needs_build=false" >> $GITHUB_OUTPUT
-            else
-              echo "Release exists but asset not found"
-              echo "needs_build=true" >> $GITHUB_OUTPUT
-            fi
-          else
-            echo "Release does not exist"
-            echo "needs_build=true" >> $GITHUB_OUTPUT
-          fi
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const forceRebuild = '${{ github.event.inputs.force_rebuild }}' === 'true';
+            
+            if (forceRebuild) {
+              console.log('Force rebuild requested');
+              core.setOutput('needs_build', 'true');
+              core.setOutput('patch_changed', 'false');
+              return;
+            }
+            
+            // Check if patch files changed (build-relevant files only, not README)
+            let patchChanged = false;
+            const patchDir = 'examples/mysql-ratls/files/mysql-gr-patch/';
+            const buildRelevantExtensions = ['.cc', '.h', '.patch', '.txt'];
+            const buildRelevantFiles = ['CMakeLists.txt'];
+            
+            function isBuildRelevant(filename) {
+              // Check if file is in the patch directory
+              if (!filename.startsWith(patchDir)) return false;
+              
+              // Get the basename
+              const basename = filename.split('/').pop();
+              
+              // Check if it's a build-relevant file by name
+              if (buildRelevantFiles.includes(basename)) return true;
+              
+              // Check if it's a build-relevant file by extension
+              for (const ext of buildRelevantExtensions) {
+                if (basename.endsWith(ext)) return true;
+              }
+              
+              return false;
+            }
+            
+            if (context.eventName === 'pull_request') {
+              // For PRs, check changed files in the PR
+              const prNumber = context.payload.pull_request.number;
+              const files = await github.paginate(github.rest.pulls.listFiles, {
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                pull_number: prNumber,
+                per_page: 100
+              });
+              
+              const changedPatchFiles = files
+                .map(f => f.filename)
+                .filter(isBuildRelevant);
+              
+              if (changedPatchFiles.length > 0) {
+                console.log(`Build-relevant patch files changed: ${changedPatchFiles.join(', ')}`);
+                patchChanged = true;
+              }
+            } else if (context.eventName === 'push') {
+              // For push events, compare with previous commit
+              const base = context.payload.before;
+              const head = context.sha;
+              
+              if (base && base !== '0000000000000000000000000000000000000000') {
+                try {
+                  const comparison = await github.rest.repos.compareCommits({
+                    owner: context.repo.owner,
+                    repo: context.repo.repo,
+                    base,
+                    head
+                  });
+                  
+                  const changedPatchFiles = (comparison.data.files || [])
+                    .map(f => f.filename)
+                    .filter(isBuildRelevant);
+                  
+                  if (changedPatchFiles.length > 0) {
+                    console.log(`Build-relevant patch files changed: ${changedPatchFiles.join(', ')}`);
+                    patchChanged = true;
+                  }
+                } catch (error) {
+                  console.log(`Warning: Could not compare commits: ${error.message}`);
+                  // On error, assume patch changed to be safe
+                  patchChanged = true;
+                }
+              }
+            }
+            
+            console.log(`Patch files changed: ${patchChanged}`);
+            core.setOutput('patch_changed', patchChanged.toString());
+            
+            // If patch files changed, always rebuild
+            if (patchChanged) {
+              console.log('Patch files changed, rebuild required');
+              core.setOutput('needs_build', 'true');
+              return;
+            }
+            
+            // Check if release asset exists
+            const pluginTag = '${{ env.PLUGIN_TAG }}';
+            const pluginAsset = '${{ env.PLUGIN_ASSET }}';
+            
+            try {
+              const { data: release } = await github.rest.repos.getReleaseByTag({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                tag: pluginTag
+              });
+              
+              const assetExists = release.assets.some(a => a.name === pluginAsset);
+              
+              if (assetExists) {
+                console.log(`Plugin already exists in releases at ${pluginTag}`);
+                core.setOutput('needs_build', 'false');
+              } else {
+                console.log('Release exists but asset not found');
+                core.setOutput('needs_build', 'true');
+              }
+            } catch (error) {
+              if (error.status === 404) {
+                console.log('Release does not exist');
+                core.setOutput('needs_build', 'true');
+              } else {
+                console.log(`Warning: Failed to check release: ${error.message}`);
+                core.setOutput('needs_build', 'true');
+              }
+            }
 
   build-plugin:
     runs-on: ubuntu-latest
