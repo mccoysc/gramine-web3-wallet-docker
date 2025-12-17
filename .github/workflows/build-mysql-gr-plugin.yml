@@ -12,13 +12,9 @@ on:
   workflow_dispatch:
     inputs:
       force_rebuild:
-        description: 'Force rebuild even if plugin exists'
+        description: 'Force rebuild even if plugin exists (true/false)'
         required: false
         default: 'false'
-        type: choice
-        options:
-          - 'true'
-          - 'false'
 
 concurrency:
   group: ${{ github.repository }}-mysql-gr-plugin-${{ github.ref }}
@@ -29,6 +25,7 @@ env:
   MYSQL_UBUNTU_VERSION: '8.0.44-0ubuntu0.22.04.2'
   PLUGIN_TAG: 'mysql-gr-plugin-8.0.44'
   PLUGIN_ASSET: 'mysql-gr-plugin-8.0.44-sgx.tar.gz'
+  BASE_IMAGE: ghcr.io/${{ github.repository_owner }}/gramine-web3-wallet-docker:latest
 
 jobs:
   check-plugin:
@@ -65,140 +62,162 @@ jobs:
           fi
 
   build-plugin:
-    runs-on: ubuntu-22.04
+    runs-on: ubuntu-latest
     needs: check-plugin
     if: needs.check-plugin.outputs.needs_build == 'true'
     permissions:
       contents: write
+      packages: read
     
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
 
-      - name: Install build dependencies
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y \
-            build-essential \
-            cmake \
-            libssl-dev \
-            libncurses5-dev \
-            libtirpc-dev \
-            bison \
-            pkg-config \
-            libudev-dev \
-            libldap2-dev \
-            libsasl2-dev \
-            libevent-dev \
-            libcurl4-openssl-dev \
-            liblz4-dev \
-            zlib1g-dev \
-            libzstd-dev \
-            libprotobuf-dev \
-            protobuf-compiler \
-            rapidjson-dev \
-            dpkg-dev
+      - name: Login to GitHub Container Registry
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: Download MySQL source
+      - name: Pull base image
         run: |
-          echo "Downloading MySQL ${{ env.MYSQL_VERSION }} source..."
-          
-          # Enable source repositories
-          sudo sed -i 's/^# deb-src/deb-src/' /etc/apt/sources.list
-          sudo apt-get update
-          
-          # Download MySQL source from Ubuntu package
-          mkdir -p mysql-source
-          cd mysql-source
-          
-          # Get the source package
-          apt-get source mysql-server-8.0=${{ env.MYSQL_UBUNTU_VERSION }} 2>/dev/null || {
-            # Fallback: download from MySQL archives
-            echo "apt-get source failed, downloading from MySQL archives..."
-            wget -q "https://downloads.mysql.com/archives/get/p/23/file/mysql-${{ env.MYSQL_VERSION }}.tar.gz"
-            tar xzf mysql-${{ env.MYSQL_VERSION }}.tar.gz
-            mv mysql-${{ env.MYSQL_VERSION }} mysql-8.0-${{ env.MYSQL_VERSION }}
-          }
-          
-          echo "MySQL source downloaded"
-          ls -la
+          echo "Pulling base image: ${{ env.BASE_IMAGE }}"
+          docker pull ${{ env.BASE_IMAGE }}
 
-      - name: Apply patches
-        run: |
-          MYSQL_DIR=$(find mysql-source -maxdepth 1 -type d -name "mysql-8.0*" | head -1)
-          echo "MySQL source directory: $MYSQL_DIR"
-          
-          PATCH_DIR="${{ github.workspace }}/examples/mysql-ratls/files/mysql-gr-patch"
-          
-          # Copy gr_getifaddrs files to xcom directory
-          XCOM_DIR="$MYSQL_DIR/plugin/group_replication/libmysqlgcs/src/bindings/xcom/xcom"
-          cp "$PATCH_DIR/gr_getifaddrs.h" "$XCOM_DIR/"
-          cp "$PATCH_DIR/gr_getifaddrs.cc" "$XCOM_DIR/"
-          cp "$PATCH_DIR/sock_probe_ix.h" "$XCOM_DIR/"
-          
-          # Copy recovery_endpoints.cc
-          cp "$PATCH_DIR/recovery_endpoints.cc" "$MYSQL_DIR/plugin/group_replication/src/plugin_variables/"
-          
-          # Copy CMakeLists.txt for libmysqlgcs
-          cp "$PATCH_DIR/CMakeLists.txt" "$MYSQL_DIR/plugin/group_replication/libmysqlgcs/"
-          
-          echo "Patches applied successfully"
+      - name: Create output directory
+        run: mkdir -p out
 
-      - name: Configure MySQL build
+      - name: Build MySQL GR plugin in container
         run: |
-          MYSQL_DIR=$(find mysql-source -maxdepth 1 -type d -name "mysql-8.0*" | head -1)
-          
-          mkdir -p mysql-build
-          cd mysql-build
-          
-          cmake "../$MYSQL_DIR" \
-            -DCMAKE_BUILD_TYPE=Release \
-            -DWITH_SSL=system \
-            -DWITH_ZLIB=system \
-            -DWITH_LZ4=system \
-            -DWITH_ZSTD=system \
-            -DWITH_PROTOBUF=system \
-            -DWITH_RAPIDJSON=system \
-            -DWITH_BOOST=../boost \
-            -DDOWNLOAD_BOOST=1 \
-            -DWITH_UNIT_TESTS=OFF \
-            -DWITH_DEBUG=OFF \
-            -DFORCE_INSOURCE_BUILD=1
-
-      - name: Build Group Replication plugin
-        run: |
-          cd mysql-build
-          
-          # Build only the group_replication plugin and its dependencies
-          make -j$(nproc) group_replication
-          
-          echo "Build completed"
-          
-          # Find the built plugin
-          find . -name "group_replication.so" -type f
+          docker run --rm \
+            -v "${{ github.workspace }}:/src" \
+            -v "${{ github.workspace }}/out:/out" \
+            -w /src \
+            ${{ env.BASE_IMAGE }} \
+            bash -c '
+              set -e
+              
+              echo "=== Installing build dependencies ==="
+              apt-get update
+              apt-get install -y \
+                build-essential \
+                cmake \
+                libssl-dev \
+                libncurses5-dev \
+                libtirpc-dev \
+                bison \
+                pkg-config \
+                libudev-dev \
+                libldap2-dev \
+                libsasl2-dev \
+                libevent-dev \
+                libcurl4-openssl-dev \
+                liblz4-dev \
+                zlib1g-dev \
+                libzstd-dev \
+                libprotobuf-dev \
+                protobuf-compiler \
+                rapidjson-dev \
+                dpkg-dev \
+                wget
+              
+              echo "=== Downloading MySQL source ==="
+              # Enable source repositories
+              sed -i "s/^# deb-src/deb-src/" /etc/apt/sources.list
+              apt-get update
+              
+              mkdir -p /tmp/mysql-source
+              cd /tmp/mysql-source
+              
+              # Get the source package
+              apt-get source mysql-server-8.0='"$MYSQL_UBUNTU_VERSION"' 2>/dev/null || {
+                echo "apt-get source failed, downloading from MySQL archives..."
+                wget -q "https://downloads.mysql.com/archives/get/p/23/file/mysql-'"$MYSQL_VERSION"'.tar.gz"
+                tar xzf mysql-'"$MYSQL_VERSION"'.tar.gz
+                mv mysql-'"$MYSQL_VERSION"' mysql-8.0-'"$MYSQL_VERSION"'
+              }
+              
+              echo "MySQL source downloaded"
+              ls -la
+              
+              echo "=== Applying patches ==="
+              MYSQL_DIR=$(find /tmp/mysql-source -maxdepth 1 -type d -name "mysql-8.0*" | head -1)
+              echo "MySQL source directory: $MYSQL_DIR"
+              
+              PATCH_DIR="/src/examples/mysql-ratls/files/mysql-gr-patch"
+              
+              # Copy gr_getifaddrs files to xcom directory
+              XCOM_DIR="$MYSQL_DIR/plugin/group_replication/libmysqlgcs/src/bindings/xcom/xcom"
+              cp "$PATCH_DIR/gr_getifaddrs.h" "$XCOM_DIR/"
+              cp "$PATCH_DIR/gr_getifaddrs.cc" "$XCOM_DIR/"
+              cp "$PATCH_DIR/sock_probe_ix.h" "$XCOM_DIR/"
+              
+              # Copy recovery_endpoints.cc
+              cp "$PATCH_DIR/recovery_endpoints.cc" "$MYSQL_DIR/plugin/group_replication/src/plugin_variables/"
+              
+              # Copy CMakeLists.txt for libmysqlgcs
+              cp "$PATCH_DIR/CMakeLists.txt" "$MYSQL_DIR/plugin/group_replication/libmysqlgcs/"
+              
+              echo "Patches applied successfully"
+              
+              echo "=== Configuring MySQL build ==="
+              mkdir -p /tmp/mysql-build
+              cd /tmp/mysql-build
+              
+              cmake "$MYSQL_DIR" \
+                -DCMAKE_BUILD_TYPE=Release \
+                -DWITH_SSL=system \
+                -DWITH_ZLIB=system \
+                -DWITH_LZ4=system \
+                -DWITH_ZSTD=system \
+                -DWITH_PROTOBUF=system \
+                -DWITH_RAPIDJSON=system \
+                -DWITH_BOOST=/tmp/boost \
+                -DDOWNLOAD_BOOST=1 \
+                -DWITH_UNIT_TESTS=OFF \
+                -DWITH_DEBUG=OFF \
+                -DFORCE_INSOURCE_BUILD=1
+              
+              echo "=== Building Group Replication plugin ==="
+              make -j$(nproc) group_replication
+              
+              echo "Build completed"
+              
+              # Find the built plugin
+              PLUGIN_PATH=$(find /tmp/mysql-build -name "group_replication.so" -type f | head -1)
+              if [ -z "$PLUGIN_PATH" ]; then
+                echo "ERROR: group_replication.so not found!"
+                exit 1
+              fi
+              
+              echo "Found plugin at: $PLUGIN_PATH"
+              
+              # Copy to output directory
+              cp "$PLUGIN_PATH" /out/group_replication.so
+              
+              # Create version info
+              echo "MySQL Version: '"$MYSQL_VERSION"'" > /out/VERSION.txt
+              echo "Ubuntu Package: '"$MYSQL_UBUNTU_VERSION"'" >> /out/VERSION.txt
+              echo "Build Date: $(date -u +%Y-%m-%dT%H:%M:%SZ)" >> /out/VERSION.txt
+              echo "Commit: '"$GITHUB_SHA"'" >> /out/VERSION.txt
+              echo "Base Image: '"$BASE_IMAGE"'" >> /out/VERSION.txt
+              
+              echo "=== Build completed successfully ==="
+            '
+        env:
+          MYSQL_VERSION: ${{ env.MYSQL_VERSION }}
+          MYSQL_UBUNTU_VERSION: ${{ env.MYSQL_UBUNTU_VERSION }}
+          GITHUB_SHA: ${{ github.sha }}
+          BASE_IMAGE: ${{ env.BASE_IMAGE }}
 
       - name: Package plugin
-        id: package
         run: |
-          mkdir -p plugin-package
-          
-          # Find and copy the built plugin
-          PLUGIN_PATH=$(find mysql-build -name "group_replication.so" -type f | head -1)
-          if [ -z "$PLUGIN_PATH" ]; then
-            echo "ERROR: group_replication.so not found!"
-            exit 1
-          fi
-          
-          cp "$PLUGIN_PATH" plugin-package/
-          
-          # Create version info
-          echo "MySQL Version: ${{ env.MYSQL_VERSION }}" > plugin-package/VERSION.txt
-          echo "Ubuntu Package: ${{ env.MYSQL_UBUNTU_VERSION }}" >> plugin-package/VERSION.txt
-          echo "Build Date: $(date -u +%Y-%m-%dT%H:%M:%SZ)" >> plugin-package/VERSION.txt
-          echo "Commit: ${{ github.sha }}" >> plugin-package/VERSION.txt
+          echo "Packaging plugin..."
+          ls -la out/
           
           # Create tarball
-          tar -czvf "${{ env.PLUGIN_ASSET }}" -C plugin-package .
+          tar -czvf "${{ env.PLUGIN_ASSET }}" -C out .
           
           echo "Package created: ${{ env.PLUGIN_ASSET }}"
 
@@ -234,6 +253,7 @@ This plugin includes a custom gr_getifaddrs() implementation that works in Grami
 - Supports GR_LOCAL_IP environment variable (comma-separated list)
 - Auto-detects local IP via UDP socket if env var not set
 - Compatible with MySQL ${{ env.MYSQL_UBUNTU_VERSION }}
+- Built using the repository base Docker image for environment consistency
 
 ## Usage
 Replace /usr/lib/mysql/plugin/group_replication.so with this version.
