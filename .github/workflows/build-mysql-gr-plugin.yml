@@ -117,6 +117,7 @@ jobs:
                 zlib1g-dev \
                 libzstd-dev \
                 libprotobuf-dev \
+                libprotoc-dev \
                 protobuf-compiler \
                 rapidjson-dev \
                 dpkg-dev \
