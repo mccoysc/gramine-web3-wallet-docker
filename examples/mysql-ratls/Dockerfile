@@ -51,41 +51,35 @@ RUN printf '#!/bin/sh\nexit 101\n' > /usr/sbin/policy-rc.d && \
 # MySQL version for pre-compiled binary download
 ARG MYSQL_VERSION=8.0.40
 
-# Install MySQL 8 server and development dependencies for launcher compilation
-# First try to download pre-compiled MySQL with GR patches from GitHub Releases
-# If not available, fall back to apt-get install
+# Install runtime dependencies for MySQL and launcher compilation
 RUN apt-get update && apt-get install -y --no-install-recommends \
     libcurl4-openssl-dev \
     libaio1 \
     libnuma1 \
     libmecab2 \
-    && rm -rf /var/lib/apt/lists/* && \
-    # Try to download pre-compiled MySQL from GitHub Releases
-    MYSQL_TARBALL="mysql-install-${MYSQL_VERSION}.tar.gz" && \
+    && rm -rf /var/lib/apt/lists/*
+
+# Download and install pre-compiled MySQL with GR patches from GitHub Releases
+# This MySQL build includes custom patches for SGX/Gramine compatibility:
+# - group_replication_skip_local_address_check (skip IP validation)
+# - group_replication_ssl_require_peer_cert (strict mutual TLS)
+# - group_replication_ssl_allow_self_signed (accept RA-TLS self-signed certs)
+RUN MYSQL_TARBALL="mysql-install-${MYSQL_VERSION}.tar.gz" && \
     MYSQL_URL="https://github.com/mccoysc/gramine-web3-wallet-docker/releases/download/prebuilt-mysql-${MYSQL_VERSION}/${MYSQL_TARBALL}" && \
-    echo "Attempting to download pre-compiled MySQL from: ${MYSQL_URL}" && \
-    if curl -fsSL -o "/tmp/${MYSQL_TARBALL}" "${MYSQL_URL}" 2>/dev/null; then \
-        echo "Pre-compiled MySQL found, extracting..." && \
-        cd /opt && \
-        tar -xzf "/tmp/${MYSQL_TARBALL}" && \
-        rm -f "/tmp/${MYSQL_TARBALL}" && \
-        # Create symlinks for MySQL binaries
-        ln -sf /opt/mysql-install/bin/mysqld /usr/sbin/mysqld && \
-        ln -sf /opt/mysql-install/bin/mysql /usr/bin/mysql && \
-        ln -sf /opt/mysql-install/bin/mysqladmin /usr/bin/mysqladmin && \
-        ln -sf /opt/mysql-install/bin/mysql_secure_installation /usr/bin/mysql_secure_installation && \
-        # Create mysql user and group if not exists
-        groupadd -r mysql 2>/dev/null || true && \
-        useradd -r -g mysql -s /bin/false mysql 2>/dev/null || true && \
-        echo "Pre-compiled MySQL ${MYSQL_VERSION} with GR patches installed successfully"; \
-    else \
-        echo "Pre-compiled MySQL not available, falling back to apt-get install..." && \
-        apt-get update && apt-get install -y --no-install-recommends \
-            mysql-server \
-            mysql-client && \
-        rm -rf /var/lib/apt/lists/* && \
-        echo "MySQL installed from apt repository"; \
-    fi
+    echo "Downloading pre-compiled MySQL from: ${MYSQL_URL}" && \
+    curl -fsSL -o "/tmp/${MYSQL_TARBALL}" "${MYSQL_URL}" && \
+    cd /opt && \
+    tar -xzf "/tmp/${MYSQL_TARBALL}" && \
+    rm -f "/tmp/${MYSQL_TARBALL}" && \
+    # Create symlinks for MySQL binaries
+    ln -sf /opt/mysql-install/bin/mysqld /usr/sbin/mysqld && \
+    ln -sf /opt/mysql-install/bin/mysql /usr/bin/mysql && \
+    ln -sf /opt/mysql-install/bin/mysqladmin /usr/bin/mysqladmin && \
+    ln -sf /opt/mysql-install/bin/mysql_secure_installation /usr/bin/mysql_secure_installation && \
+    # Create mysql user and group if not exists
+    groupadd -r mysql 2>/dev/null || true && \
+    useradd -r -g mysql -s /bin/false mysql 2>/dev/null || true && \
+    echo "Pre-compiled MySQL ${MYSQL_VERSION} with GR patches installed successfully"
 
 # Clean up default MySQL data directory (we use encrypted partition at runtime)
 # and remove policy-rc.d since we're done with apt installations
