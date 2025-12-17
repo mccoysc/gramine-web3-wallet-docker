@@ -844,15 +844,14 @@ static int create_gr_config(const char *config_path, unsigned int server_id,
     /* Group communication SSL settings (XCom protocol between nodes) */
     /* Note: This is different from recovery channel SSL - this encrypts
      * the group communication (consensus, membership, etc.) between nodes.
-     * We use the same RA-TLS cert/key for both. */
+     * MySQL 8.0.44 does not have group_replication_ssl_cert/key variables;
+     * it automatically uses the server's --ssl-cert and --ssl-key settings. */
     offset += snprintf(config_content + offset, sizeof(config_content) - offset,
         "\n# Group Communication SSL Settings (XCom protocol between nodes)\n"
         "# ssl_mode=REQUIRED ensures all group communication is encrypted\n"
+        "# MySQL uses server's --ssl-cert/--ssl-key automatically (no separate GR SSL vars)\n"
         "# RA-TLS library handles SGX quote verification for self-signed certs\n"
-        "loose-group_replication_ssl_mode=REQUIRED\n"
-        "loose-group_replication_ssl_cert=%s\n"
-        "loose-group_replication_ssl_key=%s\n",
-        cert_path, key_path);
+        "loose-group_replication_ssl_mode=REQUIRED\n");
     
     /* Recovery channel SSL settings (use same certs as main connection) */
     /* Note: ssl_verify_server_cert=ON enables mutual TLS verification.
@@ -2228,23 +2227,9 @@ int main(int argc, char *argv[]) {
         snprintf(defaults_extra_file_arg, sizeof(defaults_extra_file_arg),
                  "--defaults-extra-file=%s", GR_CONFIG_FILE);
         
-        /* Create symlink for GCS_DEBUG_TRACE to redirect debug logs to non-encrypted partition
-         * MySQL writes GCS debug trace to ${datadir}/GCS_DEBUG_TRACE by default.
-         * Since datadir is in encrypted partition, we redirect to /var/log/mysql/ */
-        if (config.gr_debug) {
-            char gcs_trace_link[MAX_PATH_LEN];
-            snprintf(gcs_trace_link, sizeof(gcs_trace_link), "%s/GCS_DEBUG_TRACE", data_dir);
-            
-            /* Remove existing file/symlink if present */
-            unlink(gcs_trace_link);
-            
-            /* Create symlink to non-encrypted log directory */
-            if (symlink("/var/log/mysql/GCS_DEBUG_TRACE", gcs_trace_link) == 0) {
-                printf("[Launcher] Created symlink: %s -> /var/log/mysql/GCS_DEBUG_TRACE\n", gcs_trace_link);
-            } else {
-                fprintf(stderr, "[Launcher] Warning: Could not create GCS_DEBUG_TRACE symlink: %s\n", strerror(errno));
-            }
-        }
+        /* Note: GCS_DEBUG_TRACE will be written to ${datadir}/GCS_DEBUG_TRACE (encrypted partition).
+         * Symlinks cannot be used to redirect to non-encrypted partition in Gramine.
+         * The debug trace file will remain in the encrypted partition when --gr-debug is enabled. */
     }
     
     if (first_boot) {
