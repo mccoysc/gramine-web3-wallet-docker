@@ -937,8 +937,8 @@ static int create_gr_init_sql(const char *data_dir, char *init_sql_path, size_t 
      * 'group_replication_recovery' because MySQL 8 does not allow direct modification
      * of this GR-managed channel (error 3139).
      * 
-     * Instead, we specify recovery user credentials via START GROUP_REPLICATION USER/PASSWORD.
-     * The 'app' user has REQUIRE X509 with empty password, so we use PASSWORD=''.
+     * Instead, we specify recovery user via START GROUP_REPLICATION USER='app'.
+     * The 'app' user has REQUIRE X509 (certificate authentication), so no password is needed.
      * Mutual TLS is enforced by:
      * - Server side: 'app' user with REQUIRE X509
      * - Client side: group_replication_recovery_ssl_verify_server_cert=ON in cnf
@@ -957,9 +957,9 @@ static int create_gr_init_sql(const char *data_dir, char *init_sql_path, size_t 
             "EXECUTE bootstrap_stmt;\n"
             "DEALLOCATE PREPARE bootstrap_stmt;\n\n"
             "-- Start GR with recovery user credentials if not running\n"
-            "-- USER='app' PASSWORD='' matches the X509-required user we created\n"
+            "-- USER='app' uses X509 certificate authentication (no password needed)\n"
             "SET @start_sql = IF(@gr_running = 0, \n"
-            "    'START GROUP_REPLICATION USER=\\'app\\' PASSWORD=\\'\\'', \n"
+            "    'START GROUP_REPLICATION USER=\\'app\\'', \n"
             "    'SELECT \"Group Replication already started\" AS status');\n"
             "PREPARE start_stmt FROM @start_sql;\n"
             "EXECUTE start_stmt;\n"
@@ -977,9 +977,9 @@ static int create_gr_init_sql(const char *data_dir, char *init_sql_path, size_t 
             "-- Only start GR if not already running\n"
             "SET @gr_running = (SELECT COUNT(*) FROM performance_schema.replication_group_members WHERE member_state = 'ONLINE');\n"
             "-- Start GR with recovery user credentials\n"
-            "-- USER='app' PASSWORD='' matches the X509-required user we created\n"
+            "-- USER='app' uses X509 certificate authentication (no password needed)\n"
             "SET @start_sql = IF(@gr_running = 0, \n"
-            "    'START GROUP_REPLICATION USER=\\'app\\' PASSWORD=\\'\\'', \n"
+            "    'START GROUP_REPLICATION USER=\\'app\\'', \n"
             "    'SELECT \"Group Replication already running\" AS status');\n"
             "PREPARE start_stmt FROM @start_sql;\n"
             "EXECUTE start_stmt;\n"
