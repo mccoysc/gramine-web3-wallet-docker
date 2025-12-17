@@ -182,7 +182,7 @@ jobs:
     permissions:
       contents: write
     container:
-      image: ubuntu:22.04
+      image: ghcr.io/mccoysc/gramine-web3-wallet-docker:latest
     
     steps:
       - name: Checkout repository
@@ -192,7 +192,6 @@ jobs:
         run: |
           apt-get update
           DEBIAN_FRONTEND=noninteractive apt-get install -y \
-            build-essential \
             cmake \
             pkg-config \
             libncurses5-dev \
@@ -217,53 +216,36 @@ jobs:
             wget \
             ca-certificates \
             git \
-            patch \
-            curl \
-            jq
-          # Note: libssl-dev removed - we use pre-compiled OpenSSL from repository
+            patch
+          # Note: build-essential and OpenSSL are already in the base image
 
-      - name: Download pre-compiled OpenSSL
-        env:
-          GH_TOKEN: ${{ github.token }}
+      - name: Detect OpenSSL installation
         run: |
-          # Get OpenSSL version from repository
-          OPENSSL_VERSION=$(cat "${GITHUB_WORKSPACE}/prebuilt/openssl/VERSION" 2>/dev/null || echo "3.2.1")
-          echo "Using OpenSSL version: ${OPENSSL_VERSION}"
+          # The base image has pre-compiled OpenSSL installed at /opt/openssl-install
+          # This is the same OpenSSL used by Node.js in the base image
+          OPENSSL_PREFIX="/opt/openssl-install"
           
-          # Download pre-compiled OpenSSL from GitHub Releases
-          OPENSSL_TAG="prebuilt-openssl-${OPENSSL_VERSION}"
-          OPENSSL_ASSET="openssl-install-${OPENSSL_VERSION}.tar.gz"
-          
-          echo "Downloading OpenSSL from release ${OPENSSL_TAG}..."
-          
-          # Install gh CLI for downloading release assets
-          apt-get install -y gh || {
-            # Fallback: download gh CLI manually
-            curl -fsSL https://cli.github.com/packages/githubcli-archive-keyring.gpg | dd of=/usr/share/keyrings/githubcli-archive-keyring.gpg
-            echo "deb [arch=$(dpkg --print-architecture) signed-by=/usr/share/keyrings/githubcli-archive-keyring.gpg] https://cli.github.com/packages stable main" | tee /etc/apt/sources.list.d/github-cli.list > /dev/null
-            apt-get update && apt-get install -y gh
-          }
-          
-          cd /opt
-          gh release download "${OPENSSL_TAG}" \
-            -R "${{ github.repository }}" \
-            -p "${OPENSSL_ASSET}" \
-            -D . || {
-            echo "Failed to download pre-compiled OpenSSL from release ${OPENSSL_TAG}"
-            echo "Falling back to system OpenSSL..."
-            apt-get install -y libssl-dev
+          if [ -d "$OPENSSL_PREFIX" ]; then
+            echo "Found pre-compiled OpenSSL at $OPENSSL_PREFIX"
+            
+            # Detect library directory (lib64 on x86_64, lib on others)
+            if [ -d "$OPENSSL_PREFIX/lib64" ]; then
+              OPENSSL_LIB_DIR="$OPENSSL_PREFIX/lib64"
+            else
+              OPENSSL_LIB_DIR="$OPENSSL_PREFIX/lib"
+            fi
+            
+            echo "OpenSSL library directory: $OPENSSL_LIB_DIR"
+            echo "OPENSSL_ROOT=$OPENSSL_PREFIX" >> $GITHUB_ENV
+            echo "OPENSSL_LIB_DIR=$OPENSSL_LIB_DIR" >> $GITHUB_ENV
+            
+            # Verify OpenSSL
+            LD_LIBRARY_PATH="$OPENSSL_LIB_DIR" "$OPENSSL_PREFIX/bin/openssl" version
+            ls -la "$OPENSSL_LIB_DIR"/*.so* 2>/dev/null || ls -la "$OPENSSL_LIB_DIR"/*.a 2>/dev/null || true
+          else
+            echo "Pre-compiled OpenSSL not found, using system OpenSSL"
             echo "OPENSSL_ROOT=" >> $GITHUB_ENV
-            exit 0
-          }
-          
-          # Extract OpenSSL
-          tar -xzf "${OPENSSL_ASSET}"
-          rm -f "${OPENSSL_ASSET}"
-          
-          # Set environment variables for MySQL build
-          echo "OPENSSL_ROOT=/opt/openssl-install" >> $GITHUB_ENV
-          echo "OpenSSL installed to /opt/openssl-install"
-          ls -la /opt/openssl-install/
+          fi
 
       - name: Download MySQL source
         run: |
@@ -307,11 +289,16 @@ jobs:
           # Configure OpenSSL options based on whether pre-compiled OpenSSL is available
           if [ -n "${OPENSSL_ROOT}" ] && [ -d "${OPENSSL_ROOT}" ]; then
             echo "Using pre-compiled OpenSSL from ${OPENSSL_ROOT}"
+            echo "OpenSSL library directory: ${OPENSSL_LIB_DIR}"
             SSL_OPTIONS="-DWITH_SSL=${OPENSSL_ROOT} -DOPENSSL_ROOT_DIR=${OPENSSL_ROOT}"
             
             # Set library paths for dynamic linking
-            export LD_LIBRARY_PATH="${OPENSSL_ROOT}/lib:${OPENSSL_ROOT}/lib64:${LD_LIBRARY_PATH}"
-            export PKG_CONFIG_PATH="${OPENSSL_ROOT}/lib/pkgconfig:${OPENSSL_ROOT}/lib64/pkgconfig:${PKG_CONFIG_PATH}"
+            export LD_LIBRARY_PATH="${OPENSSL_LIB_DIR}:${LD_LIBRARY_PATH}"
+            export PKG_CONFIG_PATH="${OPENSSL_LIB_DIR}/pkgconfig:${PKG_CONFIG_PATH}"
+            export LIBRARY_PATH="${OPENSSL_LIB_DIR}:${LIBRARY_PATH}"
+            export CFLAGS="-I${OPENSSL_ROOT}/include ${CFLAGS}"
+            export CXXFLAGS="-I${OPENSSL_ROOT}/include ${CXXFLAGS}"
+            export LDFLAGS="-L${OPENSSL_LIB_DIR} -Wl,-rpath,${OPENSSL_LIB_DIR} ${LDFLAGS}"
           else
             echo "Using system OpenSSL"
             SSL_OPTIONS="-DWITH_SSL=system"
@@ -371,7 +358,28 @@ jobs:
           
           # Verify installation
           ls -la /opt/mysql-install/bin/
+          
+          # Set library path for verification
+          if [ -n "${OPENSSL_LIB_DIR}" ]; then
+            export LD_LIBRARY_PATH="${OPENSSL_LIB_DIR}:${LD_LIBRARY_PATH}"
+          fi
+          
           /opt/mysql-install/bin/mysqld --version
+          
+          # Verify MySQL is dynamically linked to OpenSSL
+          echo "Checking MySQL OpenSSL linkage..."
+          ldd /opt/mysql-install/bin/mysqld | grep -E 'ssl|crypto' || echo "No OpenSSL libraries found in ldd output"
+          
+          # Verify it's using the pre-compiled OpenSSL (not system OpenSSL)
+          if [ -n "${OPENSSL_ROOT}" ]; then
+            echo "Expected OpenSSL path: ${OPENSSL_LIB_DIR}"
+            if ldd /opt/mysql-install/bin/mysqld | grep -q "${OPENSSL_LIB_DIR}"; then
+              echo "SUCCESS: MySQL is linked to pre-compiled OpenSSL"
+            else
+              echo "WARNING: MySQL may not be linked to pre-compiled OpenSSL"
+              ldd /opt/mysql-install/bin/mysqld | grep -E 'ssl|crypto'
+            fi
+          fi
 
       - name: Create tarball
         run: |
