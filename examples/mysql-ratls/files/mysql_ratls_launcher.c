@@ -925,10 +925,16 @@ static int create_gr_init_sql(const char *data_dir, char *init_sql_path, size_t 
     
     /* Create application user with X509 requirement (only app user needed) */
     /* CREATE USER IF NOT EXISTS is already idempotent */
+    /* Grant dynamic privileges needed for GR event execution:
+     * - SYSTEM_VARIABLES_ADMIN: for SET GLOBAL group_replication_bootstrap_group
+     * - GROUP_REPLICATION_ADMIN: for START GROUP_REPLICATION */
     offset += snprintf(sql_content + offset, sizeof(sql_content) - offset,
         "-- Create application user that requires X.509 certificate (idempotent)\n"
         "CREATE USER IF NOT EXISTS 'app'@'%%' IDENTIFIED BY '' REQUIRE X509;\n"
-        "GRANT ALL PRIVILEGES ON *.* TO 'app'@'%%' WITH GRANT OPTION;\n\n");
+        "GRANT ALL PRIVILEGES ON *.* TO 'app'@'%%' WITH GRANT OPTION;\n"
+        "-- Grant dynamic privileges for GR operations (needed for EVENT execution)\n"
+        "GRANT SYSTEM_VARIABLES_ADMIN ON *.* TO 'app'@'%%';\n"
+        "GRANT GROUP_REPLICATION_ADMIN ON *.* TO 'app'@'%%';\n\n");
     
     offset += snprintf(sql_content + offset, sizeof(sql_content) - offset,
         "FLUSH PRIVILEGES;\n\n");
@@ -973,23 +979,24 @@ static int create_gr_init_sql(const char *data_dir, char *init_sql_path, size_t 
             "-- Bootstrap the group (first node) using delayed EVENTs\n"
             "-- EVENTs are used because GR internal session is not ready during init-file execution\n"
             "-- Each EVENT has single-statement body (init-file doesn't support DELIMITER)\n"
-            "-- Events are created in mysql schema (fully qualified names avoid 'No database selected' error)\n\n"
+            "-- Events are created in mysql schema (fully qualified names avoid 'No database selected' error)\n"
+            "-- DEFINER='app'@'%%' ensures events run with proper privileges (app user created above)\n\n"
             "-- Drop any existing events from previous failed starts\n"
             "DROP EVENT IF EXISTS mysql.gr_bootstrap_on;\n"
             "DROP EVENT IF EXISTS mysql.gr_start;\n"
             "DROP EVENT IF EXISTS mysql.gr_bootstrap_off;\n\n"
             "-- EVENT 1: Enable bootstrap mode (+10 seconds)\n"
-            "CREATE EVENT mysql.gr_bootstrap_on\n"
+            "CREATE DEFINER='app'@'%%' EVENT mysql.gr_bootstrap_on\n"
             "  ON SCHEDULE AT CURRENT_TIMESTAMP + INTERVAL 10 SECOND\n"
             "  ON COMPLETION NOT PRESERVE\n"
             "  DO SET GLOBAL group_replication_bootstrap_group=ON;\n\n"
             "-- EVENT 2: Start Group Replication (+12 seconds)\n"
-            "CREATE EVENT mysql.gr_start\n"
+            "CREATE DEFINER='app'@'%%' EVENT mysql.gr_start\n"
             "  ON SCHEDULE AT CURRENT_TIMESTAMP + INTERVAL 12 SECOND\n"
             "  ON COMPLETION NOT PRESERVE\n"
             "  DO START GROUP_REPLICATION USER='app';\n\n"
             "-- EVENT 3: Disable bootstrap mode (+14 seconds)\n"
-            "CREATE EVENT mysql.gr_bootstrap_off\n"
+            "CREATE DEFINER='app'@'%%' EVENT mysql.gr_bootstrap_off\n"
             "  ON SCHEDULE AT CURRENT_TIMESTAMP + INTERVAL 14 SECOND\n"
             "  ON COMPLETION NOT PRESERVE\n"
             "  DO SET GLOBAL group_replication_bootstrap_group=OFF;\n");
@@ -997,11 +1004,12 @@ static int create_gr_init_sql(const char *data_dir, char *init_sql_path, size_t 
         offset += snprintf(sql_content + offset, sizeof(sql_content) - offset,
             "-- Join existing group using delayed EVENT\n"
             "-- EVENT is used because GR internal session is not ready during init-file execution\n"
-            "-- Event is created in mysql schema (fully qualified name avoids 'No database selected' error)\n\n"
+            "-- Event is created in mysql schema (fully qualified name avoids 'No database selected' error)\n"
+            "-- DEFINER='app'@'%%' ensures event runs with proper privileges (app user created above)\n\n"
             "-- Drop any existing event from previous failed starts\n"
             "DROP EVENT IF EXISTS mysql.gr_start;\n\n"
             "-- Start Group Replication (+10 seconds after server is ready)\n"
-            "CREATE EVENT mysql.gr_start\n"
+            "CREATE DEFINER='app'@'%%' EVENT mysql.gr_start\n"
             "  ON SCHEDULE AT CURRENT_TIMESTAMP + INTERVAL 10 SECOND\n"
             "  ON COMPLETION NOT PRESERVE\n"
             "  DO START GROUP_REPLICATION USER='app';\n");
