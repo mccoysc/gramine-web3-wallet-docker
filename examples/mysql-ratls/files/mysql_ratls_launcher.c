@@ -2213,31 +2213,52 @@ int main(int argc, char *argv[]) {
         }
         printf("[Launcher] GR local address: %s\n", gr_local_address);
         
-        /* Set GR_LOCAL_IP environment variable for the getifaddrs shim in libratls-quote-verify.so
+        /* Set GR_LOCAL_IP environment variable for the gr_getifaddrs() replacement in MySQL GR plugin.
          * This allows MySQL Group Replication to work in Gramine/SGX environments where
          * the real getifaddrs() fails because it uses netlink sockets.
-         * The shim intercepts getifaddrs() and returns fake interface data based on this IP.
+         * The replacement function returns fake interface data based on these IPs.
+         * 
+         * GR_LOCAL_IP supports comma-separated list of IPs (e.g., "192.168.1.100,203.0.113.50")
+         * to support both LAN and public IP addresses for cross-datacenter replication.
          */
-        char gr_local_ip[MAX_IP_LEN] = {0};
+        char gr_local_ip_list[MAX_IP_LEN * 2 + 2] = {0};  /* Room for two IPs + comma + null */
+        int ip_count = 0;
+        
+        /* First, add the configured or detected LAN IP */
         if (config.gr_local_address && strlen(config.gr_local_address) > 0) {
             /* Extract IP from gr_local_address (which may include port) */
             const char *colon = strchr(config.gr_local_address, ':');
             if (colon) {
                 size_t ip_len = colon - config.gr_local_address;
-                if (ip_len < sizeof(gr_local_ip)) {
-                    strncpy(gr_local_ip, config.gr_local_address, ip_len);
-                    gr_local_ip[ip_len] = '\0';
+                if (ip_len < sizeof(gr_local_ip_list)) {
+                    strncpy(gr_local_ip_list, config.gr_local_address, ip_len);
+                    gr_local_ip_list[ip_len] = '\0';
+                    ip_count++;
                 }
             } else {
-                strncpy(gr_local_ip, config.gr_local_address, sizeof(gr_local_ip) - 1);
+                strncpy(gr_local_ip_list, config.gr_local_address, sizeof(gr_local_ip_list) - 1);
+                ip_count++;
             }
         } else if (strlen(lan_ip) > 0) {
-            strncpy(gr_local_ip, lan_ip, sizeof(gr_local_ip) - 1);
+            strncpy(gr_local_ip_list, lan_ip, sizeof(gr_local_ip_list) - 1);
+            ip_count++;
         }
         
-        if (strlen(gr_local_ip) > 0) {
-            set_env("GR_LOCAL_IP", gr_local_ip, 1);
-            printf("[Launcher] Set GR_LOCAL_IP=%s for getifaddrs shim\n", gr_local_ip);
+        /* Then, add the public IP if it's different from the first IP */
+        if (strlen(public_ip) > 0 && strcmp(public_ip, gr_local_ip_list) != 0) {
+            /* Append public IP to the list */
+            size_t current_len = strlen(gr_local_ip_list);
+            if (current_len > 0 && current_len + 1 + strlen(public_ip) < sizeof(gr_local_ip_list)) {
+                strcat(gr_local_ip_list, ",");
+                strcat(gr_local_ip_list, public_ip);
+                ip_count++;
+                printf("[Launcher] Added public IP to GR_LOCAL_IP list: %s\n", public_ip);
+            }
+        }
+        
+        if (strlen(gr_local_ip_list) > 0) {
+            set_env("GR_LOCAL_IP", gr_local_ip_list, 1);
+            printf("[Launcher] Set GR_LOCAL_IP=%s for gr_getifaddrs() (%d IP(s))\n", gr_local_ip_list, ip_count);
         } else {
             fprintf(stderr, "[Launcher] Warning: Could not determine IP for GR_LOCAL_IP environment variable\n");
         }
