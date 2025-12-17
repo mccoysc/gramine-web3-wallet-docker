@@ -174,8 +174,12 @@ jobs:
               mkdir -p /tmp/mysql-build
               cd /tmp/mysql-build
               
+              # Add xcom include directory for gr_getifaddrs.h
+              XCOM_INCLUDE="$MYSQL_DIR/plugin/group_replication/libmysqlgcs/src/bindings/xcom"
+              
               cmake "$MYSQL_DIR" \
                 -DCMAKE_BUILD_TYPE=Release \
+                -DCMAKE_CXX_FLAGS="-I$XCOM_INCLUDE" \
                 -DWITH_SSL=system \
                 -DWITH_ZLIB=bundled \
                 -DWITH_LZ4=system \
