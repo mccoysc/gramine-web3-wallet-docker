@@ -12,13 +12,9 @@ on:
   workflow_dispatch:
     inputs:
       force_rebuild:
-        description: 'Force rebuild even if plugin exists'
+        description: 'Force rebuild even if plugin exists (true/false)'
         required: false
         default: 'false'
-        type: choice
-        options:
-          - 'true'
-          - 'false'
 
 concurrency:
   group: ${{ github.repository }}-mysql-gr-plugin-${{ github.ref }}
