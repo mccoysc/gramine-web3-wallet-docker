@@ -137,9 +137,7 @@ jobs:
             
             async function getLatestNodeLTS() {
               // Fetch Node.js dist index to find latest LTS version
-              // Compatible with Ubuntu 22.04 (GCC 11): max Node.js v22
-              // Node.js v24+ requires GCC 13+ for C++20 constexpr features
-              const maxMajor = 22;
+              // Ubuntu 24.04 has GCC 13+, so no version cap needed
               
               try {
                 const response = await fetch('https://nodejs.org/dist/index.json');
@@ -147,12 +145,10 @@ jobs:
                 
                 // Filter for LTS releases (have lts field that's not false)
                 // and exclude pre-releases
-                // Apply compatibility cap for GCC 11 (Ubuntu 22.04)
                 const ltsReleases = releases
                   .filter(r => r.lts && !isNodePreRelease(r.version))
                   .map(r => parseNodeTag(r.version))
                   .filter(Boolean)
-                  .filter(v => v.major <= maxMajor) // Compatibility cap for GCC 11
                   .sort((a, b) => {
                     if (a.major !== b.major) return b.major - a.major;
                     if (a.minor !== b.minor) return b.minor - a.minor;
@@ -161,10 +157,7 @@ jobs:
                 
                 if (ltsReleases.length > 0) {
                   const selected = ltsReleases[0];
-                  console.log(`Selected Node.js LTS ${selected.name} (max major: ${maxMajor} for GCC 11/Ubuntu 22.04)`);
-                  if (releases.some(r => r.lts && parseNodeTag(r.version)?.major > maxMajor)) {
-                    console.log(`Note: Skipped newer LTS versions (v${maxMajor + 1}+) due to GCC/toolchain compatibility`);
-                  }
+                  console.log(`Selected Node.js LTS ${selected.name}`);
                   return selected.name;
                 }
                 return null;
@@ -182,24 +175,27 @@ jobs:
                 return ltsVersion;
               }
               
-              // Fallback to GitHub tags, filtering for v22.x (current LTS major)
+              // Fallback to GitHub tags, finding the latest LTS major dynamically
               console.log('Falling back to GitHub tags for Node.js version detection');
               const tags = await github.paginate(github.rest.repos.listTags, {
                 owner: 'nodejs',
                 repo: 'node',
                 per_page: 100
               });
-              const candidates = tags.map(t => t.name)
+              
+              // Parse all stable tags and find the latest even major (LTS majors are even numbers)
+              const allVersions = tags.map(t => t.name)
                 .filter(n => !isNodePreRelease(n))
                 .map(parseNodeTag)
                 .filter(Boolean)
-                .filter(v => v.major === 22) // Filter for v22.x LTS
+                .filter(v => v.major % 2 === 0) // LTS versions have even major numbers
                 .sort((a, b) => {
                   if (a.major !== b.major) return b.major - a.major;
                   if (a.minor !== b.minor) return b.minor - a.minor;
                   return b.patch - a.patch;
                 });
-              return candidates.length ? candidates[0].name : null;
+              
+              return allVersions.length ? allVersions[0].name : null;
             }
             
             // Helper to check if a prebuilt asset exists in GitHub Releases
@@ -471,7 +467,7 @@ jobs:
     permissions:
       contents: write
     container:
-      image: ubuntu:22.04
+      image: ubuntu:24.04
     
     steps:
       - name: Checkout repository
@@ -545,7 +541,7 @@ jobs:
     permissions:
       contents: write
     container:
-      image: ubuntu:22.04
+      image: ubuntu:24.04
     
     steps:
       - name: Checkout repository
@@ -586,7 +582,7 @@ jobs:
       - name: Install Intel SGX development dependencies
         run: |
           curl -fsSLo /etc/apt/keyrings/intel-sgx-deb.asc https://download.01.org/intel-sgx/sgx_repo/ubuntu/intel-sgx-deb.key
-          echo "deb [arch=amd64 signed-by=/etc/apt/keyrings/intel-sgx-deb.asc] https://download.01.org/intel-sgx/sgx_repo/ubuntu jammy main" > /etc/apt/sources.list.d/intel-sgx.list
+          echo "deb [arch=amd64 signed-by=/etc/apt/keyrings/intel-sgx-deb.asc] https://download.01.org/intel-sgx/sgx_repo/ubuntu noble main" > /etc/apt/sources.list.d/intel-sgx.list
           apt-get update
           DEBIAN_FRONTEND=noninteractive apt-get install -y \
             libsgx-dcap-quote-verify-dev \
@@ -652,7 +648,7 @@ jobs:
     permissions:
       contents: write
     container:
-      image: ubuntu:22.04
+      image: ubuntu:24.04
     
     steps:
       - name: Checkout repository
@@ -668,6 +664,7 @@ jobs:
             git \
             python3 \
             python3-pip \
+            python3-setuptools \
             curl \
             libssl-dev \
             zlib1g-dev

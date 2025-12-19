@@ -6,7 +6,7 @@
 #==============================================================================
 # Builder Stage: Compile Gramine from source OR use prebuilt
 #==============================================================================
-FROM ubuntu:22.04 AS builder
+FROM ubuntu:24.04 AS builder
 
 # Avoid interactive prompts during package installation
 ENV DEBIAN_FRONTEND=noninteractive
@@ -61,7 +61,7 @@ RUN if [ "$USE_PREBUILT" = "true" ] && [ -f /tmp/prebuilt/gramine/gramine-instal
             libcurl4-openssl-dev \
             && rm -rf /var/lib/apt/lists/*; \
         curl -fsSLo /etc/apt/keyrings/intel-sgx-deb.asc https://download.01.org/intel-sgx/sgx_repo/ubuntu/intel-sgx-deb.key; \
-        echo "deb [arch=amd64 signed-by=/etc/apt/keyrings/intel-sgx-deb.asc] https://download.01.org/intel-sgx/sgx_repo/ubuntu jammy main" > /etc/apt/sources.list.d/intel-sgx.list; \
+        echo "deb [arch=amd64 signed-by=/etc/apt/keyrings/intel-sgx-deb.asc] https://download.01.org/intel-sgx/sgx_repo/ubuntu noble main" > /etc/apt/sources.list.d/intel-sgx.list; \
         apt-get update; \
         apt-get install -y --no-install-recommends \
             libsgx-dcap-quote-verify-dev \
@@ -90,7 +90,7 @@ RUN if [ "$USE_PREBUILT" = "true" ] && [ -f /tmp/prebuilt/gramine/gramine-instal
 #==============================================================================
 # Runtime Stage: Clean image with only installed Gramine and runtime dependencies
 #==============================================================================
-FROM ubuntu:22.04
+FROM ubuntu:24.04
 
 # Labels are set by docker/metadata-action in the workflow for fork-friendly builds
 LABEL org.opencontainers.image.description="Gramine-based Web3 Wallet Docker Image with SGX support"
@@ -142,7 +142,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 
 # Install Intel SGX runtime dependencies and aesmd service (following Gramine documentation)
 RUN curl -fsSLo /etc/apt/keyrings/intel-sgx-deb.asc https://download.01.org/intel-sgx/sgx_repo/ubuntu/intel-sgx-deb.key \
-    && echo "deb [arch=amd64 signed-by=/etc/apt/keyrings/intel-sgx-deb.asc] https://download.01.org/intel-sgx/sgx_repo/ubuntu jammy main" > /etc/apt/sources.list.d/intel-sgx.list \
+    && echo "deb [arch=amd64 signed-by=/etc/apt/keyrings/intel-sgx-deb.asc] https://download.01.org/intel-sgx/sgx_repo/ubuntu noble main" > /etc/apt/sources.list.d/intel-sgx.list \
     && apt-get update \
     && apt-get install -y --no-install-recommends \
     libsgx-dcap-ql \
@@ -226,7 +226,7 @@ RUN if [ "$USE_PREBUILT" = "true" ] && [ -f /tmp/prebuilt/openssl/openssl-instal
     fi
 
 # Install Node.js (prebuilt or from NodeSource)
-ARG NODE_MAJOR=22
+ARG NODE_MAJOR=24
 RUN if [ "$USE_PREBUILT" = "true" ] && [ -f /tmp/prebuilt/nodejs/node-install.tar.gz ]; then \
         echo "Using prebuilt Node.js"; \
         cd /opt; \
@@ -306,7 +306,7 @@ RUN rm -f /usr/local/bin/npx && \
 
 # Install PCCS by extracting .deb to temp directory (avoids systemd postinst issues)
 RUN curl -fsSLo /etc/apt/keyrings/intel-sgx-deb.asc https://download.01.org/intel-sgx/sgx_repo/ubuntu/intel-sgx-deb.key \
-    && echo "deb [arch=amd64 signed-by=/etc/apt/keyrings/intel-sgx-deb.asc] https://download.01.org/intel-sgx/sgx_repo/ubuntu jammy main" > /etc/apt/sources.list.d/intel-sgx.list \
+    && echo "deb [arch=amd64 signed-by=/etc/apt/keyrings/intel-sgx-deb.asc] https://download.01.org/intel-sgx/sgx_repo/ubuntu noble main" > /etc/apt/sources.list.d/intel-sgx.list \
     && apt-get update \
     && cd /tmp \
     && apt-get download sgx-dcap-pccs \
