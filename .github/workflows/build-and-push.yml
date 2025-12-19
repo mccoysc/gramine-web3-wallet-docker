@@ -61,6 +61,7 @@ jobs:
       gramine_sha_short: ${{ steps.check.outputs.gramine_sha_short }}
       openssl_version: ${{ steps.check.outputs.openssl_version }}
       node_version: ${{ steps.check.outputs.node_version }}
+      build_id: ${{ steps.check.outputs.build_id }}
     
     steps:
       - name: Checkout repository
@@ -74,17 +75,34 @@ jobs:
         with:
           script: |
             const fs = require('fs');
+            const { execSync } = require('child_process');
             
-            // Helper to read version file
+            // Define target build environment (must match container images used in build jobs)
+            // Ubuntu 24.04 (noble) with GCC 13
+            const TARGET_BUILD_ID = 'ubuntu24.04-gcc13';
+            
+            // Helper to read version file and parse version + build_id
+            // Format: "<version> <build_id>" or just "<version>" for legacy files
             function readVersionFile(filePath) {
               try {
                 if (fs.existsSync(filePath)) {
-                  return fs.readFileSync(filePath, 'utf8').trim();
+                  const content = fs.readFileSync(filePath, 'utf8').trim();
+                  const parts = content.split(/\s+/);
+                  return {
+                    version: parts[0] || '',
+                    buildId: parts[1] || '',
+                    raw: content
+                  };
                 }
               } catch (e) {
                 console.log(`Could not read ${filePath}: ${e.message}`);
               }
-              return '';
+              return { version: '', buildId: '', raw: '' };
+            }
+            
+            // Legacy helper for backward compatibility (returns just version string)
+            function readVersionString(filePath) {
+              return readVersionFile(filePath).version;
             }
             
             // OpenSSL version parsing and detection
@@ -137,9 +155,7 @@ jobs:
             
             async function getLatestNodeLTS() {
               // Fetch Node.js dist index to find latest LTS version
-              // Compatible with Ubuntu 22.04 (GCC 11): max Node.js v22
-              // Node.js v24+ requires GCC 13+ for C++20 constexpr features
-              const maxMajor = 22;
+              // Ubuntu 24.04 has GCC 13+, so no version cap needed
               
               try {
                 const response = await fetch('https://nodejs.org/dist/index.json');
@@ -147,12 +163,10 @@ jobs:
                 
                 // Filter for LTS releases (have lts field that's not false)
                 // and exclude pre-releases
-                // Apply compatibility cap for GCC 11 (Ubuntu 22.04)
                 const ltsReleases = releases
                   .filter(r => r.lts && !isNodePreRelease(r.version))
                   .map(r => parseNodeTag(r.version))
                   .filter(Boolean)
-                  .filter(v => v.major <= maxMajor) // Compatibility cap for GCC 11
                   .sort((a, b) => {
                     if (a.major !== b.major) return b.major - a.major;
                     if (a.minor !== b.minor) return b.minor - a.minor;
@@ -161,10 +175,7 @@ jobs:
                 
                 if (ltsReleases.length > 0) {
                   const selected = ltsReleases[0];
-                  console.log(`Selected Node.js LTS ${selected.name} (max major: ${maxMajor} for GCC 11/Ubuntu 22.04)`);
-                  if (releases.some(r => r.lts && parseNodeTag(r.version)?.major > maxMajor)) {
-                    console.log(`Note: Skipped newer LTS versions (v${maxMajor + 1}+) due to GCC/toolchain compatibility`);
-                  }
+                  console.log(`Selected Node.js LTS ${selected.name}`);
                   return selected.name;
                 }
                 return null;
@@ -182,24 +193,27 @@ jobs:
                 return ltsVersion;
               }
               
-              // Fallback to GitHub tags, filtering for v22.x (current LTS major)
+              // Fallback to GitHub tags, finding the latest LTS major dynamically
               console.log('Falling back to GitHub tags for Node.js version detection');
               const tags = await github.paginate(github.rest.repos.listTags, {
                 owner: 'nodejs',
                 repo: 'node',
                 per_page: 100
               });
-              const candidates = tags.map(t => t.name)
+              
+              // Parse all stable tags and find the latest even major (LTS majors are even numbers)
+              const allVersions = tags.map(t => t.name)
                 .filter(n => !isNodePreRelease(n))
                 .map(parseNodeTag)
                 .filter(Boolean)
-                .filter(v => v.major === 22) // Filter for v22.x LTS
+                .filter(v => v.major % 2 === 0) // LTS versions have even major numbers
                 .sort((a, b) => {
                   if (a.major !== b.major) return b.major - a.major;
                   if (a.minor !== b.minor) return b.minor - a.minor;
                   return b.patch - a.patch;
                 });
-              return candidates.length ? candidates[0].name : null;
+              
+              return allVersions.length ? allVersions[0].name : null;
             }
             
             // Helper to check if a prebuilt asset exists in GitHub Releases
@@ -359,68 +373,83 @@ jobs:
               latestGramineShaShort = latestGramineSha.substring(0, 8);
             }
             
-            const currentGramineSha = readVersionFile('prebuilt/gramine/VERSION') || 
-                                      readVersionFile('.gramine-version') || '';
+            // Read current Gramine version with build_id
+            const currentGramineData = readVersionFile('prebuilt/gramine/VERSION');
+            const currentGramineSha = currentGramineData.version || readVersionString('.gramine-version') || '';
+            const currentGramineBuildId = currentGramineData.buildId || '';
             
             // Check if prebuilt Gramine exists in Releases (for informational purposes)
-            const gramineTag = `prebuilt-gramine-${latestGramineShaShort}`;
-            const gramineAsset = `gramine-install-${latestGramineShaShort}.tar.gz`;
+            // Include build_id in tag/asset names to separate builds from different platforms
+            const gramineTag = `prebuilt-gramine-${latestGramineShaShort}-${TARGET_BUILD_ID}`;
+            const gramineAsset = `gramine-install-${latestGramineShaShort}-${TARGET_BUILD_ID}.tar.gz`;
             const gramineExists = await releaseAssetExists(gramineTag, gramineAsset);
             
-            // Determine if Gramine version changed or if gramine_ref was explicitly provided
+            // Determine if Gramine version OR build environment changed
             const gramineInputProvided = !!(inputGramineRef && inputGramineRef !== '');
-            const gramineChanged = latestGramineSha !== currentGramineSha;
+            const gramineVersionChanged = latestGramineSha !== currentGramineSha;
+            const gramineBuildIdChanged = currentGramineBuildId !== TARGET_BUILD_ID;
+            const gramineChanged = gramineVersionChanged || gramineBuildIdChanged;
             
-            // Always recompile Gramine when version changes or when explicitly requested
+            // Always recompile Gramine when version/build_id changes or when explicitly requested
             // Do NOT skip compilation just because prebuilt exists
             const needsGramine = forceRebuild || gramineInputProvided || gramineChanged;
             
             if (gramineExists) {
-              console.log(`Gramine: prebuilt found in Releases at ${gramineTag} (will still recompile if version changed)`);
+              console.log(`Gramine: prebuilt found in Releases at ${gramineTag} (will still recompile if version/build_id changed)`);
             }
-            console.log(`Gramine: current=${currentGramineSha.substring(0,8) || 'none'}, latest=${latestGramineShaShort}, changed=${gramineChanged}, input_provided=${gramineInputProvided}, exists_in_releases=${gramineExists}, needs_build=${needsGramine}`);
+            console.log(`Gramine: current=${currentGramineSha.substring(0,8) || 'none'} (build_id=${currentGramineBuildId || 'none'}), latest=${latestGramineShaShort} (target_build_id=${TARGET_BUILD_ID}), version_changed=${gramineVersionChanged}, build_id_changed=${gramineBuildIdChanged}, needs_build=${needsGramine}`);
             
             // 2. Check OpenSSL version
             console.log('Checking OpenSSL version...');
             const latestOpenSSL = await getLatestOpenSSL(github);
-            const currentOpenSSL = readVersionFile('prebuilt/openssl/VERSION');
+            const currentOpenSSLData = readVersionFile('prebuilt/openssl/VERSION');
+            const currentOpenSSL = currentOpenSSLData.version || '';
+            const currentOpenSSLBuildId = currentOpenSSLData.buildId || '';
             
             // Check if prebuilt OpenSSL exists in Releases (for informational purposes)
-            const opensslTag = `prebuilt-openssl-${latestOpenSSL}`;
-            const opensslAsset = `openssl-install-openssl-${latestOpenSSL}.tar.gz`;
+            // Include build_id in tag/asset names to separate builds from different platforms
+            const opensslTag = `prebuilt-openssl-${latestOpenSSL}-${TARGET_BUILD_ID}`;
+            const opensslAsset = `openssl-install-openssl-${latestOpenSSL}-${TARGET_BUILD_ID}.tar.gz`;
             const opensslExists = await releaseAssetExists(opensslTag, opensslAsset);
             
-            // Determine if OpenSSL version changed
-            const opensslChanged = latestOpenSSL !== currentOpenSSL;
+            // Determine if OpenSSL version OR build environment changed
+            const opensslVersionChanged = latestOpenSSL !== currentOpenSSL;
+            const opensslBuildIdChanged = currentOpenSSLBuildId !== TARGET_BUILD_ID;
+            const opensslChanged = opensslVersionChanged || opensslBuildIdChanged;
             
-            // Always recompile OpenSSL when version changes
+            // Always recompile OpenSSL when version/build_id changes
             const needsOpenSSL = forceRebuild || opensslChanged;
             
             if (opensslExists) {
-              console.log(`OpenSSL: prebuilt found in Releases at ${opensslTag} (will still recompile if version changed)`);
+              console.log(`OpenSSL: prebuilt found in Releases at ${opensslTag} (will still recompile if version/build_id changed)`);
             }
-            console.log(`OpenSSL: current=${currentOpenSSL || 'none'}, latest=${latestOpenSSL || 'unknown'}, changed=${opensslChanged}, exists_in_releases=${opensslExists}, needs_build=${needsOpenSSL}`);
+            console.log(`OpenSSL: current=${currentOpenSSL || 'none'} (build_id=${currentOpenSSLBuildId || 'none'}), latest=${latestOpenSSL || 'unknown'} (target_build_id=${TARGET_BUILD_ID}), version_changed=${opensslVersionChanged}, build_id_changed=${opensslBuildIdChanged}, needs_build=${needsOpenSSL}`);
             
             // 3. Check Node.js version
             console.log('Checking Node.js version...');
             const latestNode = await getLatestNode(github);
-            const currentNode = readVersionFile('prebuilt/nodejs/VERSION');
+            const currentNodeData = readVersionFile('prebuilt/nodejs/VERSION');
+            const currentNode = currentNodeData.version || '';
+            const currentNodeBuildId = currentNodeData.buildId || '';
             
             // Check if prebuilt Node.js exists in Releases (for informational purposes)
-            const nodeTag = `prebuilt-${latestNode}`;
-            const nodeAsset = `node-install-${latestNode}.tar.gz`;
+            // Include build_id in tag/asset names to separate builds from different platforms
+            const nodeTag = `prebuilt-${latestNode}-${TARGET_BUILD_ID}`;
+            const nodeAsset = `node-install-${latestNode}-${TARGET_BUILD_ID}.tar.gz`;
             const nodeExists = await releaseAssetExists(nodeTag, nodeAsset);
             
-            // Determine if Node.js version changed
-            const nodeChanged = latestNode !== currentNode;
+            // Determine if Node.js version OR build environment changed
+            const nodeVersionChanged = latestNode !== currentNode;
+            const nodeBuildIdChanged = currentNodeBuildId !== TARGET_BUILD_ID;
+            const nodeChanged = nodeVersionChanged || nodeBuildIdChanged;
             
-            // Always recompile Node.js when version changes
+            // Always recompile Node.js when version/build_id changes
             const needsNode = forceRebuild || nodeChanged;
             
             if (nodeExists) {
-              console.log(`Node.js: prebuilt found in Releases at ${nodeTag} (will still recompile if version changed)`);
+              console.log(`Node.js: prebuilt found in Releases at ${nodeTag} (will still recompile if version/build_id changed)`);
             }
-            console.log(`Node.js: current=${currentNode || 'none'}, latest=${latestNode || 'unknown'}, changed=${nodeChanged}, exists_in_releases=${nodeExists}, needs_build=${needsNode}`);
+            console.log(`Node.js: current=${currentNode || 'none'} (build_id=${currentNodeBuildId || 'none'}), latest=${latestNode || 'unknown'} (target_build_id=${TARGET_BUILD_ID}), version_changed=${nodeVersionChanged}, build_id_changed=${nodeBuildIdChanged}, needs_build=${needsNode}`);
             
             // 4. Determine if image needs rebuild
             // Use version change signals instead of needs_* flags to ensure image rebuilds
@@ -439,6 +468,7 @@ jobs:
             core.setOutput('gramine_sha_short', latestGramineShaShort);
             core.setOutput('openssl_version', latestOpenSSL || '');
             core.setOutput('node_version', latestNode || '');
+            core.setOutput('build_id', TARGET_BUILD_ID);
             
             // Create summary
             let imageReason = '';
@@ -453,13 +483,14 @@ jobs:
             
             core.summary
               .addHeading('Version Check Results')
+              .addRaw(`**Target Build Environment:** ${TARGET_BUILD_ID}\n\n`)
               .addTable([
-                [{data: 'Component', header: true}, {data: 'Current', header: true}, {data: 'Latest', header: true}, {data: 'Needs Build', header: true}],
-                ['Gramine', currentGramineSha.substring(0,8) || 'none', `${latestGramineShaShort} (${gramineOwner})`, needsGramine ? '✅' : '⏭️'],
-                ['OpenSSL', currentOpenSSL || 'none', latestOpenSSL || 'unknown', needsOpenSSL ? '✅' : '⏭️'],
-                ['Node.js', currentNode || 'none', latestNode || 'unknown', needsNode ? '✅' : '⏭️'],
-                ['Dockerfile', '-', '-', dockerfileChanged ? '✅ Changed' : '⏭️'],
-                ['Docker Image', '-', '-', needsImage ? `✅ (${imageReason})` : '⏭️']
+                [{data: 'Component', header: true}, {data: 'Current Version', header: true}, {data: 'Current Build ID', header: true}, {data: 'Latest Version', header: true}, {data: 'Needs Build', header: true}],
+                ['Gramine', currentGramineSha.substring(0,8) || 'none', currentGramineBuildId || 'none', `${latestGramineShaShort} (${gramineOwner})`, needsGramine ? '✅' : '⏭️'],
+                ['OpenSSL', currentOpenSSL || 'none', currentOpenSSLBuildId || 'none', latestOpenSSL || 'unknown', needsOpenSSL ? '✅' : '⏭️'],
+                ['Node.js', currentNode || 'none', currentNodeBuildId || 'none', latestNode || 'unknown', needsNode ? '✅' : '⏭️'],
+                ['Dockerfile', '-', '-', '-', dockerfileChanged ? '✅ Changed' : '⏭️'],
+                ['Docker Image', '-', '-', '-', needsImage ? `✅ (${imageReason})` : '⏭️']
               ])
               .write();
 
@@ -471,7 +502,7 @@ jobs:
     permissions:
       contents: write
     container:
-      image: ubuntu:22.04
+      image: ubuntu:24.04
     
     steps:
       - name: Checkout repository
@@ -515,18 +546,20 @@ jobs:
       - name: Create tarball
         run: |
           cd /opt
-          tar -czf openssl-install-${{ needs.check-versions.outputs.openssl_version }}.tar.gz openssl-install/
+          VERSION="${{ needs.check-versions.outputs.openssl_version }}"
+          BUILD_ID="${{ needs.check-versions.outputs.build_id }}"
+          tar -czf openssl-install-${VERSION}-${BUILD_ID}.tar.gz openssl-install/
           ls -lh openssl-install-*.tar.gz
-          sha256sum openssl-install-*.tar.gz > openssl-install-${{ needs.check-versions.outputs.openssl_version }}.tar.gz.sha256
+          sha256sum openssl-install-*.tar.gz > openssl-install-${VERSION}-${BUILD_ID}.tar.gz.sha256
 
       - name: Upload to GitHub Releases
         uses: softprops/action-gh-release@v1
         with:
-          tag_name: prebuilt-${{ needs.check-versions.outputs.openssl_version }}
-          name: OpenSSL ${{ needs.check-versions.outputs.openssl_version }}
+          tag_name: prebuilt-openssl-${{ needs.check-versions.outputs.openssl_version }}-${{ needs.check-versions.outputs.build_id }}
+          name: OpenSSL ${{ needs.check-versions.outputs.openssl_version }} (${{ needs.check-versions.outputs.build_id }})
           files: |
-            /opt/openssl-install-${{ needs.check-versions.outputs.openssl_version }}.tar.gz
-            /opt/openssl-install-${{ needs.check-versions.outputs.openssl_version }}.tar.gz.sha256
+            /opt/openssl-install-${{ needs.check-versions.outputs.openssl_version }}-${{ needs.check-versions.outputs.build_id }}.tar.gz
+            /opt/openssl-install-${{ needs.check-versions.outputs.openssl_version }}-${{ needs.check-versions.outputs.build_id }}.tar.gz.sha256
           draft: false
           prerelease: false
 
@@ -534,7 +567,7 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: openssl-build
-          path: /opt/openssl-install-${{ needs.check-versions.outputs.openssl_version }}.tar.gz
+          path: /opt/openssl-install-${{ needs.check-versions.outputs.openssl_version }}-${{ needs.check-versions.outputs.build_id }}.tar.gz
           retention-days: 1
 
   # Job 3: Build and upload Gramine to GitHub Releases
@@ -545,7 +578,7 @@ jobs:
     permissions:
       contents: write
     container:
-      image: ubuntu:22.04
+      image: ubuntu:24.04
     
     steps:
       - name: Checkout repository
@@ -586,7 +619,7 @@ jobs:
       - name: Install Intel SGX development dependencies
         run: |
           curl -fsSLo /etc/apt/keyrings/intel-sgx-deb.asc https://download.01.org/intel-sgx/sgx_repo/ubuntu/intel-sgx-deb.key
-          echo "deb [arch=amd64 signed-by=/etc/apt/keyrings/intel-sgx-deb.asc] https://download.01.org/intel-sgx/sgx_repo/ubuntu jammy main" > /etc/apt/sources.list.d/intel-sgx.list
+          echo "deb [arch=amd64 signed-by=/etc/apt/keyrings/intel-sgx-deb.asc] https://download.01.org/intel-sgx/sgx_repo/ubuntu noble main" > /etc/apt/sources.list.d/intel-sgx.list
           apt-get update
           DEBIAN_FRONTEND=noninteractive apt-get install -y \
             libsgx-dcap-quote-verify-dev \
@@ -619,18 +652,20 @@ jobs:
       - name: Create tarball
         run: |
           cd /opt
-          tar -czf gramine-install-${{ needs.check-versions.outputs.gramine_sha_short }}.tar.gz gramine-install/
+          SHA_SHORT="${{ needs.check-versions.outputs.gramine_sha_short }}"
+          BUILD_ID="${{ needs.check-versions.outputs.build_id }}"
+          tar -czf gramine-install-${SHA_SHORT}-${BUILD_ID}.tar.gz gramine-install/
           ls -lh gramine-install-*.tar.gz
-          sha256sum gramine-install-*.tar.gz > gramine-install-${{ needs.check-versions.outputs.gramine_sha_short }}.tar.gz.sha256
+          sha256sum gramine-install-*.tar.gz > gramine-install-${SHA_SHORT}-${BUILD_ID}.tar.gz.sha256
 
       - name: Upload to GitHub Releases
         uses: softprops/action-gh-release@v1
         with:
-          tag_name: prebuilt-gramine-${{ needs.check-versions.outputs.gramine_sha_short }}
-          name: Gramine ${{ needs.check-versions.outputs.gramine_sha_short }}
+          tag_name: prebuilt-gramine-${{ needs.check-versions.outputs.gramine_sha_short }}-${{ needs.check-versions.outputs.build_id }}
+          name: Gramine ${{ needs.check-versions.outputs.gramine_sha_short }} (${{ needs.check-versions.outputs.build_id }})
           files: |
-            /opt/gramine-install-${{ needs.check-versions.outputs.gramine_sha_short }}.tar.gz
-            /opt/gramine-install-${{ needs.check-versions.outputs.gramine_sha_short }}.tar.gz.sha256
+            /opt/gramine-install-${{ needs.check-versions.outputs.gramine_sha_short }}-${{ needs.check-versions.outputs.build_id }}.tar.gz
+            /opt/gramine-install-${{ needs.check-versions.outputs.gramine_sha_short }}-${{ needs.check-versions.outputs.build_id }}.tar.gz.sha256
           draft: false
           prerelease: false
 
@@ -638,7 +673,7 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: gramine-build
-          path: /opt/gramine-install-${{ needs.check-versions.outputs.gramine_sha_short }}.tar.gz
+          path: /opt/gramine-install-${{ needs.check-versions.outputs.gramine_sha_short }}-${{ needs.check-versions.outputs.build_id }}.tar.gz
           retention-days: 1
 
   # Job 4: Build and upload Node.js to GitHub Releases
@@ -652,7 +687,7 @@ jobs:
     permissions:
       contents: write
     container:
-      image: ubuntu:22.04
+      image: ubuntu:24.04
     
     steps:
       - name: Checkout repository
@@ -668,6 +703,7 @@ jobs:
             git \
             python3 \
             python3-pip \
+            python3-setuptools \
             curl \
             libssl-dev \
             zlib1g-dev
@@ -780,18 +816,20 @@ jobs:
       - name: Create tarball
         run: |
           cd /opt
-          tar -czf node-install-${{ needs.check-versions.outputs.node_version }}.tar.gz node-install/
+          VERSION="${{ needs.check-versions.outputs.node_version }}"
+          BUILD_ID="${{ needs.check-versions.outputs.build_id }}"
+          tar -czf node-install-${VERSION}-${BUILD_ID}.tar.gz node-install/
           ls -lh node-install-*.tar.gz
-          sha256sum node-install-*.tar.gz > node-install-${{ needs.check-versions.outputs.node_version }}.tar.gz.sha256
+          sha256sum node-install-*.tar.gz > node-install-${VERSION}-${BUILD_ID}.tar.gz.sha256
 
       - name: Upload to GitHub Releases
         uses: softprops/action-gh-release@v1
         with:
-          tag_name: prebuilt-${{ needs.check-versions.outputs.node_version }}
-          name: Node.js ${{ needs.check-versions.outputs.node_version }}
+          tag_name: prebuilt-${{ needs.check-versions.outputs.node_version }}-${{ needs.check-versions.outputs.build_id }}
+          name: Node.js ${{ needs.check-versions.outputs.node_version }} (${{ needs.check-versions.outputs.build_id }})
           files: |
-            /opt/node-install-${{ needs.check-versions.outputs.node_version }}.tar.gz
-            /opt/node-install-${{ needs.check-versions.outputs.node_version }}.tar.gz.sha256
+            /opt/node-install-${{ needs.check-versions.outputs.node_version }}-${{ needs.check-versions.outputs.build_id }}.tar.gz
+            /opt/node-install-${{ needs.check-versions.outputs.node_version }}-${{ needs.check-versions.outputs.build_id }}.tar.gz.sha256
           draft: false
           prerelease: false
 
@@ -799,7 +837,7 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: node-build
-          path: /opt/node-install-${{ needs.check-versions.outputs.node_version }}.tar.gz
+          path: /opt/node-install-${{ needs.check-versions.outputs.node_version }}-${{ needs.check-versions.outputs.build_id }}.tar.gz
           retention-days: 1
 
   # Job 5: Update VERSION files in repository
@@ -829,6 +867,7 @@ jobs:
           GRAMINE_SHA: ${{ needs.check-versions.outputs.gramine_sha }}
           OPENSSL_VERSION: ${{ needs.check-versions.outputs.openssl_version }}
           NODE_VERSION: ${{ needs.check-versions.outputs.node_version }}
+          BUILD_ID: ${{ needs.check-versions.outputs.build_id }}
           GRAMINE_BUILT: ${{ needs.build-gramine.result == 'success' }}
           OPENSSL_BUILT: ${{ needs.build-openssl.result == 'success' }}
           NODE_BUILT: ${{ needs.build-node.result == 'success' }}
@@ -837,8 +876,10 @@ jobs:
             const owner = context.repo.owner;
             const repo = context.repo.repo;
             const branch = context.ref.replace('refs/heads/', '');
+            const buildId = process.env.BUILD_ID;
             
             console.log('Updating VERSION files...');
+            console.log(`Build ID: ${buildId}`);
             
             // Helper to update file via GitHub API
             async function updateFile(filePath, content, message) {
@@ -873,32 +914,37 @@ jobs:
             }
             
             // Update version files for successfully built components
+            // Format: "<version> <build_id>" to track both version and build environment
             if (process.env.GRAMINE_BUILT === 'true') {
+              const gramineSha = process.env.GRAMINE_SHA;
               await updateFile(
                 'prebuilt/gramine/VERSION',
-                process.env.GRAMINE_SHA + '\n',
-                `Update Gramine prebuilt to ${process.env.GRAMINE_SHA.substring(0,8)}`
+                `${gramineSha} ${buildId}\n`,
+                `Update Gramine prebuilt to ${gramineSha.substring(0,8)} (${buildId})`
               );
+              // Keep .gramine-version as just SHA for backward compatibility
               await updateFile(
                 '.gramine-version',
-                process.env.GRAMINE_SHA + '\n',
-                `Update Gramine version to ${process.env.GRAMINE_SHA.substring(0,8)}`
+                gramineSha + '\n',
+                `Update Gramine version to ${gramineSha.substring(0,8)}`
               );
             }
             
             if (process.env.OPENSSL_BUILT === 'true') {
+              const opensslVersion = process.env.OPENSSL_VERSION;
               await updateFile(
                 'prebuilt/openssl/VERSION',
-                process.env.OPENSSL_VERSION + '\n',
-                `Update OpenSSL prebuilt to ${process.env.OPENSSL_VERSION}`
+                `${opensslVersion} ${buildId}\n`,
+                `Update OpenSSL prebuilt to ${opensslVersion} (${buildId})`
               );
             }
             
             if (process.env.NODE_BUILT === 'true') {
+              const nodeVersion = process.env.NODE_VERSION;
               await updateFile(
                 'prebuilt/nodejs/VERSION',
-                process.env.NODE_VERSION + '\n',
-                `Update Node.js prebuilt to ${process.env.NODE_VERSION}`
+                `${nodeVersion} ${buildId}\n`,
+                `Update Node.js prebuilt to ${nodeVersion} (${buildId})`
               );
             }
             
@@ -929,30 +975,33 @@ jobs:
         run: |
           mkdir -p prebuilt/gramine prebuilt/openssl prebuilt/nodejs
           
-          # Download Gramine
+          BUILD_ID="${{ needs.check-versions.outputs.build_id }}"
+          echo "Target build environment: ${BUILD_ID}"
+          
+          # Download Gramine (with build_id in tag/asset name)
           GRAMINE_SHA_SHORT="${{ needs.check-versions.outputs.gramine_sha_short }}"
-          echo "Downloading Gramine ${GRAMINE_SHA_SHORT}"
+          echo "Downloading Gramine ${GRAMINE_SHA_SHORT} (${BUILD_ID})"
           if ! curl -fsSL \
             -o prebuilt/gramine/gramine-install.tar.gz \
-            "https://github.com/${{ github.repository }}/releases/download/prebuilt-gramine-${GRAMINE_SHA_SHORT}/gramine-install-${GRAMINE_SHA_SHORT}.tar.gz"; then
+            "https://github.com/${{ github.repository }}/releases/download/prebuilt-gramine-${GRAMINE_SHA_SHORT}-${BUILD_ID}/gramine-install-${GRAMINE_SHA_SHORT}-${BUILD_ID}.tar.gz"; then
             echo "Gramine download failed, will compile from source"
           fi
           
-          # Download OpenSSL
+          # Download OpenSSL (with build_id in tag/asset name)
           OPENSSL_VERSION="${{ needs.check-versions.outputs.openssl_version }}"
-          echo "Downloading OpenSSL ${OPENSSL_VERSION}"
+          echo "Downloading OpenSSL ${OPENSSL_VERSION} (${BUILD_ID})"
           if ! curl -fsSL \
             -o prebuilt/openssl/openssl-install.tar.gz \
-            "https://github.com/${{ github.repository }}/releases/download/prebuilt-${OPENSSL_VERSION}/openssl-install-${OPENSSL_VERSION}.tar.gz"; then
+            "https://github.com/${{ github.repository }}/releases/download/prebuilt-openssl-${OPENSSL_VERSION}-${BUILD_ID}/openssl-install-${OPENSSL_VERSION}-${BUILD_ID}.tar.gz"; then
             echo "OpenSSL download failed, will use system OpenSSL"
           fi
           
-          # Download Node.js
+          # Download Node.js (with build_id in tag/asset name)
           NODE_VERSION="${{ needs.check-versions.outputs.node_version }}"
-          echo "Downloading Node.js ${NODE_VERSION}"
+          echo "Downloading Node.js ${NODE_VERSION} (${BUILD_ID})"
           if ! curl -fsSL \
             -o prebuilt/nodejs/node-install.tar.gz \
-            "https://github.com/${{ github.repository }}/releases/download/prebuilt-${NODE_VERSION}/node-install-${NODE_VERSION}.tar.gz"; then
+            "https://github.com/${{ github.repository }}/releases/download/prebuilt-${NODE_VERSION}-${BUILD_ID}/node-install-${NODE_VERSION}-${BUILD_ID}.tar.gz"; then
             echo "Node.js download failed, will install from NodeSource"
           fi
           
