@@ -2202,8 +2202,27 @@ int main(int argc, char *argv[]) {
         server_id = get_or_create_server_id(lan_ip, public_ip);
         printf("[Launcher] Server ID: %u\n", server_id);
         
-        /* Build seeds list (self IPs + extra seeds, deduplicated) */
-        build_seeds_list(seeds_list, sizeof(seeds_list), lan_ip, public_ip, config.gr_seeds, GR_DEFAULT_PORT);
+        /* Build seeds list (self IPs + extra seeds, deduplicated)
+         * If --gr-local-address is specified, use that IP instead of auto-detected LAN IP
+         * to ensure group_seeds is consistent with group_replication_local_address */
+        char seeds_lan_ip[MAX_IP_LEN] = {0};
+        if (config.gr_local_address && strlen(config.gr_local_address) > 0) {
+            /* Extract IP from gr_local_address (which may include port) */
+            const char *colon = strchr(config.gr_local_address, ':');
+            if (colon) {
+                size_t ip_len = colon - config.gr_local_address;
+                if (ip_len < sizeof(seeds_lan_ip)) {
+                    strncpy(seeds_lan_ip, config.gr_local_address, ip_len);
+                    seeds_lan_ip[ip_len] = '\0';
+                }
+            } else {
+                strncpy(seeds_lan_ip, config.gr_local_address, sizeof(seeds_lan_ip) - 1);
+            }
+            printf("[Launcher] Using --gr-local-address IP for seeds: %s\n", seeds_lan_ip);
+        } else {
+            strncpy(seeds_lan_ip, lan_ip, sizeof(seeds_lan_ip) - 1);
+        }
+        build_seeds_list(seeds_list, sizeof(seeds_list), seeds_lan_ip, public_ip, config.gr_seeds, GR_DEFAULT_PORT);
         printf("[Launcher] Seeds list: %s\n", seeds_list);
         
         /* Determine local address for GR */
