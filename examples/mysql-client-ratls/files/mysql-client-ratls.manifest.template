@@ -77,6 +77,9 @@ fs.mounts = [
   { path = "/bin", uri = "file:/bin" },
   { path = "/sbin", uri = "file:/sbin" },
   
+  # Prebuilt Node.js installation directory
+  { path = "/opt/node-install", uri = "file:/opt/node-install" },
+  
   # Application directory
   { path = "/app", uri = "file:/app" },
   
