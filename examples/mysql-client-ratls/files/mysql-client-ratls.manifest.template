@@ -30,7 +30,7 @@ loader.env.UV_USE_IO_URING = "0"
 
 # RA-TLS Configuration
 # Use secp256k1 curve for Ethereum compatibility
-loader.env.RA_TLS_CERT_ALGORITHM = "secp256k1"
+loader.env.RA_TLS_CERT_ALGORITHM = "secp256r1"
 
 # Enable RA-TLS verification and require peer certificate for mutual TLS
 loader.env.RA_TLS_ENABLE_VERIFY = "1"
