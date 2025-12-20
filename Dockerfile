@@ -225,30 +225,19 @@ RUN if [ "$USE_PREBUILT" = "true" ] && [ -f /tmp/prebuilt/openssl/openssl-instal
         done; \
     fi
 
-# Install Node.js (prebuilt or from NodeSource)
-ARG NODE_MAJOR=24
-RUN if [ "$USE_PREBUILT" = "true" ] && [ -f /tmp/prebuilt/nodejs/node-install.tar.gz ]; then \
-        echo "Using prebuilt Node.js"; \
-        cd /opt; \
-        tar -xzf /tmp/prebuilt/nodejs/node-install.tar.gz; \
-        # Ensure Node.js binary has executable permission
-        chmod +x /opt/node-install/bin/node; \
-        echo "Prebuilt Node.js extracted successfully"; \
-        /opt/node-install/bin/node --version; \
-    else \
-        echo "Installing Node.js from NodeSource"; \
-        curl -fsSL https://deb.nodesource.com/setup_${NODE_MAJOR}.x | bash -; \
-        apt-get install -y nodejs; \
-        rm -rf /var/lib/apt/lists/*; \
-        # Create /opt/node-install with symlinks to system Node.js
-        # This ensures Gramine manifests that mount /opt/node-install will work
-        # regardless of whether prebuilt or NodeSource Node.js is used
-        echo "Creating /opt/node-install symlinks for NodeSource Node.js"; \
-        mkdir -p /opt/node-install/bin; \
-        ln -sf /usr/bin/node /opt/node-install/bin/node; \
-        ln -sf /usr/bin/npm /opt/node-install/bin/npm; \
-        ln -sf /usr/bin/npx /opt/node-install/bin/npx; \
-    fi
+# Install Node.js (prebuilt only - no fallback)
+# The prebuilt Node.js tarball must be available from GitHub Releases
+RUN if [ ! -f /tmp/prebuilt/nodejs/node-install.tar.gz ]; then \
+        echo "ERROR: Prebuilt Node.js tarball not found at /tmp/prebuilt/nodejs/node-install.tar.gz" >&2; \
+        echo "Please ensure the Node.js compilation workflow has completed and uploaded the tarball to GitHub Releases." >&2; \
+        exit 1; \
+    fi && \
+    echo "Using prebuilt Node.js" && \
+    cd /opt && \
+    tar -xzf /tmp/prebuilt/nodejs/node-install.tar.gz && \
+    chmod +x /opt/node-install/bin/node && \
+    echo "Prebuilt Node.js extracted successfully" && \
+    /opt/node-install/bin/node --version
 
 # Create wrapper scripts for openssl and node to limit OpenSSL library path scope
 # This ensures only openssl CLI and Node.js use the custom OpenSSL, not other system binaries
@@ -265,7 +254,7 @@ RUN rm -f /usr/local/bin/openssl && \
     echo 'fi' >> /usr/local/bin/openssl && \
     chmod +x /usr/local/bin/openssl
 
-# Create node wrapper
+# Create node wrapper (no fallback - prebuilt Node.js is required)
 RUN rm -f /usr/local/bin/node && \
     echo '#!/bin/sh' > /usr/local/bin/node && \
     echo 'if [ -d /opt/openssl-install ]; then' >> /usr/local/bin/node && \
@@ -274,11 +263,12 @@ RUN rm -f /usr/local/bin/node && \
     echo 'if [ -x /opt/node-install/bin/node ]; then' >> /usr/local/bin/node && \
     echo '  exec /opt/node-install/bin/node "$@"' >> /usr/local/bin/node && \
     echo 'else' >> /usr/local/bin/node && \
-    echo '  exec /usr/bin/node "$@"' >> /usr/local/bin/node && \
+    echo '  echo "ERROR: Node.js not found at /opt/node-install/bin/node" >&2' >> /usr/local/bin/node && \
+    echo '  exit 1' >> /usr/local/bin/node && \
     echo 'fi' >> /usr/local/bin/node && \
     chmod +x /usr/local/bin/node
 
-# Create npm wrapper
+# Create npm wrapper (no fallback - prebuilt Node.js is required)
 RUN rm -f /usr/local/bin/npm && \
     echo '#!/bin/sh' > /usr/local/bin/npm && \
     echo 'if [ -d /opt/openssl-install ]; then' >> /usr/local/bin/npm && \
@@ -287,11 +277,12 @@ RUN rm -f /usr/local/bin/npm && \
     echo 'if [ -x /opt/node-install/bin/npm ]; then' >> /usr/local/bin/npm && \
     echo '  exec /opt/node-install/bin/npm "$@"' >> /usr/local/bin/npm && \
     echo 'else' >> /usr/local/bin/npm && \
-    echo '  exec /usr/bin/npm "$@"' >> /usr/local/bin/npm && \
+    echo '  echo "ERROR: npm not found at /opt/node-install/bin/npm" >&2' >> /usr/local/bin/npm && \
+    echo '  exit 1' >> /usr/local/bin/npm && \
     echo 'fi' >> /usr/local/bin/npm && \
     chmod +x /usr/local/bin/npm
 
-# Create npx wrapper
+# Create npx wrapper (no fallback - prebuilt Node.js is required)
 RUN rm -f /usr/local/bin/npx && \
     echo '#!/bin/sh' > /usr/local/bin/npx && \
     echo 'if [ -d /opt/openssl-install ]; then' >> /usr/local/bin/npx && \
@@ -300,7 +291,8 @@ RUN rm -f /usr/local/bin/npx && \
     echo 'if [ -x /opt/node-install/bin/npx ]; then' >> /usr/local/bin/npx && \
     echo '  exec /opt/node-install/bin/npx "$@"' >> /usr/local/bin/npx && \
     echo 'else' >> /usr/local/bin/npx && \
-    echo '  exec /usr/bin/npx "$@"' >> /usr/local/bin/npx && \
+    echo '  echo "ERROR: npx not found at /opt/node-install/bin/npx" >&2' >> /usr/local/bin/npx && \
+    echo '  exit 1' >> /usr/local/bin/npx && \
     echo 'fi' >> /usr/local/bin/npx && \
     chmod +x /usr/local/bin/npx
 
