@@ -1070,10 +1070,11 @@ jobs:
           echo '```' >> $GITHUB_STEP_SUMMARY
 
   # Job 7: Check for SGX self-hosted runners
+  # Only run tests when there's actual compilation (Gramine, OpenSSL, Node.js, or Docker image)
   check-sgx-runner:
     runs-on: ubuntu-latest
-    needs: build-image
-    if: ${{ always() && (needs.build-image.result == 'success' || needs.build-image.result == 'skipped') }}
+    needs: [check-versions, build-gramine, build-openssl, build-node, build-image]
+    if: ${{ always() && (needs.build-gramine.result == 'success' || needs.build-openssl.result == 'success' || needs.build-node.result == 'success' || needs.build-image.result == 'success') }}
     permissions:
       contents: read
       actions: read
