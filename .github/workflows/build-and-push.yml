@@ -385,14 +385,14 @@ jobs:
             const gramineExists = await releaseAssetExists(gramineTag, gramineAsset);
             
             // Determine if Gramine version OR build environment changed
-            const gramineInputProvided = !!(inputGramineRef && inputGramineRef !== '');
             const gramineVersionChanged = latestGramineSha !== currentGramineSha;
             const gramineBuildIdChanged = currentGramineBuildId !== TARGET_BUILD_ID;
             const gramineChanged = gramineVersionChanged || gramineBuildIdChanged;
             
-            // Always recompile Gramine when version/build_id changes or when explicitly requested
-            // Do NOT skip compilation just because prebuilt exists
-            const needsGramine = forceRebuild || gramineInputProvided || gramineChanged;
+            // Recompile Gramine when version/build_id changes or when force_rebuild is set
+            // Note: gramine_ref input is only used to select which ref to check, NOT as a rebuild trigger
+            // This prevents unnecessary rebuilds when monitor workflow passes the current SHA as input
+            const needsGramine = forceRebuild || gramineChanged;
             
             if (gramineExists) {
               console.log(`Gramine: prebuilt found in Releases at ${gramineTag} (will still recompile if version/build_id changed)`);
