@@ -191,10 +191,10 @@ RUN rm -rf /opt/mysql-ratls/launcher/*.c \
 # (loader.env.*) and are NOT set here because host environment variables are
 # isolated from the SGX enclave. The manifest directly sets:
 # - RA_TLS_CERT_ALGORITHM=secp256k1
-# - RATLS_ENABLE_VERIFY=1
-# - RATLS_REQUIRE_PEER_CERT=1
-# - RATLS_CERT_PATH=/var/lib/mysql-ssl/server-cert.pem
-# - RATLS_KEY_PATH=/app/wallet/mysql-keys/server-key.pem
+# - RA_TLS_ENABLE_VERIFY=1
+# - RA_TLS_REQUIRE_PEER_CERT=1
+# - RA_TLS_CERT_PATH=/var/lib/mysql-ssl/server-cert.pem
+# - RA_TLS_KEY_PATH=/app/wallet/mysql-keys/server-key.pem
 # - MYSQL_DATA_DIR=/app/wallet/mysql-data
 
 # Expose MySQL port and Group Replication XCom port
