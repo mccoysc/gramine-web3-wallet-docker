@@ -22,9 +22,9 @@ concurrency:
 
 env:
   MYSQL_VERSION: '8.0.44'
-  MYSQL_UBUNTU_VERSION: '8.0.44-0ubuntu0.22.04.2'
-  PLUGIN_TAG: 'mysql-gr-plugin-8.0.44'
-  PLUGIN_ASSET: 'mysql-gr-plugin-8.0.44-sgx.tar.gz'
+  MYSQL_UBUNTU_VERSION: '8.0.44-0ubuntu0.24.04.2'
+  PLUGIN_TAG: 'mysql-gr-plugin-8.0.44-ubuntu24.04'
+  PLUGIN_ASSET: 'mysql-gr-plugin-8.0.44-ubuntu24.04-sgx.tar.gz'
   BASE_IMAGE: ghcr.io/${{ github.repository_owner }}/gramine-web3-wallet-docker:latest
 
 jobs:
@@ -365,8 +365,8 @@ jobs:
           ## Features
           - Supports GR_LOCAL_IP environment variable (comma-separated list)
           - Auto-detects local IP via UDP socket if env var not set
-          - Compatible with MySQL ${{ env.MYSQL_UBUNTU_VERSION }}
-          - Built using the repository base Docker image for environment consistency
+          - Compatible with MySQL ${{ env.MYSQL_UBUNTU_VERSION }} on Ubuntu 24.04
+          - Built using the repository base Docker image (Ubuntu 24.04) for environment consistency
 
           ## Usage
           Replace /usr/lib/mysql/plugin/group_replication.so with this version.
