@@ -91,13 +91,13 @@ docker run -d \
 
 ### 使用手动白名单
 
-**注意**：`RATLS_WHITELIST_CONFIG` 只能通过 Gramine manifest 环境变量设置，不能通过 `docker run -e` 设置。这是因为 manifest 是签名和可信的，而命令行参数不是。
+**注意**：`RA_TLS_WHITELIST_CONFIG` 只能通过 Gramine manifest 环境变量设置，不能通过 `docker run -e` 设置。这是因为 manifest 是签名和可信的，而命令行参数不是。
 
 要使用手动白名单，必须在构建前修改 manifest 模板：
 
 ```toml
 # 在 mysql-ratls.manifest.template 中添加：
-loader.env.RATLS_WHITELIST_CONFIG = "BASE64_ENCODED_CSV_HERE"
+loader.env.RA_TLS_WHITELIST_CONFIG = "BASE64_ENCODED_CSV_HERE"
 ```
 
 白名单格式是 Base64 编码的 CSV，共 5 行：
@@ -118,10 +118,10 @@ loader.env.RATLS_WHITELIST_CONFIG = "BASE64_ENCODED_CSV_HERE"
 | `PCCS_API_KEY` | 是 | 用于 DCAP 证明的 Intel PCCS API 密钥 |
 | `CONTRACT_ADDRESS` | 否 | 用于读取白名单的以太坊合约地址 |
 | `RPC_URL` | 否* | 以太坊 RPC 端点（*如果设置了 CONTRACT_ADDRESS 则必需） |
-| `RATLS_WHITELIST_CONFIG` | 否 | 手动白名单（Base64 编码的 CSV）。只能通过 manifest 环境变量设置，不能通过命令行设置。如果同时设置了合约白名单和环境变量白名单，它们会按规则去重后合并。 |
+| `RA_TLS_WHITELIST_CONFIG` | 否 | 手动白名单（Base64 编码的 CSV）。只能通过 manifest 环境变量设置，不能通过命令行设置。如果同时设置了合约白名单和环境变量白名单，它们会按规则去重后合并。 |
 | `MYSQL_GR_GROUP_NAME` | 否 | Group Replication group name（UUID）。未设置时自动生成。 |
-| `RATLS_CERT_PATH` | 否 | RA-TLS 证书路径（默认：`/var/lib/mysql-ssl/server-cert.pem`） |
-| `RATLS_KEY_PATH` | 否 | RA-TLS 私钥路径，必须在加密分区（默认：`/app/wallet/mysql-keys/server-key.pem`） |
+| `RA_TLS_CERT_PATH` | 否 | RA-TLS 证书路径（默认：`/var/lib/mysql-ssl/server-cert.pem`） |
+| `RA_TLS_KEY_PATH` | 否 | RA-TLS 私钥路径，必须在加密分区（默认：`/app/wallet/mysql-keys/server-key.pem`） |
 
 ## 智能合约集成
 
@@ -131,18 +131,18 @@ loader.env.RATLS_WHITELIST_CONFIG = "BASE64_ENCODED_CSV_HERE"
 function getSGXConfig() external view returns (string memory);
 ```
 
-返回的字符串应该是包含 `RATLS_WHITELIST_CONFIG` 字段的 JSON 对象：
+返回的字符串应该是包含 `RA_TLS_WHITELIST_CONFIG` 字段的 JSON 对象：
 
 ```json
 {
-  "RATLS_WHITELIST_CONFIG": "BASE64_ENCODED_CSV_WHITELIST",
+  "RA_TLS_WHITELIST_CONFIG": "BASE64_ENCODED_CSV_WHITELIST",
   "other_config": "..."
 }
 ```
 
 ## 白名单格式
 
-`RATLS_WHITELIST_CONFIG` 是 Base64 编码的 CSV，正好 5 行：
+`RA_TLS_WHITELIST_CONFIG` 是 Base64 编码的 CSV，正好 5 行：
 
 1. **MRENCLAVE**：允许的 enclave 测量值（逗号分隔的十六进制）
 2. **MRSIGNER**：允许的签名者测量值（逗号分隔的十六进制）
@@ -180,7 +180,7 @@ function getSGXConfig() external view returns (string memory);
 - 验证 `CONTRACT_ADDRESS` 是否正确
 - 验证 `RPC_URL` 是否可访问
 - 检查合约是否实现了 `getSGXConfig()`
-- 确保返回的 JSON 包含 `RATLS_WHITELIST_CONFIG` 字段
+- 确保返回的 JSON 包含 `RA_TLS_WHITELIST_CONFIG` 字段
 
 ### SGX 设备不可用
 
@@ -352,16 +352,16 @@ START GROUP_REPLICATION;
 | `--contract-address=ADDR` | `CONTRACT_ADDRESS` | 用于白名单的智能合约地址 |
 | `--rpc-url=URL` | `RPC_URL` | 以太坊 JSON-RPC 端点 URL |
 
-**注意**：`RATLS_WHITELIST_CONFIG` 只能通过 manifest 环境变量设置（不能通过命令行），这是出于安全考虑。如果同时设置了合约白名单和环境变量白名单，它们会按规则去重后合并（5 行中相同索引的值组成一条规则）。
+**注意**：`RA_TLS_WHITELIST_CONFIG` 只能通过 manifest 环境变量设置（不能通过命令行），这是出于安全考虑。如果同时设置了合约白名单和环境变量白名单，它们会按规则去重后合并（5 行中相同索引的值组成一条规则）。
 
 ### 路径选项
 
 | 参数 | 环境变量 | 默认值 | 描述 |
 |------|----------|--------|------|
-| `--cert-path=PATH` | `RATLS_CERT_PATH` | `/var/lib/mysql-ssl/server-cert.pem` | RA-TLS 证书路径 |
+| `--cert-path=PATH` | `RA_TLS_CERT_PATH` | `/var/lib/mysql-ssl/server-cert.pem` | RA-TLS 证书路径 |
 
 **注意**：以下路径**只能**通过 manifest 环境变量设置（不能通过命令行），以防止数据泄漏：
-- `RATLS_KEY_PATH`：RA-TLS 私钥路径（默认：`/app/wallet/mysql-keys/server-key.pem`）
+- `RA_TLS_KEY_PATH`：RA-TLS 私钥路径（默认：`/app/wallet/mysql-keys/server-key.pem`）
 - `MYSQL_DATA_DIR`：MySQL 数据目录（默认：`/app/wallet/mysql-data`）
 
 ### RA-TLS 配置选项
@@ -369,8 +369,8 @@ START GROUP_REPLICATION;
 | 参数 | 环境变量 | 默认值 | 描述 |
 |------|----------|--------|------|
 | `--ra-tls-cert-algorithm=ALG` | `RA_TLS_CERT_ALGORITHM` | - | 证书算法（例如 secp256r1, secp256k1） |
-| `--ratls-enable-verify=0\|1` | `RATLS_ENABLE_VERIFY` | `1` | 启用 RA-TLS 验证 |
-| `--ratls-require-peer-cert=0\|1` | `RATLS_REQUIRE_PEER_CERT` | `1` | 要求对等证书以进行双向 TLS |
+| `--ratls-enable-verify=0\|1` | `RA_TLS_ENABLE_VERIFY` | `1` | 启用 RA-TLS 验证 |
+| `--ratls-require-peer-cert=0\|1` | `RA_TLS_REQUIRE_PEER_CERT` | `1` | 要求对等证书以进行双向 TLS |
 | `--ra-tls-allow-outdated-tcb=0\|1` | `RA_TLS_ALLOW_OUTDATED_TCB_INSECURE` | 来自 manifest | 允许过时的 TCB（不安全） |
 | `--ra-tls-allow-hw-config-needed=0\|1` | `RA_TLS_ALLOW_HW_CONFIG_NEEDED` | 来自 manifest | 允许需要硬件配置状态 |
 | `--ra-tls-allow-sw-hardening-needed=0\|1` | `RA_TLS_ALLOW_SW_HARDENING_NEEDED` | 来自 manifest | 允许需要软件加固状态 |
@@ -379,7 +379,7 @@ START GROUP_REPLICATION;
 
 启动器验证配置并处理依赖关系：
 
-- `RATLS_WHITELIST_CONFIG` 只能通过 manifest 环境变量设置（不能通过命令行），这是出于安全考虑
+- `RA_TLS_WHITELIST_CONFIG` 只能通过 manifest 环境变量设置（不能通过命令行），这是出于安全考虑
 - 如果同时设置了合约白名单和环境变量白名单，它们会按规则去重后合并
 - Group Replication 默认启用；未指定 `--gr-group-name` 时自动生成
 - 当缺少依赖配置时会打印警告（例如设置了 `--contract-address` 但没有 `--rpc-url`）

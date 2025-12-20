@@ -48,7 +48,7 @@ static const char *NODE_BINARY_PATHS[] = {
 #define OPENSSL_LIB_PATH "/opt/openssl-install/lib"
 
 /* RA-TLS library candidate paths (searched in order) */
-static const char *RATLS_LIB_PATHS[] = {
+static const char *RA_TLS_LIB_PATHS[] = {
     "/usr/local/lib/x86_64-linux-gnu/libratls-quote-verify.so",
     "/usr/local/lib/libratls-quote-verify.so",
     "/usr/lib/x86_64-linux-gnu/libratls-quote-verify.so",
@@ -344,7 +344,7 @@ static char *read_whitelist_from_contract(const char *rpc_url, const char *contr
         return NULL;
     }
     
-    /* Parse JSON to extract RATLS_WHITELIST_CONFIG */
+    /* Parse JSON to extract RA_TLS_WHITELIST_CONFIG */
     cJSON *json = cJSON_Parse(json_str);
     free(json_str);
     
@@ -353,12 +353,12 @@ static char *read_whitelist_from_contract(const char *rpc_url, const char *contr
         return NULL;
     }
     
-    cJSON *whitelist = cJSON_GetObjectItem(json, "RATLS_WHITELIST_CONFIG");
+    cJSON *whitelist = cJSON_GetObjectItem(json, "RA_TLS_WHITELIST_CONFIG");
     if (whitelist && cJSON_IsString(whitelist)) {
         result = strdup(whitelist->valuestring);
         printf("[Launcher] Successfully read whitelist from contract\n");
     } else {
-        printf("[Launcher] Contract response does not contain RATLS_WHITELIST_CONFIG\n");
+        printf("[Launcher] Contract response does not contain RA_TLS_WHITELIST_CONFIG\n");
     }
     
     cJSON_Delete(json);
@@ -400,18 +400,18 @@ int main(int argc, char *argv[]) {
     //set_env("RA_TLS_CERT_ALGORITHM", "secp256k1");
     
     /* Enable RA-TLS verification and require peer certificate for mutual TLS */
-    set_env("RATLS_ENABLE_VERIFY", "1");
-    set_env("RATLS_REQUIRE_PEER_CERT", "1");
+    set_env("RA_TLS_ENABLE_VERIFY", "1");
+    set_env("RA_TLS_REQUIRE_PEER_CERT", "1");
     
     /* Set default certificate and key paths if not already set */
-    set_env_default("RATLS_CERT_PATH", DEFAULT_CERT_PATH);
-    set_env_default("RATLS_KEY_PATH", DEFAULT_KEY_PATH);
+    set_env_default("RA_TLS_CERT_PATH", DEFAULT_CERT_PATH);
+    set_env_default("RA_TLS_KEY_PATH", DEFAULT_KEY_PATH);
     
     /* Get configuration from environment variables */
     const char *contract_address = getenv("CONTRACT_ADDRESS");
     const char *rpc_url = getenv("RPC_URL");
-    const char *cert_path = getenv("RATLS_CERT_PATH");
-    const char *key_path = getenv("RATLS_KEY_PATH");
+    const char *cert_path = getenv("RA_TLS_CERT_PATH");
+    const char *key_path = getenv("RA_TLS_KEY_PATH");
     
     /* Create directories for certificates and keys */
     char cert_dir[MAX_PATH_LEN];
@@ -433,7 +433,7 @@ int main(int argc, char *argv[]) {
     if (contract_address && rpc_url) {
         char *whitelist = read_whitelist_from_contract(rpc_url, contract_address);
         if (whitelist) {
-            set_env("RATLS_WHITELIST_CONFIG", whitelist);
+            set_env("RA_TLS_WHITELIST_CONFIG", whitelist);
             printf("[Launcher] Whitelist configuration set from contract\n");
             free(whitelist);
         }
@@ -442,12 +442,12 @@ int main(int argc, char *argv[]) {
     }
     
     /* Find RA-TLS library */
-    const char *ratls_lib = find_first_existing(RATLS_LIB_PATHS);
+    const char *ratls_lib = find_first_existing(RA_TLS_LIB_PATHS);
     if (!ratls_lib) {
         fprintf(stderr, "[Launcher] ERROR: RA-TLS library not found\n");
         fprintf(stderr, "[Launcher] Searched paths:\n");
-        for (int i = 0; RATLS_LIB_PATHS[i] != NULL; i++) {
-            fprintf(stderr, "[Launcher]   - %s\n", RATLS_LIB_PATHS[i]);
+        for (int i = 0; RA_TLS_LIB_PATHS[i] != NULL; i++) {
+            fprintf(stderr, "[Launcher]   - %s\n", RA_TLS_LIB_PATHS[i]);
         }
         return 1;
     }
@@ -503,8 +503,8 @@ int main(int argc, char *argv[]) {
     printf("[Launcher] RA-TLS Configuration:\n");
     printf("[Launcher]   - Certificate path: %s\n", cert_path);
     printf("[Launcher]   - Key path: %s\n", key_path);
-    printf("[Launcher]   - Verification enabled: %s\n", getenv("RATLS_ENABLE_VERIFY") ?: "1");
-    printf("[Launcher]   - Require peer cert: %s\n", getenv("RATLS_REQUIRE_PEER_CERT") ?: "1");
+    printf("[Launcher]   - Verification enabled: %s\n", getenv("RA_TLS_ENABLE_VERIFY") ?: "1");
+    printf("[Launcher]   - Require peer cert: %s\n", getenv("RA_TLS_REQUIRE_PEER_CERT") ?: "1");
     
     /* Build argv for Node.js */
     /* argv[0] = node, argv[1] = script path, then any additional args */

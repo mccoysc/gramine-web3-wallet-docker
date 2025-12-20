@@ -180,8 +180,8 @@ async function main() {
     const mysqlPort = parseInt(process.env.MYSQL_PORT || DEFAULT_MYSQL_PORT, 10);
     const mysqlUser = process.env.MYSQL_USER || DEFAULT_MYSQL_USER;
     const mysqlDatabase = process.env.MYSQL_DATABASE;
-    const certPath = process.env.RATLS_CERT_PATH || DEFAULT_CERT_PATH;
-    const keyPath = process.env.RATLS_KEY_PATH || DEFAULT_KEY_PATH;
+    const certPath = process.env.RA_TLS_CERT_PATH || DEFAULT_CERT_PATH;
+    const keyPath = process.env.RA_TLS_KEY_PATH || DEFAULT_KEY_PATH;
     const query = process.env.MYSQL_QUERY;
     const interactive = process.env.MYSQL_INTERACTIVE === '1';
 

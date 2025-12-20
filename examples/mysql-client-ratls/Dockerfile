@@ -176,10 +176,10 @@ RUN rm -rf /opt/mysql-client-ratls/launcher/*.c \
 # (loader.env.*) and are NOT set here because host environment variables are
 # isolated from the SGX enclave. The manifest directly sets:
 # - RA_TLS_CERT_ALGORITHM=secp256k1
-# - RATLS_ENABLE_VERIFY=1
-# - RATLS_REQUIRE_PEER_CERT=1
-# - RATLS_CERT_PATH=/var/lib/mysql-client-ssl/client-cert.pem
-# - RATLS_KEY_PATH=/app/wallet/mysql-client-keys/client-key.pem
+# - RA_TLS_ENABLE_VERIFY=1
+# - RA_TLS_REQUIRE_PEER_CERT=1
+# - RA_TLS_CERT_PATH=/var/lib/mysql-client-ssl/client-cert.pem
+# - RA_TLS_KEY_PATH=/app/wallet/mysql-client-keys/client-key.pem
 
 # Set working directory
 WORKDIR /app

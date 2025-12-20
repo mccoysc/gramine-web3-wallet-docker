@@ -212,7 +212,7 @@ gramine-manifest my-app.manifest.template my-app.manifest
 这会自动：
 - 将库添加到 `sgx.trusted_files`
 - 将 `loader.env.LD_PRELOAD` 设置为库路径
-- 设置 `loader.env.RATLS_ENABLE_VERIFY=1`
+- 设置 `loader.env.RA_TLS_ENABLE_VERIFY=1`
 - 创建必要的 `fs.mounts` 条目
 
 **手动配置**
@@ -223,7 +223,7 @@ gramine-manifest my-app.manifest.template my-app.manifest
 sgx.remote_attestation = "dcap"
 
 loader.env.LD_PRELOAD = "/usr/local/lib/x86_64-linux-gnu/libratls-quote-verify.so"
-loader.env.RATLS_ENABLE_VERIFY = "1"
+loader.env.RA_TLS_ENABLE_VERIFY = "1"
 
 sgx.trusted_files = [
     "file:/usr/local/lib/x86_64-linux-gnu/libratls-quote-verify.so",
@@ -232,9 +232,9 @@ sgx.trusted_files = [
 
 **RA-TLS 环境变量**
 
-有关 RA-TLS 环境变量的完整文档（包括 `RATLS_ENABLE_VERIFY`、`RATLS_REQUIRE_PEER_CERT`、`RA_TLS_MRSIGNER`、`RA_TLS_MRENCLAVE` 等），请参阅 [Gramine RA-TLS 文档](https://github.com/mccoysc/gramine#ra-tls-quick-start)。
+有关 RA-TLS 环境变量的完整文档（包括 `RA_TLS_ENABLE_VERIFY`、`RA_TLS_REQUIRE_PEER_CERT`、`RA_TLS_MRSIGNER`、`RA_TLS_MRENCLAVE` 等），请参阅 [Gramine RA-TLS 文档](https://github.com/mccoysc/gramine#ra-tls-quick-start)。
 
-**历史遗留说明**：本仓库以前包含用于自动注入的 `ratls_inject.py` 和 `patch-gramine-manifest.sh` 脚本。这些脚本现已禁用（在 Dockerfile 中注释掉），并将在未来版本中删除。环境变量 `DISABLE_RATLS_PRELOAD` 和 `RATLS_PRELOAD_PATH` 已弃用且不再使用。请改用 `GRAMINE_LD_PRELOAD`。
+**历史遗留说明**：本仓库以前包含用于自动注入的 `ratls_inject.py` 和 `patch-gramine-manifest.sh` 脚本。这些脚本现已禁用（在 Dockerfile 中注释掉），并将在未来版本中删除。环境变量 `DISABLE_RATLS_PRELOAD` 和 `RA_TLS_PRELOAD_PATH` 已弃用且不再使用。请改用 `GRAMINE_LD_PRELOAD`。
 
 ### API 密钥配置
 

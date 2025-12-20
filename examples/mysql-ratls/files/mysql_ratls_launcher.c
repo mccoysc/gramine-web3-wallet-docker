@@ -50,7 +50,7 @@
 #define UUID_LEN 36  /* xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx */
 
 /* RA-TLS library candidate paths (searched in order) */
-static const char *RATLS_LIB_PATHS[] = {
+static const char *RA_TLS_LIB_PATHS[] = {
     "/usr/local/lib/x86_64-linux-gnu/libratls-quote-verify.so",
     "/usr/local/lib/libratls-quote-verify.so",
     "/usr/lib/x86_64-linux-gnu/libratls-quote-verify.so",
@@ -1047,15 +1047,15 @@ struct launcher_config {
     /* Existing environment variables - can be overridden by args */
     const char *contract_address;      /* CONTRACT_ADDRESS */
     const char *rpc_url;               /* RPC_URL */
-    const char *whitelist_config;      /* RATLS_WHITELIST_CONFIG */
-    const char *cert_path;             /* RATLS_CERT_PATH */
-    const char *key_path;              /* RATLS_KEY_PATH */
+    const char *whitelist_config;      /* RA_TLS_WHITELIST_CONFIG */
+    const char *cert_path;             /* RA_TLS_CERT_PATH */
+    const char *key_path;              /* RA_TLS_KEY_PATH */
     const char *data_dir;              /* MYSQL_DATA_DIR */
     
     /* RA-TLS configuration (from manifest, can be overridden) */
     const char *ra_tls_cert_algorithm;           /* RA_TLS_CERT_ALGORITHM */
-    const char *ratls_enable_verify;             /* RATLS_ENABLE_VERIFY */
-    const char *ratls_require_peer_cert;         /* RATLS_REQUIRE_PEER_CERT */
+    const char *ratls_enable_verify;             /* RA_TLS_ENABLE_VERIFY */
+    const char *ratls_require_peer_cert;         /* RA_TLS_REQUIRE_PEER_CERT */
     const char *ra_tls_allow_outdated_tcb;       /* RA_TLS_ALLOW_OUTDATED_TCB_INSECURE */
     const char *ra_tls_allow_hw_config_needed;   /* RA_TLS_ALLOW_HW_CONFIG_NEEDED */
     const char *ra_tls_allow_sw_hardening_needed;/* RA_TLS_ALLOW_SW_HARDENING_NEEDED */
@@ -1083,15 +1083,15 @@ static void parse_args(int argc, char *argv[], struct launcher_config *config) {
     /* Initialize with environment variables as defaults */
     config->contract_address = getenv("CONTRACT_ADDRESS");
     config->rpc_url = getenv("RPC_URL");
-    config->whitelist_config = getenv("RATLS_WHITELIST_CONFIG");
-    config->cert_path = getenv("RATLS_CERT_PATH");
-    config->key_path = getenv("RATLS_KEY_PATH");
+    config->whitelist_config = getenv("RA_TLS_WHITELIST_CONFIG");
+    config->cert_path = getenv("RA_TLS_CERT_PATH");
+    config->key_path = getenv("RA_TLS_KEY_PATH");
     config->data_dir = getenv("MYSQL_DATA_DIR");
     
     /* RA-TLS configuration from environment */
     config->ra_tls_cert_algorithm = getenv("RA_TLS_CERT_ALGORITHM");
-    config->ratls_enable_verify = getenv("RATLS_ENABLE_VERIFY");
-    config->ratls_require_peer_cert = getenv("RATLS_REQUIRE_PEER_CERT");
+    config->ratls_enable_verify = getenv("RA_TLS_ENABLE_VERIFY");
+    config->ratls_require_peer_cert = getenv("RA_TLS_REQUIRE_PEER_CERT");
     config->ra_tls_allow_outdated_tcb = getenv("RA_TLS_ALLOW_OUTDATED_TCB_INSECURE");
     config->ra_tls_allow_hw_config_needed = getenv("RA_TLS_ALLOW_HW_CONFIG_NEEDED");
     config->ra_tls_allow_sw_hardening_needed = getenv("RA_TLS_ALLOW_SW_HARDENING_NEEDED");
@@ -1191,17 +1191,17 @@ static void print_usage(const char *prog_name) {
     printf("  --rpc-url=URL             Ethereum JSON-RPC endpoint URL\n");
     printf("                            (env: RPC_URL)\n");
     printf("\n");
-    printf("  NOTE: RATLS_WHITELIST_CONFIG can ONLY be set via manifest environment variable\n");
+    printf("  NOTE: RA_TLS_WHITELIST_CONFIG can ONLY be set via manifest environment variable\n");
     printf("        (not command-line) for security. If both contract and env var are set,\n");
     printf("        their whitelists are merged with column-based deduplication.\n\n");
     
     printf("PATH OPTIONS:\n");
     printf("  --cert-path=PATH          Path for RA-TLS certificate\n");
-    printf("                            (env: RATLS_CERT_PATH, default: %s)\n", DEFAULT_CERT_PATH);
+    printf("                            (env: RA_TLS_CERT_PATH, default: %s)\n", DEFAULT_CERT_PATH);
     printf("\n");
     printf("  NOTE: The following paths can ONLY be set via manifest environment variables\n");
     printf("        (not command-line) to prevent data leakage:\n");
-    printf("        - RATLS_KEY_PATH: RA-TLS private key path (default: %s)\n", DEFAULT_KEY_PATH);
+    printf("        - RA_TLS_KEY_PATH: RA-TLS private key path (default: %s)\n", DEFAULT_KEY_PATH);
     printf("        - MYSQL_DATA_DIR: MySQL data directory (default: %s)\n\n", DEFAULT_DATA_DIR);
     
     printf("RA-TLS CONFIGURATION OPTIONS:\n");
@@ -1210,10 +1210,10 @@ static void print_usage(const char *prog_name) {
     printf("                            (env: RA_TLS_CERT_ALGORITHM)\n");
     printf("  --ratls-enable-verify=0|1\n");
     printf("                            Enable RA-TLS verification (default: 1)\n");
-    printf("                            (env: RATLS_ENABLE_VERIFY)\n");
+    printf("                            (env: RA_TLS_ENABLE_VERIFY)\n");
     printf("  --ratls-require-peer-cert=0|1\n");
     printf("                            Require peer certificate for mutual TLS (default: 1)\n");
-    printf("                            (env: RATLS_REQUIRE_PEER_CERT)\n");
+    printf("                            (env: RA_TLS_REQUIRE_PEER_CERT)\n");
     printf("  --ra-tls-allow-outdated-tcb=0|1\n");
     printf("                            Allow outdated TCB (INSECURE, default: from manifest)\n");
     printf("                            (env: RA_TLS_ALLOW_OUTDATED_TCB_INSECURE)\n");
@@ -1568,13 +1568,13 @@ static char *read_whitelist_from_contract(const char *contract_address, const ch
         return NULL;
     }
     
-    /* Extract RATLS_WHITELIST_CONFIG field */
-    cJSON *whitelist_config = cJSON_GetObjectItem(json, "RATLS_WHITELIST_CONFIG");
+    /* Extract RA_TLS_WHITELIST_CONFIG field */
+    cJSON *whitelist_config = cJSON_GetObjectItem(json, "RA_TLS_WHITELIST_CONFIG");
     if (whitelist_config && whitelist_config->valuestring) {
         whitelist = strdup(whitelist_config->valuestring);
-        printf("[Launcher] Found RATLS_WHITELIST_CONFIG in SGX config\n");
+        printf("[Launcher] Found RA_TLS_WHITELIST_CONFIG in SGX config\n");
     } else {
-        fprintf(stderr, "[Launcher] RATLS_WHITELIST_CONFIG field not found in SGX config\n");
+        fprintf(stderr, "[Launcher] RA_TLS_WHITELIST_CONFIG field not found in SGX config\n");
     }
     
     cJSON_Delete(json);
@@ -1940,9 +1940,9 @@ static void set_env_default(const char *name, const char *default_value) {
 
 /* Find the RA-TLS library by searching candidate paths */
 static const char *find_ratls_library(void) {
-    for (int i = 0; RATLS_LIB_PATHS[i] != NULL; i++) {
-        if (file_exists(RATLS_LIB_PATHS[i])) {
-            return RATLS_LIB_PATHS[i];
+    for (int i = 0; RA_TLS_LIB_PATHS[i] != NULL; i++) {
+        if (file_exists(RA_TLS_LIB_PATHS[i])) {
+            return RA_TLS_LIB_PATHS[i];
         }
     }
     return NULL;
@@ -1976,14 +1976,14 @@ int main(int argc, char *argv[]) {
         set_env("RA_TLS_CERT_ALGORITHM", config.ra_tls_cert_algorithm, 1);
     }
     if (config.ratls_enable_verify && strlen(config.ratls_enable_verify) > 0) {
-        set_env("RATLS_ENABLE_VERIFY", config.ratls_enable_verify, 1);
+        set_env("RA_TLS_ENABLE_VERIFY", config.ratls_enable_verify, 1);
     } else {
-        set_env("RATLS_ENABLE_VERIFY", "1", 1);  /* Default: enable verification */
+        set_env("RA_TLS_ENABLE_VERIFY", "1", 1);  /* Default: enable verification */
     }
     if (config.ratls_require_peer_cert && strlen(config.ratls_require_peer_cert) > 0) {
-        set_env("RATLS_REQUIRE_PEER_CERT", config.ratls_require_peer_cert, 1);
+        set_env("RA_TLS_REQUIRE_PEER_CERT", config.ratls_require_peer_cert, 1);
     } else {
-        set_env("RATLS_REQUIRE_PEER_CERT", "1", 1);  /* Default: require peer cert */
+        set_env("RA_TLS_REQUIRE_PEER_CERT", "1", 1);  /* Default: require peer cert */
     }
     if (config.ra_tls_allow_outdated_tcb && strlen(config.ra_tls_allow_outdated_tcb) > 0) {
         set_env("RA_TLS_ALLOW_OUTDATED_TCB_INSECURE", config.ra_tls_allow_outdated_tcb, 1);
@@ -1996,8 +1996,8 @@ int main(int argc, char *argv[]) {
     }
     
     /* Set certificate and key paths */
-    set_env("RATLS_CERT_PATH", config.cert_path, 1);
-    set_env("RATLS_KEY_PATH", config.key_path, 1);
+    set_env("RA_TLS_CERT_PATH", config.cert_path, 1);
+    set_env("RA_TLS_KEY_PATH", config.key_path, 1);
     
     /* Use paths from config */
     const char *cert_path = config.cert_path;
@@ -2073,7 +2073,7 @@ int main(int argc, char *argv[]) {
     }
     
     /* Handle whitelist configuration */
-    /* Note: RATLS_WHITELIST_CONFIG can ONLY be set via manifest environment variable (not command-line) */
+    /* Note: RA_TLS_WHITELIST_CONFIG can ONLY be set via manifest environment variable (not command-line) */
     /* If both contract and env var are set, they are merged with rule-based deduplication */
     printf("\n[Launcher] Whitelist Configuration:\n");
     
@@ -2112,7 +2112,7 @@ int main(int argc, char *argv[]) {
         /* Both whitelists available - merge them */
         merged_whitelist = merge_whitelist_configs(env_whitelist, contract_whitelist);
         if (merged_whitelist) {
-            set_env("RATLS_WHITELIST_CONFIG", merged_whitelist, 1);
+            set_env("RA_TLS_WHITELIST_CONFIG", merged_whitelist, 1);
             free(merged_whitelist);
         } else {
             fprintf(stderr, "[Launcher] Warning: Failed to merge whitelists, using environment whitelist only\n");
@@ -2120,7 +2120,7 @@ int main(int argc, char *argv[]) {
         }
     } else if (contract_whitelist && strlen(contract_whitelist) > 0) {
         /* Only contract whitelist available */
-        set_env("RATLS_WHITELIST_CONFIG", contract_whitelist, 1);
+        set_env("RA_TLS_WHITELIST_CONFIG", contract_whitelist, 1);
     } else if (env_whitelist && strlen(env_whitelist) > 0) {
         /* Only environment whitelist available - already set from manifest */
         printf("[Launcher] Using environment whitelist only\n");
@@ -2132,9 +2132,9 @@ int main(int argc, char *argv[]) {
     }
     
     /* Display final whitelist status */
-    const char *final_whitelist = getenv("RATLS_WHITELIST_CONFIG");
+    const char *final_whitelist = getenv("RA_TLS_WHITELIST_CONFIG");
     if (final_whitelist && strlen(final_whitelist) > 0) {
-        printf("[Launcher] RATLS_WHITELIST_CONFIG is set\n");
+        printf("[Launcher] RA_TLS_WHITELIST_CONFIG is set\n");
         printf("[Launcher] Only clients matching the whitelist can connect\n");
     } else {
         printf("[Launcher] No whitelist configured\n");

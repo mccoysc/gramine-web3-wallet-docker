@@ -86,13 +86,13 @@ docker run -d \
 
 ### With Manual Whitelist
 
-**Note**: `RATLS_WHITELIST_CONFIG` can only be set via the Gramine manifest environment variable, not via `docker run -e`. This is because the manifest is signed and trusted, while command-line arguments are not.
+**Note**: `RA_TLS_WHITELIST_CONFIG` can only be set via the Gramine manifest environment variable, not via `docker run -e`. This is because the manifest is signed and trusted, while command-line arguments are not.
 
 To use a manual whitelist, you must modify the manifest template before building:
 
 ```toml
 # In mysql-ratls.manifest.template, add:
-loader.env.RATLS_WHITELIST_CONFIG = "BASE64_ENCODED_CSV_HERE"
+loader.env.RA_TLS_WHITELIST_CONFIG = "BASE64_ENCODED_CSV_HERE"
 ```
 
 The whitelist format is Base64-encoded CSV with 5 lines:
@@ -113,10 +113,10 @@ If both contract whitelist (via RPC URL) and manifest whitelist are configured, 
 | `PCCS_API_KEY` | Yes | Intel PCCS API key for DCAP attestation |
 | `CONTRACT_ADDRESS` | No | Ethereum contract address to read whitelist from |
 | `RPC_URL` | No* | Ethereum RPC endpoint (*required if CONTRACT_ADDRESS is set) |
-| `RATLS_WHITELIST_CONFIG` | No | Manual whitelist (Base64-encoded CSV). **Must be set in manifest**, not via `docker run -e` (manifest is signed/trusted). If both this and contract whitelist are set, they are merged with rule-based deduplication. |
+| `RA_TLS_WHITELIST_CONFIG` | No | Manual whitelist (Base64-encoded CSV). **Must be set in manifest**, not via `docker run -e` (manifest is signed/trusted). If both this and contract whitelist are set, they are merged with rule-based deduplication. |
 | `MYSQL_GR_GROUP_NAME` | No | Group Replication group name (UUID). Auto-generated if not set. |
-| `RATLS_CERT_PATH` | No | Path to RA-TLS certificate (default: `/var/lib/mysql-ssl/server-cert.pem`) |
-| `RATLS_KEY_PATH` | No | Path to RA-TLS private key, must be in encrypted partition (default: `/app/wallet/mysql-keys/server-key.pem`) |
+| `RA_TLS_CERT_PATH` | No | Path to RA-TLS certificate (default: `/var/lib/mysql-ssl/server-cert.pem`) |
+| `RA_TLS_KEY_PATH` | No | Path to RA-TLS private key, must be in encrypted partition (default: `/app/wallet/mysql-keys/server-key.pem`) |
 
 ## Smart Contract Integration
 
@@ -126,18 +126,18 @@ The launcher script reads whitelist configuration from a smart contract that imp
 function getSGXConfig() external view returns (string memory);
 ```
 
-The returned string should be a JSON object containing a `RATLS_WHITELIST_CONFIG` field:
+The returned string should be a JSON object containing a `RA_TLS_WHITELIST_CONFIG` field:
 
 ```json
 {
-  "RATLS_WHITELIST_CONFIG": "BASE64_ENCODED_CSV_WHITELIST",
+  "RA_TLS_WHITELIST_CONFIG": "BASE64_ENCODED_CSV_WHITELIST",
   "other_config": "..."
 }
 ```
 
 ## Whitelist Format
 
-The `RATLS_WHITELIST_CONFIG` is a Base64-encoded CSV with exactly 5 lines:
+The `RA_TLS_WHITELIST_CONFIG` is a Base64-encoded CSV with exactly 5 lines:
 
 1. **MRENCLAVE**: Comma-separated hex values of allowed enclave measurements
 2. **MRSIGNER**: Comma-separated hex values of allowed signer measurements
@@ -175,7 +175,7 @@ If whitelist reading from contract fails:
 - Verify `CONTRACT_ADDRESS` is correct
 - Verify `RPC_URL` is accessible
 - Check that the contract implements `getSGXConfig()`
-- Ensure the returned JSON contains `RATLS_WHITELIST_CONFIG` field
+- Ensure the returned JSON contains `RA_TLS_WHITELIST_CONFIG` field
 
 ### SGX Device Not Available
 
@@ -347,16 +347,16 @@ All environment variables can also be specified via command-line parameters. Par
 | `--contract-address=ADDR` | `CONTRACT_ADDRESS` | Smart contract address for whitelist |
 | `--rpc-url=URL` | `RPC_URL` | Ethereum JSON-RPC endpoint URL |
 
-**Note**: `RATLS_WHITELIST_CONFIG` can only be set via manifest environment variable (not command-line) for security. If both contract and env var whitelists are set, they are merged with rule-based deduplication (same index across all 5 lines = one rule).
+**Note**: `RA_TLS_WHITELIST_CONFIG` can only be set via manifest environment variable (not command-line) for security. If both contract and env var whitelists are set, they are merged with rule-based deduplication (same index across all 5 lines = one rule).
 
 ### Path Options
 
 | Parameter | Environment Variable | Default | Description |
 |-----------|---------------------|---------|-------------|
-| `--cert-path=PATH` | `RATLS_CERT_PATH` | `/var/lib/mysql-ssl/server-cert.pem` | Path for RA-TLS certificate |
+| `--cert-path=PATH` | `RA_TLS_CERT_PATH` | `/var/lib/mysql-ssl/server-cert.pem` | Path for RA-TLS certificate |
 
 **Note**: The following paths can **only** be set via manifest environment variables (not command-line) to prevent data leakage:
-- `RATLS_KEY_PATH`: RA-TLS private key path (default: `/app/wallet/mysql-keys/server-key.pem`)
+- `RA_TLS_KEY_PATH`: RA-TLS private key path (default: `/app/wallet/mysql-keys/server-key.pem`)
 - `MYSQL_DATA_DIR`: MySQL data directory (default: `/app/wallet/mysql-data`)
 
 ### RA-TLS Configuration Options
@@ -364,8 +364,8 @@ All environment variables can also be specified via command-line parameters. Par
 | Parameter | Environment Variable | Default | Description |
 |-----------|---------------------|---------|-------------|
 | `--ra-tls-cert-algorithm=ALG` | `RA_TLS_CERT_ALGORITHM` | - | Certificate algorithm (e.g., secp256r1, secp256k1) |
-| `--ratls-enable-verify=0\|1` | `RATLS_ENABLE_VERIFY` | `1` | Enable RA-TLS verification |
-| `--ratls-require-peer-cert=0\|1` | `RATLS_REQUIRE_PEER_CERT` | `1` | Require peer certificate for mutual TLS |
+| `--ratls-enable-verify=0\|1` | `RA_TLS_ENABLE_VERIFY` | `1` | Enable RA-TLS verification |
+| `--ratls-require-peer-cert=0\|1` | `RA_TLS_REQUIRE_PEER_CERT` | `1` | Require peer certificate for mutual TLS |
 | `--ra-tls-allow-outdated-tcb=0\|1` | `RA_TLS_ALLOW_OUTDATED_TCB_INSECURE` | from manifest | Allow outdated TCB (INSECURE) |
 | `--ra-tls-allow-hw-config-needed=0\|1` | `RA_TLS_ALLOW_HW_CONFIG_NEEDED` | from manifest | Allow HW configuration needed status |
 | `--ra-tls-allow-sw-hardening-needed=0\|1` | `RA_TLS_ALLOW_SW_HARDENING_NEEDED` | from manifest | Allow SW hardening needed status |
@@ -374,7 +374,7 @@ All environment variables can also be specified via command-line parameters. Par
 
 The launcher validates configuration and handles dependencies:
 
-- `RATLS_WHITELIST_CONFIG` can only be set via manifest environment variable (not command-line) for security
+- `RA_TLS_WHITELIST_CONFIG` can only be set via manifest environment variable (not command-line) for security
 - If both contract whitelist and environment whitelist are set, they are merged with rule-based deduplication
 - Group Replication is enabled by default; `--gr-group-name` is auto-generated if not specified
 - Warnings are printed for missing dependencies (e.g., `--contract-address` without `--rpc-url`)

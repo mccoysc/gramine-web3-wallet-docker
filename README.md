@@ -212,7 +212,7 @@ gramine-manifest my-app.manifest.template my-app.manifest
 This automatically:
 - Adds the library to `sgx.trusted_files`
 - Sets `loader.env.LD_PRELOAD` to the library path
-- Sets `loader.env.RATLS_ENABLE_VERIFY=1`
+- Sets `loader.env.RA_TLS_ENABLE_VERIFY=1`
 - Creates necessary `fs.mounts` entries
 
 **Manual Configuration**
@@ -223,7 +223,7 @@ Alternatively, configure LD_PRELOAD manually in your manifest template:
 sgx.remote_attestation = "dcap"
 
 loader.env.LD_PRELOAD = "/usr/local/lib/x86_64-linux-gnu/libratls-quote-verify.so"
-loader.env.RATLS_ENABLE_VERIFY = "1"
+loader.env.RA_TLS_ENABLE_VERIFY = "1"
 
 sgx.trusted_files = [
     "file:/usr/local/lib/x86_64-linux-gnu/libratls-quote-verify.so",
@@ -232,9 +232,9 @@ sgx.trusted_files = [
 
 **RA-TLS Environment Variables**
 
-For complete documentation of RA-TLS environment variables (including `RATLS_ENABLE_VERIFY`, `RATLS_REQUIRE_PEER_CERT`, `RA_TLS_MRSIGNER`, `RA_TLS_MRENCLAVE`, etc.), see the [Gramine RA-TLS documentation](https://github.com/mccoysc/gramine#ra-tls-quick-start).
+For complete documentation of RA-TLS environment variables (including `RA_TLS_ENABLE_VERIFY`, `RA_TLS_REQUIRE_PEER_CERT`, `RA_TLS_MRSIGNER`, `RA_TLS_MRENCLAVE`, etc.), see the [Gramine RA-TLS documentation](https://github.com/mccoysc/gramine#ra-tls-quick-start).
 
-**Legacy Note**: This repository previously contained `ratls_inject.py` and `patch-gramine-manifest.sh` scripts for auto-injection. These scripts are now disabled (commented out in Dockerfile) and will be removed in a future release. The environment variables `DISABLE_RATLS_PRELOAD` and `RATLS_PRELOAD_PATH` are deprecated and not used. Please use `GRAMINE_LD_PRELOAD` instead.
+**Legacy Note**: This repository previously contained `ratls_inject.py` and `patch-gramine-manifest.sh` scripts for auto-injection. These scripts are now disabled (commented out in Dockerfile) and will be removed in a future release. The environment variables `DISABLE_RATLS_PRELOAD` and `RA_TLS_PRELOAD_PATH` are deprecated and not used. Please use `GRAMINE_LD_PRELOAD` instead.
 
 ### API Key Configuration
 

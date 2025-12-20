@@ -141,10 +141,10 @@ The following RA-TLS environment variables are configured by the C launcher (fol
 | Variable | Value | Description |
 |----------|-------|-------------|
 | `RA_TLS_CERT_ALGORITHM` | `secp256k1` | Elliptic curve for certificate generation (Ethereum compatible) |
-| `RATLS_ENABLE_VERIFY` | `1` | Enable RA-TLS verification during TLS handshake |
-| `RATLS_REQUIRE_PEER_CERT` | `1` | Require peer certificate for mutual TLS authentication |
-| `RATLS_CERT_PATH` | `/var/lib/mysql-client-ssl/client-cert.pem` | Path to store generated certificate (regular directory) |
-| `RATLS_KEY_PATH` | `/app/wallet/mysql-client-keys/client-key.pem` | Path to store private key (encrypted partition) |
+| `RA_TLS_ENABLE_VERIFY` | `1` | Enable RA-TLS verification during TLS handshake |
+| `RA_TLS_REQUIRE_PEER_CERT` | `1` | Require peer certificate for mutual TLS authentication |
+| `RA_TLS_CERT_PATH` | `/var/lib/mysql-client-ssl/client-cert.pem` | Path to store generated certificate (regular directory) |
+| `RA_TLS_KEY_PATH` | `/app/wallet/mysql-client-keys/client-key.pem` | Path to store private key (encrypted partition) |
 
 These values are hardcoded in the manifest and launcher for security (not passthrough from host environment). The private key is stored in the encrypted partition (`/app/wallet/`) to prevent data leakage.
 
@@ -156,18 +156,18 @@ The launcher can read whitelist configuration from a smart contract that impleme
 function getSGXConfig() external view returns (string memory);
 ```
 
-The returned string should be a JSON object containing a `RATLS_WHITELIST_CONFIG` field:
+The returned string should be a JSON object containing a `RA_TLS_WHITELIST_CONFIG` field:
 
 ```json
 {
-  "RATLS_WHITELIST_CONFIG": "BASE64_ENCODED_CSV_WHITELIST",
+  "RA_TLS_WHITELIST_CONFIG": "BASE64_ENCODED_CSV_WHITELIST",
   "other_config": "..."
 }
 ```
 
 ## Whitelist Format
 
-The `RATLS_WHITELIST_CONFIG` is a Base64-encoded CSV with exactly 5 lines:
+The `RA_TLS_WHITELIST_CONFIG` is a Base64-encoded CSV with exactly 5 lines:
 
 1. **MRENCLAVE**: Comma-separated hex values of allowed enclave measurements
 2. **MRSIGNER**: Comma-separated hex values of allowed signer measurements

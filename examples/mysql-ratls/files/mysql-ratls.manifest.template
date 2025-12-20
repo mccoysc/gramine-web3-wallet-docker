@@ -27,8 +27,8 @@ loader.env.HOME = "/app/wallet/mysql-data"
 loader.env.RA_TLS_CERT_ALGORITHM = "secp256r1"
 
 # Enable RA-TLS verification and require peer certificate for mutual TLS
-loader.env.RATLS_ENABLE_VERIFY = "1"
-loader.env.RATLS_REQUIRE_PEER_CERT = "1"
+loader.env.RA_TLS_ENABLE_VERIFY = "1"
+loader.env.RA_TLS_REQUIRE_PEER_CERT = "1"
 
 # Allow platforms with out-of-date TCB or configuration needed status
 # These are INSECURE settings that accept platforms that haven't been updated
@@ -39,14 +39,14 @@ loader.env.RA_TLS_ALLOW_SW_HARDENING_NEEDED = "1"
 
 # Certificate and key paths (fixed in manifest for security)
 # Certificate can be in normal directory
-loader.env.RATLS_CERT_PATH = "/var/lib/mysql-ssl/server-cert.pem"
+loader.env.RA_TLS_CERT_PATH = "/var/lib/mysql-ssl/server-cert.pem"
 # Private key MUST be in encrypted partition
-loader.env.RATLS_KEY_PATH = "/app/wallet/mysql-keys/server-key.pem"
+loader.env.RA_TLS_KEY_PATH = "/app/wallet/mysql-keys/server-key.pem"
 
 # Contract configuration for whitelist (passthrough from host for deployment flexibility)
 loader.env.CONTRACT_ADDRESS = { passthrough = true }
 loader.env.RPC_URL = { passthrough = true }
-# Note: RATLS_WHITELIST_CONFIG is read from contract, not from host env
+# Note: RA_TLS_WHITELIST_CONFIG is read from contract, not from host env
 # The launcher reads it from the contract and sets it internally
 
 # MySQL configuration (fixed in manifest for security)
