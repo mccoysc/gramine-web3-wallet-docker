@@ -74,18 +74,6 @@ Each component builds in an independent GitHub Actions environment to avoid reso
    - Commits changes to repository
    - Only runs on push to main/master (not on PRs)
 
-#### Legacy Workflow: Monitor Gramine (`.github/workflows/monitor-gramine.yml`)
-
-**Note**: This workflow is now deprecated in favor of the integrated version detection in `build-and-push.yml`.
-
-   - Triggers:
-     - Automatic check every 6 hours
-     - Manual trigger
-   - Actions:
-     - Check for updates in mccoysc/gramine repository
-     - Automatically trigger image rebuild if updates found
-     - Update `.gramine-version` file to record version
-
 ### Key Optimizations
 
 1. **GitHub Releases Caching**: Prebuilt binaries are stored in GitHub Releases, avoiding unnecessary recompilation across workflow runs
@@ -161,8 +149,7 @@ docker run -it gramine-web3-wallet:local
 gramine-web3-wallet-docker/
 ├── .github/
 │   └── workflows/
-│       ├── build-and-push.yml      # Main build workflow with intelligent caching
-│       └── monitor-gramine.yml     # Legacy monitor workflow (deprecated)
+│       └── build-and-push.yml      # Main build workflow with intelligent caching
 ├── config/
 │   └── pccs-default.json          # PCCS default configuration
 ├── scripts/
@@ -176,7 +163,6 @@ gramine-web3-wallet-docker/
 │       └── VERSION                # Current Node.js version (maintained by update-versions job)
 ├── Dockerfile                      # Docker image definition
 ├── docker-compose.yml             # Docker Compose configuration
-├── .gramine-version               # Record current Gramine version (legacy)
 └── README.md                      # This document
 ```
 
@@ -233,8 +219,6 @@ sgx.trusted_files = [
 **RA-TLS Environment Variables**
 
 For complete documentation of RA-TLS environment variables (including `RA_TLS_ENABLE_VERIFY`, `RA_TLS_REQUIRE_PEER_CERT`, `RA_TLS_MRSIGNER`, `RA_TLS_MRENCLAVE`, etc.), see the [Gramine RA-TLS documentation](https://github.com/mccoysc/gramine#ra-tls-quick-start).
-
-**Legacy Note**: This repository previously contained `ratls_inject.py` and `patch-gramine-manifest.sh` scripts for auto-injection. These scripts are now disabled (commented out in Dockerfile) and will be removed in a future release. The environment variables `DISABLE_RATLS_PRELOAD` and `RA_TLS_PRELOAD_PATH` are deprecated and not used. Please use `GRAMINE_LD_PRELOAD` instead.
 
 ### API Key Configuration
 

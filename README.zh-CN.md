@@ -74,18 +74,6 @@
    - 提交变更到仓库
    - 仅在推送到 main/master 时运行（PR 中不运行）
 
-#### 旧版工作流：监控 Gramine (`.github/workflows/monitor-gramine.yml`)
-
-**注意**: 该工作流已被弃用，功能已集成到 `build-and-push.yml` 的版本检测中。
-
-   - 触发条件：
-     - 每 6 小时自动检查一次
-     - 手动触发
-   - 自动操作：
-     - 检查 mccoysc/gramine 仓库是否有更新
-     - 如果有更新，自动触发镜像重新构建
-     - 更新 `.gramine-version` 文件记录版本
-
 ### 关键优化
 
 1. **GitHub Releases 缓存**: 预编译二进制文件存储在 GitHub Releases 中，避免跨工作流运行的不必要重新编译
@@ -161,8 +149,7 @@ docker run -it gramine-web3-wallet:local
 gramine-web3-wallet-docker/
 ├── .github/
 │   └── workflows/
-│       ├── build-and-push.yml      # 主构建工作流，带智能缓存
-│       └── monitor-gramine.yml     # 旧版监控工作流（已弃用）
+│       └── build-and-push.yml      # 主构建工作流，带智能缓存
 ├── config/
 │   └── pccs-default.json          # PCCS 默认配置
 ├── scripts/
@@ -176,7 +163,6 @@ gramine-web3-wallet-docker/
 │       └── VERSION                # 当前 Node.js 版本（由 update-versions 任务维护）
 ├── Dockerfile                      # Docker 镜像定义
 ├── docker-compose.yml             # Docker Compose 配置
-├── .gramine-version               # 记录当前使用的 Gramine 版本（旧版）
 └── README.md                      # 本文档
 ```
 
@@ -233,8 +219,6 @@ sgx.trusted_files = [
 **RA-TLS 环境变量**
 
 有关 RA-TLS 环境变量的完整文档（包括 `RA_TLS_ENABLE_VERIFY`、`RA_TLS_REQUIRE_PEER_CERT`、`RA_TLS_MRSIGNER`、`RA_TLS_MRENCLAVE` 等），请参阅 [Gramine RA-TLS 文档](https://github.com/mccoysc/gramine#ra-tls-quick-start)。
-
-**历史遗留说明**：本仓库以前包含用于自动注入的 `ratls_inject.py` 和 `patch-gramine-manifest.sh` 脚本。这些脚本现已禁用（在 Dockerfile 中注释掉），并将在未来版本中删除。环境变量 `DISABLE_RATLS_PRELOAD` 和 `RA_TLS_PRELOAD_PATH` 已弃用且不再使用。请改用 `GRAMINE_LD_PRELOAD`。
 
 ### API 密钥配置
 
