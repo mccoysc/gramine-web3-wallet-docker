@@ -21,7 +21,7 @@ loader.insecure__use_cmdline_argv = true
 # Library search path - MUST be explicitly set for Gramine's glibc runtime
 # Without this, the dynamic linker inside the enclave cannot find system libraries
 # like libcurl.so.4 even if they are in trusted_files and their directories are mounted
-loader.env.LD_LIBRARY_PATH = "/lib:/usr/lib:/lib/x86_64-linux-gnu:/usr/lib/x86_64-linux-gnu:/usr/local/lib:/usr/local/lib/x86_64-linux-gnu"
+loader.env.LD_LIBRARY_PATH = "/opt/openssl-install/lib64:/opt/openssl-install/lib:/lib:/usr/lib:/lib/x86_64-linux-gnu:/usr/lib/x86_64-linux-gnu:/usr/local/lib:/usr/local/lib/x86_64-linux-gnu"
 
 # Disable io_uring in Node.js/libuv - Gramine does not support io_uring syscalls
 # Without this, Node.js v22+ will try to use io_uring_setup which causes MEMFAULT
@@ -79,6 +79,9 @@ fs.mounts = [
   
   # Prebuilt Node.js installation directory
   { path = "/opt/node-install", uri = "file:/opt/node-install" },
+  
+  # Prebuilt OpenSSL installation directory (for custom OpenSSL with RA-TLS support)
+  { path = "/opt/openssl-install", uri = "file:/opt/openssl-install" },
   
   # Application directory
   { path = "/app", uri = "file:/app" },

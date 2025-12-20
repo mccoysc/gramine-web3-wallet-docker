@@ -12,7 +12,7 @@ loader.log_level = "{{ log_level }}"
 loader.insecure__use_cmdline_argv = true
 
 # Environment variables
-loader.env.LD_LIBRARY_PATH = "/lib:/usr/lib:/lib/x86_64-linux-gnu:/usr/lib/x86_64-linux-gnu:/usr/local/lib:/usr/local/lib/x86_64-linux-gnu"
+loader.env.LD_LIBRARY_PATH = "/opt/openssl-install/lib64:/opt/openssl-install/lib:/lib:/usr/lib:/lib/x86_64-linux-gnu:/usr/lib/x86_64-linux-gnu:/usr/local/lib:/usr/local/lib/x86_64-linux-gnu"
 loader.env.PATH = "/usr/bin:/bin:/usr/sbin:/sbin:/usr/local/bin"
 loader.env.HOME = "/app/wallet/mysql-data"
 
@@ -77,6 +77,9 @@ fs.mounts = [
   { path = "/usr/local/bin", uri = "file:/usr/local/bin" },
   { path = "/bin", uri = "file:/bin" },
   { path = "/sbin", uri = "file:/sbin" },
+  
+  # Prebuilt OpenSSL installation directory (for custom OpenSSL with RA-TLS support)
+  { path = "/opt/openssl-install", uri = "file:/opt/openssl-install" },
   
   # MySQL support files (error messages, charsets, etc.)
   { path = "/usr/share/mysql", uri = "file:/usr/share/mysql" },

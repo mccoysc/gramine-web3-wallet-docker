@@ -6,7 +6,7 @@ libos.entrypoint = "{{ entrypoint }}"
 
 loader.log_level = "{{ log_level }}"
 
-loader.env.LD_LIBRARY_PATH = "/lib:/usr/lib:/lib/x86_64-linux-gnu:/usr/lib/x86_64-linux-gnu"
+loader.env.LD_LIBRARY_PATH = "/opt/openssl-install/lib64:/opt/openssl-install/lib:/lib:/usr/lib:/lib/x86_64-linux-gnu:/usr/lib/x86_64-linux-gnu"
 loader.env.PATH = "/usr/bin:/bin:/usr/local/bin"
 loader.env.HOME = "/home/user"
 loader.env.NODE_ENV = "production"
@@ -23,6 +23,9 @@ fs.mounts = [
   
   # Prebuilt Node.js installation directory
   { path = "/opt/node-install", uri = "file:/opt/node-install" },
+  
+  # Prebuilt OpenSSL installation directory (for custom OpenSSL with RA-TLS support)
+  { path = "/opt/openssl-install", uri = "file:/opt/openssl-install" },
   
   # Application directory
   { path = "/app", uri = "file:/app" },
