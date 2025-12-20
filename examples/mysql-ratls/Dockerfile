@@ -58,7 +58,8 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 # Download and install the patched Group Replication plugin for SGX/Gramine
 # This plugin has a custom gr_getifaddrs() implementation that works in Gramine
 # where the standard getifaddrs() is not available due to netlink socket limitations
-ARG MYSQL_GR_PLUGIN_VERSION=8.0.44
+# Note: Plugin must be built for the same Ubuntu version as the base image (24.04)
+ARG MYSQL_GR_PLUGIN_VERSION=8.0.44-ubuntu24.04
 RUN set -eux && \
     PLUGIN_URL="https://github.com/mccoysc/gramine-web3-wallet-docker/releases/download/mysql-gr-plugin-${MYSQL_GR_PLUGIN_VERSION}/mysql-gr-plugin-${MYSQL_GR_PLUGIN_VERSION}-sgx.tar.gz" && \
     echo "Downloading patched GR plugin from ${PLUGIN_URL}..." && \
