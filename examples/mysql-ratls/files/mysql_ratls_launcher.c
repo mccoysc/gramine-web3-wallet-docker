@@ -854,19 +854,24 @@ static int create_gr_config(const char *config_path, unsigned int server_id,
         "loose-group_replication_ssl_mode=REQUIRED\n");
     
     /* Recovery channel SSL settings (use same certs as main connection) */
-    /* Note: ssl_verify_server_cert=ON enables mutual TLS verification.
+    /* Note: ssl_verify_server_cert=OFF disables traditional PKI certificate chain validation.
+     * This is REQUIRED when using self-signed RA-TLS certificates without a CA.
      * Each node has its own self-signed RA-TLS cert with SGX quote embedded.
      * The libratls-quote-verify.so library (via LD_PRELOAD) intercepts TLS handshakes
      * and verifies SGX quotes in certificates, providing attestation-based trust
-     * instead of traditional PKI certificate chain validation. */
+     * instead of traditional PKI certificate chain validation.
+     * 
+     * With ssl_verify_server_cert=ON and no CA, MySQL's PKI verification would fail
+     * BEFORE RA-TLS can perform SGX quote verification, causing "Error connecting using SSL"
+     * errors during Group Replication's local connectivity test. */
     offset += snprintf(config_content + offset, sizeof(config_content) - offset,
         "\n# Recovery Channel SSL Settings (Mutual TLS with RA-TLS attestation)\n"
-        "# ssl_verify_server_cert=ON enables certificate verification\n"
-        "# RA-TLS library handles SGX quote verification for self-signed certs\n"
+        "# ssl_verify_server_cert=OFF disables PKI chain validation (no CA for self-signed certs)\n"
+        "# RA-TLS library handles SGX quote verification for attestation-based trust\n"
         "loose-group_replication_recovery_use_ssl=ON\n"
         "loose-group_replication_recovery_ssl_cert=%s\n"
         "loose-group_replication_recovery_ssl_key=%s\n"
-        "loose-group_replication_recovery_ssl_verify_server_cert=ON\n",
+        "loose-group_replication_recovery_ssl_verify_server_cert=OFF\n",
         cert_path, key_path);
     
     /* IP allowlist - explicit list to avoid "Unable to get local IP addresses" error in Gramine
