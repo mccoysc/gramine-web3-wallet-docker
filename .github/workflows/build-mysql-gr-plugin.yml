@@ -201,7 +201,15 @@ jobs:
               apt-get update
               
               # Enable source repositories for build-dep
-              sed -i "s/^# deb-src/deb-src/" /etc/apt/sources.list
+              # Ubuntu 24.04 uses deb822 format in /etc/apt/sources.list.d/ubuntu.sources
+              # Need to change "Types: deb" to "Types: deb deb-src"
+              if [ -f /etc/apt/sources.list.d/ubuntu.sources ]; then
+                echo "Enabling deb-src in deb822 format..."
+                sed -i "s/^Types: deb$/Types: deb deb-src/" /etc/apt/sources.list.d/ubuntu.sources
+              else
+                # Fallback for traditional sources.list format
+                sed -i "s/^# deb-src/deb-src/" /etc/apt/sources.list
+              fi
               apt-get update
               
               # Install MySQL build dependencies using Ubuntu authoritative set
@@ -238,13 +246,23 @@ jobs:
               mkdir -p /tmp/mysql-source
               cd /tmp/mysql-source
               
-              # Get the source package
-              apt-get source mysql-server-8.0='"$MYSQL_UBUNTU_VERSION"' 2>/dev/null || {
-                echo "apt-get source failed, downloading from MySQL archives..."
-                wget -q "https://downloads.mysql.com/archives/get/p/23/file/mysql-'"$MYSQL_VERSION"'.tar.gz"
-                tar xzf mysql-'"$MYSQL_VERSION"'.tar.gz
-                mv mysql-'"$MYSQL_VERSION"' mysql-8.0-'"$MYSQL_VERSION"'
-              }
+              # Get the source package - try apt-get source first (Ubuntu patched version)
+              # then fallback to official MySQL download, then GitHub
+              echo "Trying apt-get source..."
+              if ! apt-get source mysql-server-8.0='"$MYSQL_UBUNTU_VERSION"' 2>&1; then
+                echo "apt-get source failed, trying dev.mysql.com..."
+                if wget -q "https://dev.mysql.com/get/Downloads/MySQL-8.0/mysql-'"$MYSQL_VERSION"'.tar.gz"; then
+                  tar xzf mysql-'"$MYSQL_VERSION"'.tar.gz
+                  # Rename to match expected pattern
+                  mv mysql-'"$MYSQL_VERSION"' mysql-8.0-'"$MYSQL_VERSION"'
+                else
+                  echo "dev.mysql.com failed, trying GitHub..."
+                  wget -q "https://github.com/mysql/mysql-server/archive/refs/tags/mysql-'"$MYSQL_VERSION"'.tar.gz" -O mysql-'"$MYSQL_VERSION"'.tar.gz
+                  tar xzf mysql-'"$MYSQL_VERSION"'.tar.gz
+                  # GitHub extracts to mysql-server-mysql-X.Y.Z, rename to expected pattern
+                  mv mysql-server-mysql-'"$MYSQL_VERSION"' mysql-8.0-'"$MYSQL_VERSION"'
+                fi
+              fi
               
               echo "MySQL source downloaded"
               ls -la
