@@ -165,6 +165,12 @@ COPY --from=builder /opt/gramine-install/ /
 # This is needed for RA-TLS testing. The directory only exists when building from source.
 COPY --from=builder /opt/gramine /opt/gramine
 
+# Copy prebuilt directories from builder stage to runtime stage
+# These were downloaded by the workflow and copied to builder stage
+# We need them in runtime stage for OpenSSL and Node.js installation
+COPY --from=builder /tmp/prebuilt/openssl/ /tmp/prebuilt/openssl/
+COPY --from=builder /tmp/prebuilt/nodejs/ /tmp/prebuilt/nodejs/
+
 # Re-declare build args for runtime stage (needed for fallback clone)
 # GRAMINE_OWNER is dynamically set by workflow from github.repository_owner
 ARG GRAMINE_OWNER
