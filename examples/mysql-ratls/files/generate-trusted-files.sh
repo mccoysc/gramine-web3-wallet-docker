@@ -217,6 +217,20 @@ for sgx_lib in /usr/lib/x86_64-linux-gnu/libsgx*.so* /usr/lib/x86_64-linux-gnu/l
     fi
 done
 
+# Add custom OpenSSL libraries (for RA-TLS and mysqld SSL) - recursively
+# These are installed at /opt/openssl-install/lib64 and take priority over system OpenSSL
+echo "# Adding custom OpenSSL libraries (recursive)..." >&2
+for openssl_dir in /opt/openssl-install/lib64 /opt/openssl-install/lib; do
+    if [ -d "$openssl_dir" ]; then
+        echo "# Found custom OpenSSL directory: $openssl_dir" >&2
+        for openssl_lib in "$openssl_dir"/*.so* "$openssl_dir"/engines*/*.so* "$openssl_dir"/ossl-modules/*.so*; do
+            if [ -f "$openssl_lib" ]; then
+                add_dep_recursive "$openssl_lib"
+            fi
+        done
+    fi
+done
+
 # Sort and deduplicate, then resolve symlinks
 echo "# Deduplicating and resolving symlinks..." >&2
 UNIQUE_DEPS=$(sort -u "$ALL_DEPS" | while read -r dep; do
@@ -271,6 +285,15 @@ generate_output() {
     echo ""
     echo "  # MySQL support files (charsets, error messages, etc.)"
     echo '  "file:/usr/share/mysql/",'
+    echo ""
+    echo "  # Custom OpenSSL installation (for RA-TLS and mysqld SSL)"
+    echo "  # This takes priority over system OpenSSL via LD_LIBRARY_PATH"
+    if [ -d "/opt/openssl-install/lib64" ]; then
+        echo '  "file:/opt/openssl-install/lib64/",'
+    fi
+    if [ -d "/opt/openssl-install/lib" ]; then
+        echo '  "file:/opt/openssl-install/lib/",'
+    fi
     echo ""
     echo "  # Pre-initialized MySQL data directory (template for first boot)"
     echo "  # This is copied to the encrypted partition at runtime"

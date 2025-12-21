@@ -81,6 +81,18 @@ RUN set -eux && \
 # and remove policy-rc.d since we're done with apt installations
 RUN rm -rf /var/lib/mysql/* && rm -f /usr/sbin/policy-rc.d
 
+# SECURITY: Remove password authentication plugin .so files if they exist
+# This is a defense-in-depth measure - the main security is enforced at account level
+# (only 'app' user with REQUIRE X509 exists, all root accounts removed)
+# Note: These plugins may be built-in to mysqld (not separate .so files), so rm -f is used
+RUN rm -f /usr/lib/mysql/plugin/mysql_native_password.so \
+          /usr/lib/mysql/plugin/caching_sha2_password.so \
+          /usr/lib/mysql/plugin/sha256_password.so \
+          /usr/lib/x86_64-linux-gnu/mysql/plugin/mysql_native_password.so \
+          /usr/lib/x86_64-linux-gnu/mysql/plugin/caching_sha2_password.so \
+          /usr/lib/x86_64-linux-gnu/mysql/plugin/sha256_password.so && \
+    echo "Password authentication plugin files removed (if they existed)"
+
 # Create directories for MySQL data, SSL certificates, and secure file operations
 RUN mkdir -p /var/lib/mysql /var/lib/mysql-ssl /var/run/mysqld /var/lib/mysql-files \
     && chown -R mysql:mysql /var/lib/mysql /var/lib/mysql-ssl /var/run/mysqld /var/lib/mysql-files \
@@ -148,6 +160,9 @@ RUN /opt/mysql-ratls/generate-trusted-files.sh /opt/mysql-ratls/trusted_files.to
 # This configuration enforces SSL/TLS and prepares for RA-TLS certificates
 # Note: ssl_mode is a CLIENT-side option, not valid for [mysqld] server config
 # Note: ssl_ca is not set because RA-TLS uses self-signed certificates without a CA
+# SECURITY: Only X509 certificate authentication is allowed (enforced at account level)
+# Note: Password auth plugins are built-in to mysqld and cannot be disabled via config
+# Security is enforced by: 1) Only 'app' user exists with REQUIRE X509, 2) All root accounts removed
 RUN printf '\n# RA-TLS Configuration\n[mysqld]\n# Require secure transport (SSL/TLS)\nrequire_secure_transport = ON\n\n# SSL certificate path (generated at runtime by RA-TLS)\n# Certificate is in normal directory, private key is in encrypted partition\nssl_cert = /var/lib/mysql-ssl/server-cert.pem\n# Private key path is set via command line argument (from encrypted partition)\n# Note: ssl_ca is NOT set because RA-TLS uses self-signed certificates\n# Note: ssl_mode is a CLIENT option, not valid for server config\n\n# Bind to all interfaces\nbind-address = 0.0.0.0\n\n# Skip name resolution for faster connections\nskip-name-resolve\n\n# Performance settings\nmax_connections = 100\ninnodb_buffer_pool_size = 256M\n\n# Data directory in encrypted partition to prevent data leakage\ndatadir = /app/wallet/mysql-data\n\n# Log files outside encrypted partition for debugging visibility\n# Note: This is overridden by --log-error command line argument from launcher\nlog_error = /var/log/mysql/error.log\ngeneral_log_file = /var/log/mysql/general.log\nslow_query_log_file = /var/log/mysql/slow.log\n\n' >> /etc/mysql/mysql.conf.d/mysqld.cnf
 
 # Create necessary directories and build the Gramine manifest

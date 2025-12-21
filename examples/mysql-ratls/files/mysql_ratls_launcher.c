@@ -341,20 +341,74 @@ static int create_init_sql(const char *data_dir, char *init_sql_path, size_t pat
     }
     
     /* Build SQL content in memory so we can both write and print it */
-    char sql_content[4096];
+    char sql_content[8192];
     int offset = 0;
     
     offset += snprintf(sql_content + offset, sizeof(sql_content) - offset,
         "-- MySQL RA-TLS User Initialization\n"
         "-- This file is executed on first boot inside the SGX enclave\n"
         "-- Users are configured with REQUIRE X509 (certificate-only authentication)\n"
-        "-- RA-TLS handles the actual SGX attestation verification\n\n");
+        "-- RA-TLS handles the actual SGX attestation verification\n"
+        "-- Only 'app' user is allowed; root accounts are removed for security\n\n");
     
-    /* Create application user with X509 requirement */
+    /* Create application user with X509 requirement and highest privileges */
+    /* ALL PRIVILEGES grants static privileges, but MySQL 8 dynamic privileges must be granted separately */
     offset += snprintf(sql_content + offset, sizeof(sql_content) - offset,
-        "-- Create application user that requires X.509 certificate\n"
+        "-- Create application user that requires X.509 certificate with highest privileges\n"
         "CREATE USER IF NOT EXISTS 'app'@'%%' IDENTIFIED BY '' REQUIRE X509;\n"
-        "GRANT ALL PRIVILEGES ON *.* TO 'app'@'%%' WITH GRANT OPTION;\n\n");
+        "GRANT ALL PRIVILEGES ON *.* TO 'app'@'%%' WITH GRANT OPTION;\n"
+        "-- Grant all MySQL 8 dynamic privileges for full administrative access\n"
+        "GRANT APPLICATION_PASSWORD_ADMIN ON *.* TO 'app'@'%%';\n"
+        "GRANT AUDIT_ABORT_EXEMPT ON *.* TO 'app'@'%%';\n"
+        "GRANT AUDIT_ADMIN ON *.* TO 'app'@'%%';\n"
+        "GRANT AUTHENTICATION_POLICY_ADMIN ON *.* TO 'app'@'%%';\n"
+        "GRANT BACKUP_ADMIN ON *.* TO 'app'@'%%';\n"
+        "GRANT BINLOG_ADMIN ON *.* TO 'app'@'%%';\n"
+        "GRANT BINLOG_ENCRYPTION_ADMIN ON *.* TO 'app'@'%%';\n"
+        "GRANT CLONE_ADMIN ON *.* TO 'app'@'%%';\n"
+        "GRANT CONNECTION_ADMIN ON *.* TO 'app'@'%%';\n"
+        "GRANT ENCRYPTION_KEY_ADMIN ON *.* TO 'app'@'%%';\n"
+        "GRANT FIREWALL_EXEMPT ON *.* TO 'app'@'%%';\n"
+        "GRANT FLUSH_OPTIMIZER_COSTS ON *.* TO 'app'@'%%';\n"
+        "GRANT FLUSH_STATUS ON *.* TO 'app'@'%%';\n"
+        "GRANT FLUSH_TABLES ON *.* TO 'app'@'%%';\n"
+        "GRANT FLUSH_USER_RESOURCES ON *.* TO 'app'@'%%';\n"
+        "GRANT GROUP_REPLICATION_ADMIN ON *.* TO 'app'@'%%';\n"
+        "GRANT GROUP_REPLICATION_STREAM ON *.* TO 'app'@'%%';\n"
+        "GRANT INNODB_REDO_LOG_ARCHIVE ON *.* TO 'app'@'%%';\n"
+        "GRANT INNODB_REDO_LOG_ENABLE ON *.* TO 'app'@'%%';\n"
+        "GRANT PASSWORDLESS_USER_ADMIN ON *.* TO 'app'@'%%';\n"
+        "GRANT PERSIST_RO_VARIABLES_ADMIN ON *.* TO 'app'@'%%';\n"
+        "GRANT REPLICATION_APPLIER ON *.* TO 'app'@'%%';\n"
+        "GRANT REPLICATION_SLAVE_ADMIN ON *.* TO 'app'@'%%';\n"
+        "GRANT RESOURCE_GROUP_ADMIN ON *.* TO 'app'@'%%';\n"
+        "GRANT RESOURCE_GROUP_USER ON *.* TO 'app'@'%%';\n"
+        "GRANT ROLE_ADMIN ON *.* TO 'app'@'%%';\n"
+        "GRANT SENSITIVE_VARIABLES_OBSERVER ON *.* TO 'app'@'%%';\n"
+        "GRANT SERVICE_CONNECTION_ADMIN ON *.* TO 'app'@'%%';\n"
+        "GRANT SESSION_VARIABLES_ADMIN ON *.* TO 'app'@'%%';\n"
+        "GRANT SET_USER_ID ON *.* TO 'app'@'%%';\n"
+        "GRANT SHOW_ROUTINE ON *.* TO 'app'@'%%';\n"
+        "GRANT SYSTEM_USER ON *.* TO 'app'@'%%';\n"
+        "GRANT SYSTEM_VARIABLES_ADMIN ON *.* TO 'app'@'%%';\n"
+        "GRANT TABLE_ENCRYPTION_ADMIN ON *.* TO 'app'@'%%';\n"
+        "GRANT XA_RECOVER_ADMIN ON *.* TO 'app'@'%%';\n\n");
+    
+    /* Remove root accounts created by --initialize-insecure during Docker build */
+    /* This ensures only the 'app' user with X509 certificate authentication exists */
+    offset += snprintf(sql_content + offset, sizeof(sql_content) - offset,
+        "-- Remove root accounts (created by --initialize-insecure)\n"
+        "-- Only 'app' user with X509 certificate authentication is allowed\n"
+        "DROP USER IF EXISTS 'root'@'localhost';\n"
+        "DROP USER IF EXISTS 'root'@'%%';\n"
+        "DROP USER IF EXISTS 'root'@'127.0.0.1';\n"
+        "DROP USER IF EXISTS 'root'@'::1';\n\n");
+    
+    /* Note: Password authentication plugins (mysql_native_password, caching_sha2_password, sha256_password)
+     * are built-in to mysqld and cannot be uninstalled. Security is enforced at account level:
+     * - Only 'app' user exists with REQUIRE X509 (certificate authentication required)
+     * - All root accounts are removed
+     * - require_secure_transport=ON in mysqld.cnf ensures TLS is mandatory */
     
     offset += snprintf(sql_content + offset, sizeof(sql_content) - offset,
         "FLUSH PRIVILEGES;\n");
@@ -931,8 +985,8 @@ static int create_gr_init_sql(const char *data_dir, char *init_sql_path, size_t 
     }
     
     /* Build SQL content in memory so we can both write and print it */
-    /* Buffer reduced since INSTALL PLUGIN logic moved to cnf file */
-    char sql_content[8192];
+    /* Buffer size increased for all dynamic privileges */
+    char sql_content[16384];
     int offset = 0;
     
     offset += snprintf(sql_content + offset, sizeof(sql_content) - offset,
@@ -940,20 +994,67 @@ static int create_gr_init_sql(const char *data_dir, char *init_sql_path, size_t 
         "-- This file is executed on EVERY startup inside the SGX enclave\n"
         "-- All statements are idempotent (safe to run multiple times)\n"
         "-- Users are configured with REQUIRE X509 (certificate-only authentication)\n"
-        "-- RA-TLS handles the actual SGX attestation verification\n\n");
+        "-- RA-TLS handles the actual SGX attestation verification\n"
+        "-- Only 'app' user is allowed; root accounts are removed for security\n\n");
     
-    /* Create application user with X509 requirement (only app user needed) */
-    /* CREATE USER IF NOT EXISTS is already idempotent */
-    /* Grant dynamic privileges needed for GR event execution:
-     * - SYSTEM_VARIABLES_ADMIN: for SET GLOBAL group_replication_bootstrap_group
-     * - GROUP_REPLICATION_ADMIN: for START GROUP_REPLICATION */
+    /* Create application user with X509 requirement and highest privileges */
+    /* ALL PRIVILEGES grants static privileges, but MySQL 8 dynamic privileges must be granted separately */
     offset += snprintf(sql_content + offset, sizeof(sql_content) - offset,
-        "-- Create application user that requires X.509 certificate (idempotent)\n"
+        "-- Create application user that requires X.509 certificate with highest privileges (idempotent)\n"
         "CREATE USER IF NOT EXISTS 'app'@'%%' IDENTIFIED BY '' REQUIRE X509;\n"
         "GRANT ALL PRIVILEGES ON *.* TO 'app'@'%%' WITH GRANT OPTION;\n"
-        "-- Grant dynamic privileges for GR operations (needed for EVENT execution)\n"
+        "-- Grant all MySQL 8 dynamic privileges for full administrative access\n"
+        "GRANT APPLICATION_PASSWORD_ADMIN ON *.* TO 'app'@'%%';\n"
+        "GRANT AUDIT_ABORT_EXEMPT ON *.* TO 'app'@'%%';\n"
+        "GRANT AUDIT_ADMIN ON *.* TO 'app'@'%%';\n"
+        "GRANT AUTHENTICATION_POLICY_ADMIN ON *.* TO 'app'@'%%';\n"
+        "GRANT BACKUP_ADMIN ON *.* TO 'app'@'%%';\n"
+        "GRANT BINLOG_ADMIN ON *.* TO 'app'@'%%';\n"
+        "GRANT BINLOG_ENCRYPTION_ADMIN ON *.* TO 'app'@'%%';\n"
+        "GRANT CLONE_ADMIN ON *.* TO 'app'@'%%';\n"
+        "GRANT CONNECTION_ADMIN ON *.* TO 'app'@'%%';\n"
+        "GRANT ENCRYPTION_KEY_ADMIN ON *.* TO 'app'@'%%';\n"
+        "GRANT FIREWALL_EXEMPT ON *.* TO 'app'@'%%';\n"
+        "GRANT FLUSH_OPTIMIZER_COSTS ON *.* TO 'app'@'%%';\n"
+        "GRANT FLUSH_STATUS ON *.* TO 'app'@'%%';\n"
+        "GRANT FLUSH_TABLES ON *.* TO 'app'@'%%';\n"
+        "GRANT FLUSH_USER_RESOURCES ON *.* TO 'app'@'%%';\n"
+        "GRANT GROUP_REPLICATION_ADMIN ON *.* TO 'app'@'%%';\n"
+        "GRANT GROUP_REPLICATION_STREAM ON *.* TO 'app'@'%%';\n"
+        "GRANT INNODB_REDO_LOG_ARCHIVE ON *.* TO 'app'@'%%';\n"
+        "GRANT INNODB_REDO_LOG_ENABLE ON *.* TO 'app'@'%%';\n"
+        "GRANT PASSWORDLESS_USER_ADMIN ON *.* TO 'app'@'%%';\n"
+        "GRANT PERSIST_RO_VARIABLES_ADMIN ON *.* TO 'app'@'%%';\n"
+        "GRANT REPLICATION_APPLIER ON *.* TO 'app'@'%%';\n"
+        "GRANT REPLICATION_SLAVE_ADMIN ON *.* TO 'app'@'%%';\n"
+        "GRANT RESOURCE_GROUP_ADMIN ON *.* TO 'app'@'%%';\n"
+        "GRANT RESOURCE_GROUP_USER ON *.* TO 'app'@'%%';\n"
+        "GRANT ROLE_ADMIN ON *.* TO 'app'@'%%';\n"
+        "GRANT SENSITIVE_VARIABLES_OBSERVER ON *.* TO 'app'@'%%';\n"
+        "GRANT SERVICE_CONNECTION_ADMIN ON *.* TO 'app'@'%%';\n"
+        "GRANT SESSION_VARIABLES_ADMIN ON *.* TO 'app'@'%%';\n"
+        "GRANT SET_USER_ID ON *.* TO 'app'@'%%';\n"
+        "GRANT SHOW_ROUTINE ON *.* TO 'app'@'%%';\n"
+        "GRANT SYSTEM_USER ON *.* TO 'app'@'%%';\n"
         "GRANT SYSTEM_VARIABLES_ADMIN ON *.* TO 'app'@'%%';\n"
-        "GRANT GROUP_REPLICATION_ADMIN ON *.* TO 'app'@'%%';\n\n");
+        "GRANT TABLE_ENCRYPTION_ADMIN ON *.* TO 'app'@'%%';\n"
+        "GRANT XA_RECOVER_ADMIN ON *.* TO 'app'@'%%';\n\n");
+    
+    /* Remove root accounts created by --initialize-insecure during Docker build */
+    /* This ensures only the 'app' user with X509 certificate authentication exists */
+    offset += snprintf(sql_content + offset, sizeof(sql_content) - offset,
+        "-- Remove root accounts (created by --initialize-insecure)\n"
+        "-- Only 'app' user with X509 certificate authentication is allowed\n"
+        "DROP USER IF EXISTS 'root'@'localhost';\n"
+        "DROP USER IF EXISTS 'root'@'%%';\n"
+        "DROP USER IF EXISTS 'root'@'127.0.0.1';\n"
+        "DROP USER IF EXISTS 'root'@'::1';\n\n");
+    
+    /* Note: Password authentication plugins (mysql_native_password, caching_sha2_password, sha256_password)
+     * are built-in to mysqld and cannot be uninstalled. Security is enforced at account level:
+     * - Only 'app' user exists with REQUIRE X509 (certificate authentication required)
+     * - All root accounts are removed
+     * - require_secure_transport=ON in mysqld.cnf ensures TLS is mandatory */
     
     offset += snprintf(sql_content + offset, sizeof(sql_content) - offset,
         "FLUSH PRIVILEGES;\n\n");
@@ -2405,6 +2506,20 @@ int main(int argc, char *argv[]) {
     }
     
     new_argv[idx] = NULL;
+    
+    /* Set LD_LIBRARY_PATH to use custom OpenSSL library for mysqld */
+    /* This ensures mysqld uses our compiled OpenSSL instead of system OpenSSL */
+    /* The custom OpenSSL is installed at /opt/openssl-install/lib64 */
+    const char *openssl_lib_path = "/opt/openssl-install/lib64";
+    const char *current_ld_path = getenv("LD_LIBRARY_PATH");
+    if (current_ld_path && strlen(current_ld_path) > 0) {
+        /* Prepend custom OpenSSL path to existing LD_LIBRARY_PATH */
+        char new_ld_path[4096];
+        snprintf(new_ld_path, sizeof(new_ld_path), "%s:%s", openssl_lib_path, current_ld_path);
+        set_env("LD_LIBRARY_PATH", new_ld_path, 1);
+    } else {
+        set_env("LD_LIBRARY_PATH", openssl_lib_path, 1);
+    }
     
     /* Set LD_PRELOAD for mysqld to load the RA-TLS library */
     /* The launcher does NOT use LD_PRELOAD itself; only mysqld needs it */
