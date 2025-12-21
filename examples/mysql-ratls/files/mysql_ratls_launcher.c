@@ -2385,53 +2385,56 @@ int main(int argc, char *argv[]) {
          * the real getifaddrs() fails because it uses netlink sockets.
          * The replacement function returns fake interface data based on these IPs.
          * 
-         * GR_LOCAL_IP supports comma-separated list of IPs (e.g., "127.0.0.1,192.168.1.100,203.0.113.50")
+         * GR_LOCAL_IP supports comma-separated list of IPs (e.g., "10.0.0.1,127.0.0.1,192.168.1.100,203.0.113.50")
          * to support loopback, LAN and public IP addresses for cross-datacenter replication.
-         * The loopback address (127.0.0.1) is placed first as it's needed for local XCom connectivity tests.
-         * Order: 127.0.0.1, specified IP (if any), LAN IP, public IP - all deduplicated
+         * Order: specified IP (if any), 127.0.0.1, LAN IP, public IP - all deduplicated
+         * This order matches the seeds list order for consistency.
          */
         char gr_local_ip_list[MAX_IP_LEN * 4 + 8] = {0};  /* Room for four IPs + commas + null */
         int ip_count = 0;
         
-        /* First, always add loopback address 127.0.0.1 at the front */
-        strcpy(gr_local_ip_list, "127.0.0.1");
-        ip_count++;
-        
         /* Helper function-like macro to add IP if not already in list */
         #define ADD_IP_IF_UNIQUE(ip_var) do { \
-            if (strlen(ip_var) > 0 && strcmp(ip_var, "127.0.0.1") != 0) { \
+            if (strlen(ip_var) > 0) { \
                 int found = 0; \
-                char *search_pos = gr_local_ip_list; \
-                while ((search_pos = strstr(search_pos, ip_var)) != NULL) { \
-                    char before = (search_pos == gr_local_ip_list) ? ',' : *(search_pos - 1); \
-                    char after = *(search_pos + strlen(ip_var)); \
-                    if ((before == ',' || search_pos == gr_local_ip_list) && (after == ',' || after == '\0')) { \
-                        found = 1; break; \
+                if (strlen(gr_local_ip_list) > 0) { \
+                    char *search_pos = gr_local_ip_list; \
+                    while ((search_pos = strstr(search_pos, ip_var)) != NULL) { \
+                        char before = (search_pos == gr_local_ip_list) ? ',' : *(search_pos - 1); \
+                        char after = *(search_pos + strlen(ip_var)); \
+                        if ((before == ',' || search_pos == gr_local_ip_list) && (after == ',' || after == '\0')) { \
+                            found = 1; break; \
+                        } \
+                        search_pos++; \
                     } \
-                    search_pos++; \
                 } \
                 if (!found) { \
                     size_t current_len = strlen(gr_local_ip_list); \
-                    if (current_len + 1 + strlen(ip_var) < sizeof(gr_local_ip_list)) { \
+                    if (current_len == 0) { \
+                        strncpy(gr_local_ip_list, ip_var, sizeof(gr_local_ip_list) - 1); \
+                    } else if (current_len + 1 + strlen(ip_var) < sizeof(gr_local_ip_list)) { \
                         strcat(gr_local_ip_list, ","); \
                         strcat(gr_local_ip_list, ip_var); \
-                        ip_count++; \
                     } \
+                    ip_count++; \
                 } \
             } \
         } while(0)
         
-        /* Add specified IP (from --gr-local-address) if provided and different from loopback */
+        /* First, add specified IP (from --gr-local-address) if provided */
         if (strlen(specified_ip) > 0) {
             ADD_IP_IF_UNIQUE(specified_ip);
         }
         
-        /* Add auto-detected LAN IP if different from loopback and specified IP */
+        /* Then add loopback address 127.0.0.1 */
+        ADD_IP_IF_UNIQUE("127.0.0.1");
+        
+        /* Add auto-detected LAN IP */
         if (strlen(lan_ip) > 0) {
             ADD_IP_IF_UNIQUE(lan_ip);
         }
         
-        /* Add public IP if different from all above */
+        /* Add public IP */
         if (strlen(public_ip) > 0) {
             ADD_IP_IF_UNIQUE(public_ip);
         }
