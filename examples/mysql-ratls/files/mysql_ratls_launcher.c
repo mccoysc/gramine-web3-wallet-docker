@@ -1193,8 +1193,12 @@ struct launcher_config {
     const char *gr_group_name;         /* --gr-group-name */
     const char *gr_seeds;              /* --gr-seeds */
     const char *gr_local_address;      /* --gr-local-address */
+    int gr_port;                       /* --gr-port / GR_PORT: XCom communication port */
     int gr_bootstrap;                  /* --gr-bootstrap */
     int gr_debug;                      /* --gr-debug: enable verbose GR logging */
+    
+    /* MySQL port option (for host network mode with multiple instances) */
+    int mysql_port;                    /* --mysql-port / MYSQL_PORT: MySQL service port */
     
     /* Testing options */
     int dry_run;                       /* --dry-run: run all logic but skip execve() */
@@ -1231,6 +1235,19 @@ static void parse_args(int argc, char *argv[], struct launcher_config *config) {
     config->gr_local_address = NULL;
     config->gr_bootstrap = 0;
     config->gr_debug = 0;
+    
+    /* Port options - check environment variables first, default to standard ports */
+    const char *gr_port_env = getenv("GR_PORT");
+    config->gr_port = gr_port_env ? atoi(gr_port_env) : GR_DEFAULT_PORT;
+    if (config->gr_port <= 0 || config->gr_port > 65535) {
+        config->gr_port = GR_DEFAULT_PORT;
+    }
+    
+    const char *mysql_port_env = getenv("MYSQL_PORT");
+    config->mysql_port = mysql_port_env ? atoi(mysql_port_env) : 0;  /* 0 means use MySQL default (3306) */
+    if (config->mysql_port < 0 || config->mysql_port > 65535) {
+        config->mysql_port = 0;
+    }
     
     /* Testing options default to NULL/0 */
     config->dry_run = 0;
@@ -1285,6 +1302,40 @@ static void parse_args(int argc, char *argv[], struct launcher_config *config) {
             config->gr_bootstrap = 1;
         } else if (strcmp(argv[i], "--gr-debug") == 0) {
             config->gr_debug = 1;
+        }
+        /* Port options (for host network mode with multiple instances) */
+        else if (strncmp(argv[i], "--gr-port=", 10) == 0) {
+            config->gr_port = atoi(argv[i] + 10);
+            if (config->gr_port <= 0 || config->gr_port > 65535) {
+                fprintf(stderr, "[Launcher] Warning: Invalid --gr-port value, using default %d\n", GR_DEFAULT_PORT);
+                config->gr_port = GR_DEFAULT_PORT;
+            }
+        } else if (strcmp(argv[i], "--gr-port") == 0) {
+            if (i + 1 < argc && argv[i + 1][0] != '-') {
+                config->gr_port = atoi(argv[++i]);
+                if (config->gr_port <= 0 || config->gr_port > 65535) {
+                    fprintf(stderr, "[Launcher] Warning: Invalid --gr-port value, using default %d\n", GR_DEFAULT_PORT);
+                    config->gr_port = GR_DEFAULT_PORT;
+                }
+            } else {
+                fprintf(stderr, "[Launcher] Warning: --gr-port requires a value\n");
+            }
+        } else if (strncmp(argv[i], "--mysql-port=", 13) == 0) {
+            config->mysql_port = atoi(argv[i] + 13);
+            if (config->mysql_port <= 0 || config->mysql_port > 65535) {
+                fprintf(stderr, "[Launcher] Warning: Invalid --mysql-port value, ignoring\n");
+                config->mysql_port = 0;
+            }
+        } else if (strcmp(argv[i], "--mysql-port") == 0) {
+            if (i + 1 < argc && argv[i + 1][0] != '-') {
+                config->mysql_port = atoi(argv[++i]);
+                if (config->mysql_port <= 0 || config->mysql_port > 65535) {
+                    fprintf(stderr, "[Launcher] Warning: Invalid --mysql-port value, ignoring\n");
+                    config->mysql_port = 0;
+                }
+            } else {
+                fprintf(stderr, "[Launcher] Warning: --mysql-port requires a value\n");
+            }
         }
         /* Testing options */
         else if (strcmp(argv[i], "--dry-run") == 0) {
@@ -1373,14 +1424,22 @@ static void print_usage(const char *prog_name) {
     printf("                            (env: MYSQL_GR_GROUP_NAME)\n");
     printf("  --gr-seeds=SEEDS          Comma-separated list of additional seed nodes\n");
     printf("                            Format: host1:port1,host2:port2 or host1,host2\n");
-    printf("                            (port defaults to %d if not specified)\n", GR_DEFAULT_PORT);
+    printf("                            (port defaults to --gr-port value if not specified)\n");
     printf("                            Note: Local LAN IP and public IP are automatically added\n");
     printf("  --gr-local-address=ADDR   Override local address for GR communication\n");
-    printf("                            Format: host:port (default: auto-detect LAN IP:%d)\n", GR_DEFAULT_PORT);
+    printf("                            Format: host:port (default: auto-detect LAN IP with --gr-port)\n");
+    printf("  --gr-port=PORT            XCom communication port for Group Replication (default: %d)\n", GR_DEFAULT_PORT);
+    printf("                            (env: GR_PORT)\n");
+    printf("                            Use different ports for multiple instances on same host\n");
     printf("  --gr-bootstrap            Bootstrap a new replication group (first node only)\n");
     printf("                            Without this flag, node will try to join existing group\n");
     printf("  --gr-debug                Enable verbose GR logging for debugging and troubleshooting\n");
     printf("                            Logs XCom communication details to MySQL error log\n\n");
+    
+    printf("PORT OPTIONS (for host network mode with multiple instances):\n");
+    printf("  --mysql-port=PORT         MySQL service port (default: 3306)\n");
+    printf("                            (env: MYSQL_PORT)\n");
+    printf("                            Use different ports for multiple instances on same host\n\n");
     
     printf("TESTING OPTIONS:\n");
     printf("  --dry-run                 Run all logic but skip execve() to mysqld\n");
@@ -2366,8 +2425,9 @@ int main(int argc, char *argv[]) {
         }
         
         /* Build seeds list: user-specified seeds first, then auto-generated IPs */
-        build_seeds_list(seeds_list, sizeof(seeds_list), specified_ip, lan_ip, public_ip, config.gr_seeds, GR_DEFAULT_PORT);
+        build_seeds_list(seeds_list, sizeof(seeds_list), specified_ip, lan_ip, public_ip, config.gr_seeds, config.gr_port);
         printf("[Launcher] Seeds list: %s\n", seeds_list);
+        printf("[Launcher] GR XCom port: %d\n", config.gr_port);
         
         /* Determine local address for GR
          * Each node MUST have a unique local address for Group Replication to work.
@@ -2379,10 +2439,10 @@ int main(int argc, char *argv[]) {
             strncpy(gr_local_address, config.gr_local_address, sizeof(gr_local_address) - 1);
         } else if (strlen(lan_ip) > 0) {
             /* Default to LAN IP for unique local address across nodes */
-            snprintf(gr_local_address, sizeof(gr_local_address), "%s:%d", lan_ip, GR_DEFAULT_PORT);
+            snprintf(gr_local_address, sizeof(gr_local_address), "%s:%d", lan_ip, config.gr_port);
         } else if (strlen(public_ip) > 0) {
             /* Fallback to public IP if LAN IP is not available */
-            snprintf(gr_local_address, sizeof(gr_local_address), "%s:%d", public_ip, GR_DEFAULT_PORT);
+            snprintf(gr_local_address, sizeof(gr_local_address), "%s:%d", public_ip, config.gr_port);
         } else {
             fprintf(stderr, "[Launcher] ERROR: Could not determine local IP address for Group Replication\n");
             fprintf(stderr, "[Launcher] Please specify --gr-local-address explicitly\n");
@@ -2521,6 +2581,7 @@ int main(int argc, char *argv[]) {
     int extra_args = 0;
     if (gr_enabled) extra_args++;  /* --defaults-extra-file */
     if (init_sql_created && init_file_arg[0] != '\0') extra_args++;  /* --init-file (always on every startup) */
+    if (config.mysql_port > 0) extra_args++;  /* --port */
     
     int new_argc = base_args + extra_args;
     char **new_argv = malloc((new_argc + 1) * sizeof(char *));
@@ -2533,10 +2594,14 @@ int main(int argc, char *argv[]) {
     char ssl_cert_arg[MAX_PATH_LEN];
     char ssl_key_arg[MAX_PATH_LEN];
     char datadir_arg[MAX_PATH_LEN];
+    char mysql_port_arg[32] = {0};
     
     snprintf(ssl_cert_arg, sizeof(ssl_cert_arg), "--ssl-cert=%s", cert_path);
     snprintf(ssl_key_arg, sizeof(ssl_key_arg), "--ssl-key=%s", key_path);
     snprintf(datadir_arg, sizeof(datadir_arg), "--datadir=%s", data_dir);
+    if (config.mysql_port > 0) {
+        snprintf(mysql_port_arg, sizeof(mysql_port_arg), "--port=%d", config.mysql_port);
+    }
     
     int idx = 0;
     new_argv[idx++] = MYSQLD_PATH;
@@ -2556,6 +2621,11 @@ int main(int argc, char *argv[]) {
     /* Add --init-file on every startup (SQL is idempotent) */
     if (init_sql_created && init_file_arg[0] != '\0') {
         new_argv[idx++] = init_file_arg;
+    }
+    
+    /* Add --port if custom MySQL port is specified */
+    if (config.mysql_port > 0 && mysql_port_arg[0] != '\0') {
+        new_argv[idx++] = mysql_port_arg;
     }
     
     new_argv[idx] = NULL;
@@ -2601,6 +2671,9 @@ int main(int argc, char *argv[]) {
     }
     if (init_sql_created && init_file_arg[0] != '\0') {
         printf("[Launcher]   Init file: %s (executed every startup)\n", init_sql_path);
+    }
+    if (config.mysql_port > 0) {
+        printf("[Launcher]   MySQL port: %d\n", config.mysql_port);
     }
     printf("\n");
     
