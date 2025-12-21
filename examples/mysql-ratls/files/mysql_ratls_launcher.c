@@ -2311,27 +2311,58 @@ int main(int argc, char *argv[]) {
         server_id = get_or_create_server_id(lan_ip, public_ip);
         printf("[Launcher] Server ID: %u\n", server_id);
         
-        /* Build seeds list (self IPs + extra seeds, deduplicated)
-         * If --gr-local-address is specified, use that IP instead of auto-detected LAN IP
-         * to ensure group_seeds is consistent with group_replication_local_address */
-        char seeds_lan_ip[MAX_IP_LEN] = {0};
+        /* Build seeds list with all local IPs + extra seeds, deduplicated
+         * Order: 127.0.0.1 first, then specified local address IP, then LAN IP, then public IP
+         * All IPs are deduplicated in build_seeds_list */
+        char specified_ip[MAX_IP_LEN] = {0};
         if (config.gr_local_address && strlen(config.gr_local_address) > 0) {
             /* Extract IP from gr_local_address (which may include port) */
             const char *colon = strchr(config.gr_local_address, ':');
             if (colon) {
                 size_t ip_len = colon - config.gr_local_address;
-                if (ip_len < sizeof(seeds_lan_ip)) {
-                    strncpy(seeds_lan_ip, config.gr_local_address, ip_len);
-                    seeds_lan_ip[ip_len] = '\0';
+                if (ip_len < sizeof(specified_ip)) {
+                    strncpy(specified_ip, config.gr_local_address, ip_len);
+                    specified_ip[ip_len] = '\0';
                 }
             } else {
-                strncpy(seeds_lan_ip, config.gr_local_address, sizeof(seeds_lan_ip) - 1);
+                strncpy(specified_ip, config.gr_local_address, sizeof(specified_ip) - 1);
             }
-            printf("[Launcher] Using --gr-local-address IP for seeds: %s\n", seeds_lan_ip);
-        } else {
-            strncpy(seeds_lan_ip, lan_ip, sizeof(seeds_lan_ip) - 1);
+            printf("[Launcher] Specified local address IP: %s\n", specified_ip);
         }
-        build_seeds_list(seeds_list, sizeof(seeds_list), seeds_lan_ip, public_ip, config.gr_seeds, GR_DEFAULT_PORT);
+        
+        /* Build seeds list: 127.0.0.1 is added first by build_seeds_list,
+         * then we pass LAN IP (or specified IP if provided) and public IP.
+         * We also need to include both specified IP and LAN IP if they differ. */
+        build_seeds_list(seeds_list, sizeof(seeds_list), lan_ip, public_ip, config.gr_seeds, GR_DEFAULT_PORT);
+        
+        /* If a specific IP was provided and it's different from LAN IP, add it to seeds */
+        if (strlen(specified_ip) > 0 && strcmp(specified_ip, "127.0.0.1") != 0 &&
+            (strlen(lan_ip) == 0 || strcmp(specified_ip, lan_ip) != 0) &&
+            (strlen(public_ip) == 0 || strcmp(specified_ip, public_ip) != 0)) {
+            /* Check if not already in seeds list */
+            char specified_seed[MAX_IP_LEN + 16];
+            snprintf(specified_seed, sizeof(specified_seed), "%s:%d", specified_ip, GR_DEFAULT_PORT);
+            if (!seed_in_list(seeds_list, specified_seed)) {
+                /* Insert after 127.0.0.1 (which is always first) */
+                char temp_seeds[MAX_SEEDS_LEN];
+                char *first_comma = strchr(seeds_list, ',');
+                if (first_comma) {
+                    /* Format: 127.0.0.1:port,rest -> 127.0.0.1:port,specified:port,rest */
+                    size_t first_part_len = first_comma - seeds_list;
+                    strncpy(temp_seeds, seeds_list, first_part_len);
+                    temp_seeds[first_part_len] = '\0';
+                    snprintf(temp_seeds + first_part_len, sizeof(temp_seeds) - first_part_len,
+                             ",%s%s", specified_seed, first_comma);
+                    strncpy(seeds_list, temp_seeds, MAX_SEEDS_LEN - 1);
+                } else {
+                    /* Only 127.0.0.1:port in list, append specified */
+                    size_t current_len = strlen(seeds_list);
+                    snprintf(seeds_list + current_len, MAX_SEEDS_LEN - current_len,
+                             ",%s", specified_seed);
+                }
+                printf("[Launcher] Added specified IP to seeds: %s\n", specified_ip);
+            }
+        }
         printf("[Launcher] Seeds list: %s\n", seeds_list);
         
         /* Determine local address for GR
@@ -2355,54 +2386,55 @@ int main(int argc, char *argv[]) {
          * GR_LOCAL_IP supports comma-separated list of IPs (e.g., "127.0.0.1,192.168.1.100,203.0.113.50")
          * to support loopback, LAN and public IP addresses for cross-datacenter replication.
          * The loopback address (127.0.0.1) is placed first as it's needed for local XCom connectivity tests.
+         * Order: 127.0.0.1, specified IP (if any), LAN IP, public IP - all deduplicated
          */
-        char gr_local_ip_list[MAX_IP_LEN * 3 + 4] = {0};  /* Room for three IPs + commas + null */
+        char gr_local_ip_list[MAX_IP_LEN * 4 + 8] = {0};  /* Room for four IPs + commas + null */
         int ip_count = 0;
         
         /* First, always add loopback address 127.0.0.1 at the front */
         strcpy(gr_local_ip_list, "127.0.0.1");
         ip_count++;
         
-        /* Then, add the configured or detected LAN IP (if different from loopback) */
-        char lan_ip_to_add[MAX_IP_LEN] = {0};
-        if (config.gr_local_address && strlen(config.gr_local_address) > 0) {
-            /* Extract IP from gr_local_address (which may include port) */
-            const char *colon = strchr(config.gr_local_address, ':');
-            if (colon) {
-                size_t ip_len = colon - config.gr_local_address;
-                if (ip_len < sizeof(lan_ip_to_add)) {
-                    strncpy(lan_ip_to_add, config.gr_local_address, ip_len);
-                    lan_ip_to_add[ip_len] = '\0';
-                }
-            } else {
-                strncpy(lan_ip_to_add, config.gr_local_address, sizeof(lan_ip_to_add) - 1);
-            }
-        } else if (strlen(lan_ip) > 0) {
-            strncpy(lan_ip_to_add, lan_ip, sizeof(lan_ip_to_add) - 1);
+        /* Helper function-like macro to add IP if not already in list */
+        #define ADD_IP_IF_UNIQUE(ip_var) do { \
+            if (strlen(ip_var) > 0 && strcmp(ip_var, "127.0.0.1") != 0) { \
+                int found = 0; \
+                char *search_pos = gr_local_ip_list; \
+                while ((search_pos = strstr(search_pos, ip_var)) != NULL) { \
+                    char before = (search_pos == gr_local_ip_list) ? ',' : *(search_pos - 1); \
+                    char after = *(search_pos + strlen(ip_var)); \
+                    if ((before == ',' || search_pos == gr_local_ip_list) && (after == ',' || after == '\0')) { \
+                        found = 1; break; \
+                    } \
+                    search_pos++; \
+                } \
+                if (!found) { \
+                    size_t current_len = strlen(gr_local_ip_list); \
+                    if (current_len + 1 + strlen(ip_var) < sizeof(gr_local_ip_list)) { \
+                        strcat(gr_local_ip_list, ","); \
+                        strcat(gr_local_ip_list, ip_var); \
+                        ip_count++; \
+                    } \
+                } \
+            } \
+        } while(0)
+        
+        /* Add specified IP (from --gr-local-address) if provided and different from loopback */
+        if (strlen(specified_ip) > 0) {
+            ADD_IP_IF_UNIQUE(specified_ip);
         }
         
-        /* Add LAN IP if it's not the loopback address */
-        if (strlen(lan_ip_to_add) > 0 && strcmp(lan_ip_to_add, "127.0.0.1") != 0) {
-            size_t current_len = strlen(gr_local_ip_list);
-            if (current_len + 1 + strlen(lan_ip_to_add) < sizeof(gr_local_ip_list)) {
-                strcat(gr_local_ip_list, ",");
-                strcat(gr_local_ip_list, lan_ip_to_add);
-                ip_count++;
-            }
+        /* Add auto-detected LAN IP if different from loopback and specified IP */
+        if (strlen(lan_ip) > 0) {
+            ADD_IP_IF_UNIQUE(lan_ip);
         }
         
-        /* Then, add the public IP if it's different from loopback and LAN IP */
-        if (strlen(public_ip) > 0 && strcmp(public_ip, "127.0.0.1") != 0 && 
-            (strlen(lan_ip_to_add) == 0 || strcmp(public_ip, lan_ip_to_add) != 0)) {
-            /* Append public IP to the list */
-            size_t current_len = strlen(gr_local_ip_list);
-            if (current_len + 1 + strlen(public_ip) < sizeof(gr_local_ip_list)) {
-                strcat(gr_local_ip_list, ",");
-                strcat(gr_local_ip_list, public_ip);
-                ip_count++;
-                printf("[Launcher] Added public IP to GR_LOCAL_IP list: %s\n", public_ip);
-            }
+        /* Add public IP if different from all above */
+        if (strlen(public_ip) > 0) {
+            ADD_IP_IF_UNIQUE(public_ip);
         }
+        
+        #undef ADD_IP_IF_UNIQUE
         
         if (strlen(gr_local_ip_list) > 0) {
             set_env("GR_LOCAL_IP", gr_local_ip_list, 1);
