@@ -770,18 +770,18 @@ static int build_seeds_list(char *seeds_buf, size_t buf_size,
     seeds_buf[0] = '\0';
     size_t len = 0;
     
-    /* Add LAN IP if valid */
-    if (lan_ip && strlen(lan_ip) > 0) {
-        len += snprintf(seeds_buf + len, buf_size - len, "%s:%d", lan_ip, gr_port);
+    /* Always add loopback address 127.0.0.1 first for local XCom connectivity tests */
+    len += snprintf(seeds_buf + len, buf_size - len, "127.0.0.1:%d", gr_port);
+    
+    /* Add LAN IP if valid and different from loopback */
+    if (lan_ip && strlen(lan_ip) > 0 && strcmp(lan_ip, "127.0.0.1") != 0) {
+        len += snprintf(seeds_buf + len, buf_size - len, ",%s:%d", lan_ip, gr_port);
     }
     
-    /* Add public IP if valid and different from LAN IP */
-    if (public_ip && strlen(public_ip) > 0) {
+    /* Add public IP if valid and different from LAN IP and loopback */
+    if (public_ip && strlen(public_ip) > 0 && strcmp(public_ip, "127.0.0.1") != 0) {
         if (!lan_ip || strcmp(lan_ip, public_ip) != 0) {
-            if (len > 0) {
-                len += snprintf(seeds_buf + len, buf_size - len, ",");
-            }
-            len += snprintf(seeds_buf + len, buf_size - len, "%s:%d", public_ip, gr_port);
+            len += snprintf(seeds_buf + len, buf_size - len, ",%s:%d", public_ip, gr_port);
         }
     }
     
@@ -2279,6 +2279,14 @@ int main(int argc, char *argv[]) {
         printf("[Launcher] Group name: %s\n", gr_group_name);
         printf("[Launcher] Bootstrap mode: %s\n", config.gr_bootstrap ? "YES" : "NO");
         
+        /* In non-bootstrap (join) mode, --gr-seeds is required to specify which node to connect to */
+        if (!config.gr_bootstrap && (!config.gr_seeds || strlen(config.gr_seeds) == 0)) {
+            fprintf(stderr, "[Launcher] ERROR: --gr-seeds is required in join mode (without --gr-bootstrap)\n");
+            fprintf(stderr, "[Launcher] You must specify at least one seed node to join the group.\n");
+            fprintf(stderr, "[Launcher] Example: --gr-seeds=192.168.1.100:33061\n");
+            return 1;
+        }
+        
         /* Get LAN IP - use test override if provided */
         if (config.test_lan_ip && strlen(config.test_lan_ip) > 0) {
             strncpy(lan_ip, config.test_lan_ip, sizeof(lan_ip) - 1);
@@ -2326,15 +2334,16 @@ int main(int argc, char *argv[]) {
         build_seeds_list(seeds_list, sizeof(seeds_list), seeds_lan_ip, public_ip, config.gr_seeds, GR_DEFAULT_PORT);
         printf("[Launcher] Seeds list: %s\n", seeds_list);
         
-        /* Determine local address for GR */
+        /* Determine local address for GR
+         * Use 127.0.0.1 as the primary local address for XCom connectivity tests.
+         * This is consistent with the seeds list which also has 127.0.0.1 first.
+         */
         char gr_local_address[MAX_IP_LEN + 16] = {0};
         if (config.gr_local_address && strlen(config.gr_local_address) > 0) {
             strncpy(gr_local_address, config.gr_local_address, sizeof(gr_local_address) - 1);
-        } else if (strlen(lan_ip) > 0) {
-            snprintf(gr_local_address, sizeof(gr_local_address), "%s:%d", lan_ip, GR_DEFAULT_PORT);
         } else {
-            fprintf(stderr, "[Launcher] ERROR: Cannot determine local address for Group Replication\n");
-            return 1;
+            /* Default to loopback address for local XCom connectivity */
+            snprintf(gr_local_address, sizeof(gr_local_address), "127.0.0.1:%d", GR_DEFAULT_PORT);
         }
         printf("[Launcher] GR local address: %s\n", gr_local_address);
         
