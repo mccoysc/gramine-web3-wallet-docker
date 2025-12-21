@@ -404,6 +404,12 @@ static int create_init_sql(const char *data_dir, char *init_sql_path, size_t pat
         "DROP USER IF EXISTS 'root'@'127.0.0.1';\n"
         "DROP USER IF EXISTS 'root'@'::1';\n\n");
     
+    /* Note: Password authentication plugins (mysql_native_password, caching_sha2_password, sha256_password)
+     * are built-in to mysqld and cannot be uninstalled. Security is enforced at account level:
+     * - Only 'app' user exists with REQUIRE X509 (certificate authentication required)
+     * - All root accounts are removed
+     * - require_secure_transport=ON in mysqld.cnf ensures TLS is mandatory */
+    
     offset += snprintf(sql_content + offset, sizeof(sql_content) - offset,
         "FLUSH PRIVILEGES;\n");
     
@@ -1043,6 +1049,12 @@ static int create_gr_init_sql(const char *data_dir, char *init_sql_path, size_t 
         "DROP USER IF EXISTS 'root'@'%%';\n"
         "DROP USER IF EXISTS 'root'@'127.0.0.1';\n"
         "DROP USER IF EXISTS 'root'@'::1';\n\n");
+    
+    /* Note: Password authentication plugins (mysql_native_password, caching_sha2_password, sha256_password)
+     * are built-in to mysqld and cannot be uninstalled. Security is enforced at account level:
+     * - Only 'app' user exists with REQUIRE X509 (certificate authentication required)
+     * - All root accounts are removed
+     * - require_secure_transport=ON in mysqld.cnf ensures TLS is mandatory */
     
     offset += snprintf(sql_content + offset, sizeof(sql_content) - offset,
         "FLUSH PRIVILEGES;\n\n");
@@ -2494,6 +2506,20 @@ int main(int argc, char *argv[]) {
     }
     
     new_argv[idx] = NULL;
+    
+    /* Set LD_LIBRARY_PATH to use custom OpenSSL library for mysqld */
+    /* This ensures mysqld uses our compiled OpenSSL instead of system OpenSSL */
+    /* The custom OpenSSL is installed at /opt/openssl-install/lib64 */
+    const char *openssl_lib_path = "/opt/openssl-install/lib64";
+    const char *current_ld_path = getenv("LD_LIBRARY_PATH");
+    if (current_ld_path && strlen(current_ld_path) > 0) {
+        /* Prepend custom OpenSSL path to existing LD_LIBRARY_PATH */
+        char new_ld_path[4096];
+        snprintf(new_ld_path, sizeof(new_ld_path), "%s:%s", openssl_lib_path, current_ld_path);
+        set_env("LD_LIBRARY_PATH", new_ld_path, 1);
+    } else {
+        set_env("LD_LIBRARY_PATH", openssl_lib_path, 1);
+    }
     
     /* Set LD_PRELOAD for mysqld to load the RA-TLS library */
     /* The launcher does NOT use LD_PRELOAD itself; only mysqld needs it */
