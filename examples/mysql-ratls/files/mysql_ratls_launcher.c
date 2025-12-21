@@ -348,13 +348,24 @@ static int create_init_sql(const char *data_dir, char *init_sql_path, size_t pat
         "-- MySQL RA-TLS User Initialization\n"
         "-- This file is executed on first boot inside the SGX enclave\n"
         "-- Users are configured with REQUIRE X509 (certificate-only authentication)\n"
-        "-- RA-TLS handles the actual SGX attestation verification\n\n");
+        "-- RA-TLS handles the actual SGX attestation verification\n"
+        "-- Only 'app' user is allowed; root accounts are removed for security\n\n");
     
     /* Create application user with X509 requirement */
     offset += snprintf(sql_content + offset, sizeof(sql_content) - offset,
         "-- Create application user that requires X.509 certificate\n"
         "CREATE USER IF NOT EXISTS 'app'@'%%' IDENTIFIED BY '' REQUIRE X509;\n"
         "GRANT ALL PRIVILEGES ON *.* TO 'app'@'%%' WITH GRANT OPTION;\n\n");
+    
+    /* Remove root accounts created by --initialize-insecure during Docker build */
+    /* This ensures only the 'app' user with X509 certificate authentication exists */
+    offset += snprintf(sql_content + offset, sizeof(sql_content) - offset,
+        "-- Remove root accounts (created by --initialize-insecure)\n"
+        "-- Only 'app' user with X509 certificate authentication is allowed\n"
+        "DROP USER IF EXISTS 'root'@'localhost';\n"
+        "DROP USER IF EXISTS 'root'@'%%';\n"
+        "DROP USER IF EXISTS 'root'@'127.0.0.1';\n"
+        "DROP USER IF EXISTS 'root'@'::1';\n\n");
     
     offset += snprintf(sql_content + offset, sizeof(sql_content) - offset,
         "FLUSH PRIVILEGES;\n");
@@ -940,7 +951,8 @@ static int create_gr_init_sql(const char *data_dir, char *init_sql_path, size_t 
         "-- This file is executed on EVERY startup inside the SGX enclave\n"
         "-- All statements are idempotent (safe to run multiple times)\n"
         "-- Users are configured with REQUIRE X509 (certificate-only authentication)\n"
-        "-- RA-TLS handles the actual SGX attestation verification\n\n");
+        "-- RA-TLS handles the actual SGX attestation verification\n"
+        "-- Only 'app' user is allowed; root accounts are removed for security\n\n");
     
     /* Create application user with X509 requirement (only app user needed) */
     /* CREATE USER IF NOT EXISTS is already idempotent */
@@ -954,6 +966,16 @@ static int create_gr_init_sql(const char *data_dir, char *init_sql_path, size_t 
         "-- Grant dynamic privileges for GR operations (needed for EVENT execution)\n"
         "GRANT SYSTEM_VARIABLES_ADMIN ON *.* TO 'app'@'%%';\n"
         "GRANT GROUP_REPLICATION_ADMIN ON *.* TO 'app'@'%%';\n\n");
+    
+    /* Remove root accounts created by --initialize-insecure during Docker build */
+    /* This ensures only the 'app' user with X509 certificate authentication exists */
+    offset += snprintf(sql_content + offset, sizeof(sql_content) - offset,
+        "-- Remove root accounts (created by --initialize-insecure)\n"
+        "-- Only 'app' user with X509 certificate authentication is allowed\n"
+        "DROP USER IF EXISTS 'root'@'localhost';\n"
+        "DROP USER IF EXISTS 'root'@'%%';\n"
+        "DROP USER IF EXISTS 'root'@'127.0.0.1';\n"
+        "DROP USER IF EXISTS 'root'@'::1';\n\n");
     
     offset += snprintf(sql_content + offset, sizeof(sql_content) - offset,
         "FLUSH PRIVILEGES;\n\n");
