@@ -813,18 +813,8 @@ static int build_seeds_list(char *seeds_buf, size_t buf_size,
         free(extra_copy);
     }
     
-    /* Then add auto-generated IPs: 127.0.0.1 first */
-    char loopback_seed[MAX_IP_LEN + 16];
-    snprintf(loopback_seed, sizeof(loopback_seed), "127.0.0.1:%d", gr_port);
-    if (!seed_in_list(seeds_buf, loopback_seed)) {
-        if (len > 0) {
-            len += snprintf(seeds_buf + len, buf_size - len, ",");
-        }
-        len += snprintf(seeds_buf + len, buf_size - len, "%s", loopback_seed);
-    }
-    
-    /* Add specified IP (from --gr-local-address) if valid and different from loopback */
-    if (specified_ip && strlen(specified_ip) > 0 && strcmp(specified_ip, "127.0.0.1") != 0) {
+    /* Add specified IP (from --gr-local-address) if valid */
+    if (specified_ip && strlen(specified_ip) > 0) {
         char specified_seed[MAX_IP_LEN + 16];
         snprintf(specified_seed, sizeof(specified_seed), "%s:%d", specified_ip, gr_port);
         if (!seed_in_list(seeds_buf, specified_seed)) {
@@ -835,8 +825,8 @@ static int build_seeds_list(char *seeds_buf, size_t buf_size,
         }
     }
     
-    /* Add LAN IP if valid and different from loopback */
-    if (lan_ip && strlen(lan_ip) > 0 && strcmp(lan_ip, "127.0.0.1") != 0) {
+    /* Add LAN IP if valid */
+    if (lan_ip && strlen(lan_ip) > 0) {
         char lan_seed[MAX_IP_LEN + 16];
         snprintf(lan_seed, sizeof(lan_seed), "%s:%d", lan_ip, gr_port);
         if (!seed_in_list(seeds_buf, lan_seed)) {
@@ -847,8 +837,8 @@ static int build_seeds_list(char *seeds_buf, size_t buf_size,
         }
     }
     
-    /* Add public IP if valid and different from loopback */
-    if (public_ip && strlen(public_ip) > 0 && strcmp(public_ip, "127.0.0.1") != 0) {
+    /* Add public IP if valid */
+    if (public_ip && strlen(public_ip) > 0) {
         char public_seed[MAX_IP_LEN + 16];
         snprintf(public_seed, sizeof(public_seed), "%s:%d", public_ip, gr_port);
         if (!seed_in_list(seeds_buf, public_seed)) {
@@ -2380,15 +2370,23 @@ int main(int argc, char *argv[]) {
         printf("[Launcher] Seeds list: %s\n", seeds_list);
         
         /* Determine local address for GR
-         * Use 127.0.0.1 as the primary local address for XCom connectivity tests.
-         * This is consistent with the seeds list which also has 127.0.0.1 first.
+         * Each node MUST have a unique local address for Group Replication to work.
+         * Using 127.0.0.1 for all nodes causes "Old incarnation found" errors.
+         * Priority: --gr-local-address > LAN IP > public IP
          */
         char gr_local_address[MAX_IP_LEN + 16] = {0};
         if (config.gr_local_address && strlen(config.gr_local_address) > 0) {
             strncpy(gr_local_address, config.gr_local_address, sizeof(gr_local_address) - 1);
+        } else if (strlen(lan_ip) > 0) {
+            /* Default to LAN IP for unique local address across nodes */
+            snprintf(gr_local_address, sizeof(gr_local_address), "%s:%d", lan_ip, GR_DEFAULT_PORT);
+        } else if (strlen(public_ip) > 0) {
+            /* Fallback to public IP if LAN IP is not available */
+            snprintf(gr_local_address, sizeof(gr_local_address), "%s:%d", public_ip, GR_DEFAULT_PORT);
         } else {
-            /* Default to loopback address for local XCom connectivity */
-            snprintf(gr_local_address, sizeof(gr_local_address), "127.0.0.1:%d", GR_DEFAULT_PORT);
+            fprintf(stderr, "[Launcher] ERROR: Could not determine local IP address for Group Replication\n");
+            fprintf(stderr, "[Launcher] Please specify --gr-local-address explicitly\n");
+            return 1;
         }
         printf("[Launcher] GR local address: %s\n", gr_local_address);
         
@@ -2397,10 +2395,10 @@ int main(int argc, char *argv[]) {
          * the real getifaddrs() fails because it uses netlink sockets.
          * The replacement function returns fake interface data based on these IPs.
          * 
-         * GR_LOCAL_IP supports comma-separated list of IPs (e.g., "10.0.0.1,127.0.0.1,192.168.1.100,203.0.113.50")
-         * to support loopback, LAN and public IP addresses for cross-datacenter replication.
-         * Order: specified IP (if any), 127.0.0.1, LAN IP, public IP - all deduplicated
-         * This order matches the seeds list order for consistency.
+         * GR_LOCAL_IP supports comma-separated list of IPs (e.g., "10.0.0.1,192.168.1.100,203.0.113.50")
+         * to support LAN and public IP addresses for cross-datacenter replication.
+         * Order: specified IP (if any), LAN IP, public IP - all deduplicated
+         * Note: 127.0.0.1 is NOT included to avoid "Old incarnation found" errors in GR.
          */
         char gr_local_ip_list[MAX_IP_LEN * 4 + 8] = {0};  /* Room for four IPs + commas + null */
         int ip_count = 0;
@@ -2437,9 +2435,6 @@ int main(int argc, char *argv[]) {
         if (strlen(specified_ip) > 0) {
             ADD_IP_IF_UNIQUE(specified_ip);
         }
-        
-        /* Then add loopback address 127.0.0.1 */
-        ADD_IP_IF_UNIQUE("127.0.0.1");
         
         /* Add auto-detected LAN IP */
         if (strlen(lan_ip) > 0) {
