@@ -1252,49 +1252,59 @@ static void parse_args(int argc, char *argv[], struct launcher_config *config) {
     config->mysql_argv = malloc(argc * sizeof(char *));
     config->mysql_argc = 0;
     
-    /* Parse arguments - args override environment variables */
+    /* Parse arguments - args override environment variables
+     * Supports both --arg=value and --arg value formats for options that take values */
+    
+    /* Helper macro to parse an option that takes a value
+     * Supports both --option=value and --option value formats */
+    #define PARSE_OPTION(opt_name, opt_len, target) \
+        if (strncmp(argv[i], opt_name "=", (opt_len) + 1) == 0) { \
+            target = argv[i] + (opt_len) + 1; \
+        } else if (strcmp(argv[i], opt_name) == 0) { \
+            if (i + 1 < argc && argv[i + 1][0] != '-') { \
+                target = argv[++i]; \
+            } else { \
+                fprintf(stderr, "[Launcher] Warning: %s requires a value\n", opt_name); \
+            } \
+        }
+    
     for (int i = 1; i < argc; i++) {
-        if (strncmp(argv[i], "--contract-address=", 19) == 0) {
-            config->contract_address = argv[i] + 19;
-        } else if (strncmp(argv[i], "--rpc-url=", 10) == 0) {
-            config->rpc_url = argv[i] + 10;
+        if (0) {
+            /* Placeholder for else-if chain */
+        }
+        /* Contract and RPC options */
+        else PARSE_OPTION("--contract-address", 18, config->contract_address)
+        else PARSE_OPTION("--rpc-url", 9, config->rpc_url)
         /* NOTE: --whitelist-config is NOT allowed via command-line for security */
         /* It can only be set via environment variables in the manifest */
-        } else if (strncmp(argv[i], "--cert-path=", 12) == 0) {
-            config->cert_path = argv[i] + 12;
+        else PARSE_OPTION("--cert-path", 11, config->cert_path)
         /* NOTE: --key-path and --data-dir are NOT allowed via command-line to prevent data leakage */
         /* They can only be set via environment variables in the manifest */
-        } else if (strncmp(argv[i], "--ra-tls-cert-algorithm=", 24) == 0) {
-            config->ra_tls_cert_algorithm = argv[i] + 24;
-        } else if (strncmp(argv[i], "--ratls-enable-verify=", 22) == 0) {
-            config->ratls_enable_verify = argv[i] + 22;
-        } else if (strncmp(argv[i], "--ratls-require-peer-cert=", 26) == 0) {
-            config->ratls_require_peer_cert = argv[i] + 26;
-        } else if (strncmp(argv[i], "--ra-tls-allow-outdated-tcb=", 28) == 0) {
-            config->ra_tls_allow_outdated_tcb = argv[i] + 28;
-        } else if (strncmp(argv[i], "--ra-tls-allow-hw-config-needed=", 32) == 0) {
-            config->ra_tls_allow_hw_config_needed = argv[i] + 32;
-        } else if (strncmp(argv[i], "--ra-tls-allow-sw-hardening-needed=", 35) == 0) {
-            config->ra_tls_allow_sw_hardening_needed = argv[i] + 35;
-        } else if (strncmp(argv[i], "--gr-group-name=", 16) == 0) {
-            config->gr_group_name = argv[i] + 16;
-        } else if (strncmp(argv[i], "--gr-seeds=", 11) == 0) {
-            config->gr_seeds = argv[i] + 11;
-        } else if (strcmp(argv[i], "--gr-bootstrap") == 0) {
+        /* RA-TLS options */
+        else PARSE_OPTION("--ra-tls-cert-algorithm", 23, config->ra_tls_cert_algorithm)
+        else PARSE_OPTION("--ratls-enable-verify", 21, config->ratls_enable_verify)
+        else PARSE_OPTION("--ratls-require-peer-cert", 25, config->ratls_require_peer_cert)
+        else PARSE_OPTION("--ra-tls-allow-outdated-tcb", 27, config->ra_tls_allow_outdated_tcb)
+        else PARSE_OPTION("--ra-tls-allow-hw-config-needed", 31, config->ra_tls_allow_hw_config_needed)
+        else PARSE_OPTION("--ra-tls-allow-sw-hardening-needed", 34, config->ra_tls_allow_sw_hardening_needed)
+        /* Group Replication options */
+        else PARSE_OPTION("--gr-group-name", 15, config->gr_group_name)
+        else PARSE_OPTION("--gr-seeds", 10, config->gr_seeds)
+        else PARSE_OPTION("--gr-local-address", 18, config->gr_local_address)
+        else if (strcmp(argv[i], "--gr-bootstrap") == 0) {
             config->gr_bootstrap = 1;
         } else if (strcmp(argv[i], "--gr-debug") == 0) {
             config->gr_debug = 1;
-        } else if (strncmp(argv[i], "--gr-local-address=", 19) == 0) {
-            config->gr_local_address = argv[i] + 19;
-        } else if (strcmp(argv[i], "--dry-run") == 0) {
+        }
+        /* Testing options */
+        else if (strcmp(argv[i], "--dry-run") == 0) {
             config->dry_run = 1;
-        } else if (strncmp(argv[i], "--test-lan-ip=", 14) == 0) {
-            config->test_lan_ip = argv[i] + 14;
-        } else if (strncmp(argv[i], "--test-public-ip=", 17) == 0) {
-            config->test_public_ip = argv[i] + 17;
-        } else if (strncmp(argv[i], "--test-output-dir=", 18) == 0) {
-            config->test_output_dir = argv[i] + 18;
-        } else if (strcmp(argv[i], "--help") == 0 || strcmp(argv[i], "-h") == 0) {
+        }
+        else PARSE_OPTION("--test-lan-ip", 13, config->test_lan_ip)
+        else PARSE_OPTION("--test-public-ip", 16, config->test_public_ip)
+        else PARSE_OPTION("--test-output-dir", 17, config->test_output_dir)
+        /* Help */
+        else if (strcmp(argv[i], "--help") == 0 || strcmp(argv[i], "-h") == 0) {
             print_usage(argv[0]);
             exit(0);
         } else {
@@ -1302,6 +1312,8 @@ static void parse_args(int argc, char *argv[], struct launcher_config *config) {
             config->mysql_argv[config->mysql_argc++] = argv[i];
         }
     }
+    
+    #undef PARSE_OPTION
     
     /* Apply defaults for paths if not set */
     if (!config->cert_path || strlen(config->cert_path) == 0) {
