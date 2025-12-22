@@ -1490,8 +1490,8 @@ static void print_usage(const char *prog_name) {
     printf("                            Format: host1:port1,host2:port2 or host1,host2\n");
     printf("                            (port defaults to --gr-port value if not specified)\n");
     printf("                            Note: Local LAN IP and public IP are automatically added\n");
-    printf("  --gr-local-address=ADDR   Override local address for GR communication\n");
-    printf("                            Format: host:port (default: auto-detect LAN IP with --gr-port)\n");
+    printf("  --gr-local-address=IP     Override local IP address for GR communication\n");
+    printf("                            (default: auto-detect LAN IP, port is set by --gr-port)\n");
     printf("  --gr-port=PORT            XCom communication port for Group Replication (default: %d)\n", GR_DEFAULT_PORT);
     printf("                            (env: GR_PORT)\n");
     printf("                            Use different ports for multiple instances on same host\n");
@@ -2550,21 +2550,12 @@ int main(int argc, char *argv[]) {
         printf("[Launcher] Server ID: %u\n", server_id);
         
         /* Build seeds list with user-specified seeds first, then auto-generated IPs
-         * Order: user-specified seeds (--gr-seeds), then 127.0.0.1, then specified_ip, then LAN IP, then public IP
-         * All IPs are deduplicated in build_seeds_list */
+         * Order: user-specified seeds (--gr-seeds), then specified_ip, then LAN IP, then public IP
+         * All IPs are deduplicated in build_seeds_list
+         * Note: --gr-local-address only accepts IP (no port), port is controlled by --gr-port */
         char specified_ip[MAX_IP_LEN] = {0};
         if (config.gr_local_address && strlen(config.gr_local_address) > 0) {
-            /* Extract IP from gr_local_address (which may include port) */
-            const char *colon = strchr(config.gr_local_address, ':');
-            if (colon) {
-                size_t ip_len = colon - config.gr_local_address;
-                if (ip_len < sizeof(specified_ip)) {
-                    strncpy(specified_ip, config.gr_local_address, ip_len);
-                    specified_ip[ip_len] = '\0';
-                }
-            } else {
-                strncpy(specified_ip, config.gr_local_address, sizeof(specified_ip) - 1);
-            }
+            strncpy(specified_ip, config.gr_local_address, sizeof(specified_ip) - 1);
             printf("[Launcher] Specified local address IP: %s\n", specified_ip);
         }
         
@@ -2579,41 +2570,14 @@ int main(int argc, char *argv[]) {
          * Priority: --gr-local-address > LAN IP > public IP
          * 
          * IMPORTANT: group_replication_local_address MUST be in host:port format.
-         * If user provides only IP (no port), we append the configured GR port.
+         * The port is always taken from --gr-port (which has already been validated for availability).
+         * --gr-local-address only specifies the IP address.
          */
         char gr_local_address[MAX_IP_LEN + 16] = {0};
-        int gr_local_address_port = config.gr_port;  /* Track the actual port used in gr_local_address */
-        int gr_local_address_port_specified = 0;     /* Was port explicitly specified in --gr-local-address? */
         
         if (config.gr_local_address && strlen(config.gr_local_address) > 0) {
-            /* Check if user provided port (contains ':') */
-            const char *colon_in_addr = strchr(config.gr_local_address, ':');
-            if (colon_in_addr != NULL) {
-                /* User provided host:port format - extract and validate the port */
-                gr_local_address_port = atoi(colon_in_addr + 1);
-                gr_local_address_port_specified = 1;
-                
-                if (gr_local_address_port <= 0 || gr_local_address_port > 65535) {
-                    fprintf(stderr, "[Launcher] ERROR: Invalid port in --gr-local-address: %s\n", config.gr_local_address);
-                    return 1;
-                }
-                
-                /* Check if the explicitly specified port is available */
-                int port_avail = is_port_available(gr_local_address_port);
-                if (port_avail == 0) {
-                    fprintf(stderr, "[Launcher] ERROR: Port %d (from --gr-local-address) is already in use\n", gr_local_address_port);
-                    fprintf(stderr, "[Launcher] Please specify a different port in --gr-local-address or use only IP to auto-select port\n");
-                    return 1;
-                } else if (port_avail == 1) {
-                    printf("[Launcher] GR port %d (from --gr-local-address) is available\n", gr_local_address_port);
-                }
-                
-                strncpy(gr_local_address, config.gr_local_address, sizeof(gr_local_address) - 1);
-            } else {
-                /* User provided only IP, append the configured GR port (which may have been auto-incremented) */
-                snprintf(gr_local_address, sizeof(gr_local_address), "%s:%d", config.gr_local_address, config.gr_port);
-                printf("[Launcher] Note: --gr-local-address did not include port, using %s\n", gr_local_address);
-            }
+            /* Use the specified IP with the configured GR port */
+            snprintf(gr_local_address, sizeof(gr_local_address), "%s:%d", config.gr_local_address, config.gr_port);
         } else if (strlen(lan_ip) > 0) {
             /* Default to LAN IP for unique local address across nodes */
             snprintf(gr_local_address, sizeof(gr_local_address), "%s:%d", lan_ip, config.gr_port);
