@@ -1,30 +1,19 @@
 --- a/plugin/group_replication/libmysqlgcs/src/bindings/xcom/xcom/xcom_transport.cc
 +++ b/plugin/group_replication/libmysqlgcs/src/bindings/xcom/xcom/xcom_transport.cc
-@@ -597,7 +597,13 @@ static server *mksrv(char *srv, xcom_port port) {
+@@ -597,7 +597,7 @@ static server *mksrv(char *srv, xcom_port port) {
    s->port = port;
    s->con = new_connection(-1, nullptr);
    s->active = 0.0;
 -  s->detected = 0.0;
-+  // Fix: Initialize detected to current time instead of 0.0.
-+  // This gives newly created server objects a 5-second grace period
-+  // (DETECTOR_LIVE_TIMEOUT) before being marked as "not alive" by the
-+  // detector_task. In SGX/RA-TLS environments, SSL handshakes are slower,
-+  // and without this fix, new nodes may be marked as failed before dial()
-+  // completes and the first message exchange can occur.
 +  s->detected = task_now();
    s->last_ping_received = 0.0;
    s->number_of_pings_received = 0;
  #if defined(_WIN32)
-@@ -1805,6 +1811,12 @@ void update_servers(site_def *s, cargo_type operation) {
-       if (sp) {
-         G_INFO("Using existing server node %d host %s:%d", i, name, port);
-         s->servers[i] = sp;
-+        // Fix: Also update detected when reusing existing server objects.
-+        // Without this, reused servers may have detected=0.0 (from initial
-+        // creation or reset_detected), causing them to be immediately marked
-+        // as "not alive" by detector_task. This is critical for SGX/RA-TLS
-+        // environments where SSL handshakes are slower.
-+        s->servers[i]->detected = task_now();
+@@ -1805,6 +1805,7 @@ void update_servers(site_def *s, cargo_type operation) {
+         if (sp) {
+           G_INFO("Using existing server node %d host %s:%d", i, name, port);
+           s->servers[i] = sp;
++          s->servers[i]->detected = task_now();
  
-         /*
-         Reset ping counters to make sure that we clear this state between
+           /*
+           Reset ping counters to make sure that we clear this state between
