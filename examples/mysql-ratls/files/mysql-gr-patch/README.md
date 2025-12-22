@@ -1,9 +1,10 @@
 # MySQL Group Replication Patch for SGX/Gramine
 
-This directory contains modified MySQL Group Replication plugin source files that enable GR to work in SGX/Gramine environments. The patches address two main issues:
+This directory contains modified MySQL Group Replication plugin source files that enable GR to work in SGX/Gramine environments. The patches address three main issues:
 
 1. **Network Interface Enumeration**: The standard `getifaddrs()` system call is not available in Gramine/SGX due to netlink socket limitations.
 2. **SSL CA Configuration**: MySQL unconditionally passes an empty `ca_file` parameter to XCom SSL initialization, causing failures when using self-signed certificates without a CA (e.g., RA-TLS).
+3. **GCS Debug Trace Path**: The GCS_DEBUG_TRACE file is hardcoded to be written in the MySQL data directory, which is in an encrypted partition in SGX environments and cannot be read from outside.
 
 ## Problem 1: getifaddrs() Not Available
 
@@ -55,6 +56,41 @@ if (!ssl_ca.empty())
 
 This allows MySQL Group Replication to work with self-signed certificates (like RA-TLS) where no CA certificate is configured. When `ca_file` is not added, the XCom SSL initialization falls back to using default CA locations or skips CA verification entirely (depending on `ssl_mode`).
 
+## Problem 3: GCS Debug Trace Path
+
+When `group_replication_communication_debug_options` includes `GCS_DEBUG_TRACE`, MySQL writes debug trace information to a file named `GCS_DEBUG_TRACE` in the MySQL data directory. In SGX/Gramine environments, the data directory is typically in an encrypted partition, making the debug trace file unreadable from outside the enclave.
+
+## Solution 3: Configurable GCS Debug Trace Path
+
+We patch `plugin.cc` to check for the `GCS_DEBUG_TRACE_PATH` environment variable. If set, the debug trace file will be written to the specified directory instead of the data directory:
+
+```cpp
+// Before (hardcoded):
+gcs_module_parameters.add_parameter("communication_debug_path",
+                                    mysql_real_data_home);
+
+// After (configurable):
+const char *gcs_debug_trace_path_env = getenv("GCS_DEBUG_TRACE_PATH");
+if (gcs_debug_trace_path_env != nullptr && gcs_debug_trace_path_env[0] != '\0') {
+  gcs_module_parameters.add_parameter("communication_debug_path",
+                                      gcs_debug_trace_path_env);
+} else {
+  gcs_module_parameters.add_parameter("communication_debug_path",
+                                      mysql_real_data_home);
+}
+```
+
+Usage:
+```bash
+# Set via environment variable
+export GCS_DEBUG_TRACE_PATH=/var/log/mysql
+
+# Or via launcher parameter (which sets the env var)
+--gcs-debug-trace-path=/var/log/mysql
+```
+
+The debug trace file will be written to `/var/log/mysql/GCS_DEBUG_TRACE`.
+
 ## Multi-IP Support
 
 The `GR_LOCAL_IP` environment variable supports comma-separated IP addresses to enable cross-datacenter replication where both LAN and public IPs are needed:
@@ -76,6 +112,9 @@ The launcher (`mysql_ratls_launcher.c`) automatically detects both LAN and publi
 
 ### For SSL CA empty string fix:
 - `plugin_ssl_ca_fix.patch` - Patch file for `plugin/group_replication/src/plugin.cc` to fix the SSL CA empty string bug
+
+### For GCS debug trace path:
+- `gcs_debug_trace_path.patch` - Patch file for `plugin/group_replication/src/plugin.cc` to support configurable debug trace path via `GCS_DEBUG_TRACE_PATH` environment variable
 
 ## MySQL Version
 
