@@ -1,0 +1,39 @@
+--- a/plugin/group_replication/libmysqlgcs/src/bindings/xcom/xcom/network/xcom_network_provider_ssl_native_lib.cc
++++ b/plugin/group_replication/libmysqlgcs/src/bindings/xcom/xcom/network/xcom_network_provider_ssl_native_lib.cc
+@@ -519,9 +519,14 @@ int Xcom_network_provider_ssl_library::xcom_init_ssl(
+                crl_path, cipher, tls_version, tls_ciphersuites, server_ctx))
+     goto error;
+ 
+-  if (Network_provider_manager::getInstance().xcom_get_ssl_mode() !=
+-      SSL_REQUIRED)
+-    verify_server = SSL_VERIFY_PEER | SSL_VERIFY_CLIENT_ONCE;
++  // Fix: Enable SSL_VERIFY_PEER for server context when client certificates are configured.
++  // This ensures the server requests client certificates for mutual TLS, which is required
++  // for RA-TLS (Remote Attestation TLS) where both sides need to verify SGX quotes.
++  // Only enable when certificates are configured to preserve SSL_REQUIRED semantics
++  // (encryption-only without certificate verification) for non-RA-TLS deployments.
++  if (Network_provider_manager::getInstance().xcom_get_ssl_mode() != SSL_REQUIRED ||
++      (client_cert_file && client_cert_file[0] != '\0'))
++    verify_server = SSL_VERIFY_PEER | SSL_VERIFY_CLIENT_ONCE;
+   SSL_CTX_set_verify(server_ctx, verify_server, nullptr);
+ 
+   G_DEBUG("Configuring SSL for the client")
+@@ -538,10 +543,13 @@ int Xcom_network_provider_ssl_library::xcom_init_ssl(
+                crl_path, cipher, tls_version, tls_ciphersuites, client_ctx))
+     goto error;
+ 
+-  if (Network_provider_manager::getInstance().xcom_get_ssl_mode() !=
+-      SSL_REQUIRED) {
+-    verify_client = SSL_VERIFY_PEER;
+-  }
++  // Fix: Enable SSL_VERIFY_PEER for client context when client certificates are configured.
++  // This ensures the client verifies server certificates and triggers the RA-TLS
++  // verification callback. Only enable when certificates are configured to preserve
++  // SSL_REQUIRED semantics for non-RA-TLS deployments.
++  if (Network_provider_manager::getInstance().xcom_get_ssl_mode() != SSL_REQUIRED ||
++      (client_cert_file && client_cert_file[0] != '\0')) {
++    verify_client = SSL_VERIFY_PEER;
++  }
+   SSL_CTX_set_verify(client_ctx, verify_client, nullptr);
+ 
+   ssl_init_done = 1;
