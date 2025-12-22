@@ -2582,13 +2582,35 @@ int main(int argc, char *argv[]) {
          * If user provides only IP (no port), we append the configured GR port.
          */
         char gr_local_address[MAX_IP_LEN + 16] = {0};
+        int gr_local_address_port = config.gr_port;  /* Track the actual port used in gr_local_address */
+        int gr_local_address_port_specified = 0;     /* Was port explicitly specified in --gr-local-address? */
+        
         if (config.gr_local_address && strlen(config.gr_local_address) > 0) {
             /* Check if user provided port (contains ':') */
-            if (strchr(config.gr_local_address, ':') != NULL) {
-                /* User provided host:port format, use as-is */
+            const char *colon_in_addr = strchr(config.gr_local_address, ':');
+            if (colon_in_addr != NULL) {
+                /* User provided host:port format - extract and validate the port */
+                gr_local_address_port = atoi(colon_in_addr + 1);
+                gr_local_address_port_specified = 1;
+                
+                if (gr_local_address_port <= 0 || gr_local_address_port > 65535) {
+                    fprintf(stderr, "[Launcher] ERROR: Invalid port in --gr-local-address: %s\n", config.gr_local_address);
+                    return 1;
+                }
+                
+                /* Check if the explicitly specified port is available */
+                int port_avail = is_port_available(gr_local_address_port);
+                if (port_avail == 0) {
+                    fprintf(stderr, "[Launcher] ERROR: Port %d (from --gr-local-address) is already in use\n", gr_local_address_port);
+                    fprintf(stderr, "[Launcher] Please specify a different port in --gr-local-address or use only IP to auto-select port\n");
+                    return 1;
+                } else if (port_avail == 1) {
+                    printf("[Launcher] GR port %d (from --gr-local-address) is available\n", gr_local_address_port);
+                }
+                
                 strncpy(gr_local_address, config.gr_local_address, sizeof(gr_local_address) - 1);
             } else {
-                /* User provided only IP, append the configured GR port */
+                /* User provided only IP, append the configured GR port (which may have been auto-incremented) */
                 snprintf(gr_local_address, sizeof(gr_local_address), "%s:%d", config.gr_local_address, config.gr_port);
                 printf("[Launcher] Note: --gr-local-address did not include port, using %s\n", gr_local_address);
             }
