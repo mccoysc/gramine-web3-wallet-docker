@@ -1,0 +1,14 @@
+diff --git a/plugin/group_replication/libmysqlgcs/src/bindings/xcom/xcom/xcom_transport.cc b/plugin/group_replication/libmysqlgcs/src/bindings/xcom/xcom/xcom_transport.cc
+index 1234567..abcdefg 100644
+--- a/plugin/group_replication/libmysqlgcs/src/bindings/xcom/xcom/xcom_transport.cc
++++ b/plugin/group_replication/libmysqlgcs/src/bindings/xcom/xcom/xcom_transport.cc
+@@ -808,7 +808,8 @@ void server_detected(server *s) { s->detected = task_now(); }
+   X_FREE(s->con);
+   s->con = nullptr;
+ 
+-  s->con = open_new_connection(s->srv, s->port, 1000, dial_call_log_level);
++  /* Increased timeout from 1000ms to 30000ms for RA-TLS in SGX environments */
++  s->con = open_new_connection(s->srv, s->port, 30000, dial_call_log_level);
+   if (!s->con) {
+     s->con = new_connection(-1, nullptr);
+   }

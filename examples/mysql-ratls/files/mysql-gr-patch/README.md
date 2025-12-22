@@ -1,6 +1,6 @@
 # MySQL Group Replication Patch for SGX/Gramine
 
-This directory contains modified MySQL Group Replication plugin source files that enable GR to work in SGX/Gramine environments. The patches address six main issues:
+This directory contains modified MySQL Group Replication plugin source files that enable GR to work in SGX/Gramine environments. The patches address seven main issues:
 
 1. **Network Interface Enumeration**: The standard `getifaddrs()` system call is not available in Gramine/SGX due to netlink socket limitations.
 2. **SSL CA Configuration**: MySQL unconditionally passes an empty `ca_file` parameter to XCom SSL initialization, causing failures when using self-signed certificates without a CA (e.g., RA-TLS).
@@ -8,6 +8,7 @@ This directory contains modified MySQL Group Replication plugin source files tha
 4. **XCom SSL Verify Mode**: When `group_replication_ssl_mode=REQUIRED`, MySQL sets `SSL_VERIFY_NONE` for both server and client SSL contexts, which prevents mutual TLS certificate exchange required for RA-TLS.
 5. **SSL Accept Error Logging**: When SSL_accept fails, MySQL only logs a generic error message without detailed OpenSSL error information, making it difficult to diagnose SSL handshake failures.
 6. **XCom Node Detection Race Condition**: When a new node joins the cluster, its `detected` timestamp is initialized to 0, causing it to be immediately marked as "not alive" before any message exchange can occur. This race condition is exacerbated in SGX/RA-TLS environments where SSL handshakes are slower.
+7. **XCom Connection Timeout Too Short**: The `dial()` function in XCom uses a hardcoded 1-second (1000ms) connection timeout for both TCP connect and SSL handshake. This is insufficient for RA-TLS in SGX environments where SGX quote generation and verification can take several seconds.
 
 ## Problem 1: getifaddrs() Not Available
 
@@ -161,6 +162,9 @@ The launcher (`mysql_ratls_launcher.c`) automatically detects both LAN and publi
 ### For XCom node detection race condition fix:
 - `xcom_dial_server_detected.patch` - Patch file for `plugin/group_replication/libmysqlgcs/src/bindings/xcom/xcom/xcom_transport.cc` to initialize `detected` timestamp to current time in both `mksrv()` function (new server creation) and `update_servers()` function (server object reuse)
 
+### For XCom connection timeout fix:
+- `xcom_dial_connection_timeout.patch` - Patch file for `plugin/group_replication/libmysqlgcs/src/bindings/xcom/xcom/xcom_transport.cc` to increase the connection timeout from 1000ms to 30000ms in the `dial()` function
+
 ## Problem 5: SSL Accept Error Logging
 
 When SSL_accept fails during XCom SSL handshake, MySQL only logs a generic "acceptor learner accept SSL failed" message without any details about why the handshake failed. This makes it extremely difficult to diagnose SSL issues, especially in RA-TLS scenarios where certificate verification involves SGX quote validation.
@@ -261,6 +265,39 @@ This fix:
 - Allows time for `dial()` to complete and first message exchange to occur in slower SGX/RA-TLS environments
 - Does not mask real failures: if no messages are received within 5 seconds, the node will still be marked as failed
 - Affects all server objects assigned to site_def, ensuring consistent behavior
+
+## Problem 7: XCom Connection Timeout Too Short
+
+The `dial()` function in XCom (xcom_transport.cc) uses a hardcoded 1-second (1000ms) timeout for `open_new_connection()`. This timeout is used for both TCP connect and SSL handshake operations. In SGX/RA-TLS environments, this timeout is insufficient because:
+
+1. **SGX Quote Generation**: When establishing an SSL connection, the RA-TLS library needs to generate an SGX quote, which involves communication with the AESM service and can take several seconds
+2. **SGX Quote Verification**: The peer needs to verify the SGX quote, which may involve fetching attestation collateral from PCCS/Intel PCS
+3. **Network Latency**: Cross-datacenter deployments may have higher network latency
+
+When the timeout expires during SSL handshake, the connection is closed, resulting in:
+- Node1 logs: `Connecting socket to address X.X.X.X in port 33062 failed with error 0-Success.`
+- Node2 logs: `acceptor learner accept SSL failed, SSL_get_error=5` and `OpenSSL error: error:80000020:system library::Broken pipe`
+
+The "error 0-Success" message is misleading because `poll_for_timed_connects()` clears errno when the timeout expires.
+
+## Solution 7: Increase Connection Timeout to 30 Seconds
+
+We patch `xcom_transport.cc` to increase the connection timeout from 1000ms to 30000ms (30 seconds):
+
+```cpp
+// Before (1 second timeout):
+s->con = open_new_connection(s->srv, s->port, 1000, dial_call_log_level);
+
+// After (30 second timeout for RA-TLS):
+/* Increased timeout from 1000ms to 30000ms for RA-TLS in SGX environments */
+s->con = open_new_connection(s->srv, s->port, 30000, dial_call_log_level);
+```
+
+This fix:
+- Provides sufficient time for SGX quote generation and verification during SSL handshake
+- Allows cross-datacenter deployments with higher network latency to succeed
+- Does not affect normal operation: connections that complete quickly will still complete quickly
+- The 30-second timeout is a reasonable upper bound that balances reliability with failure detection
 
 ## MySQL Version
 
