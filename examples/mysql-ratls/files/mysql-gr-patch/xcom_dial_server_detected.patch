@@ -9,7 +9,16 @@
    s->last_ping_received = 0.0;
    s->number_of_pings_received = 0;
  #if defined(_WIN32)
-@@ -1826,6 +1826,9 @@
+@@ -826,6 +826,8 @@
+           NPUT(get_nodeno(get_site_def()), u); STRLIT(s->srv);
+           NDBG(s->port, u));
+     set_connected(s->con, CON_FD);
++    /* Update detected timestamp when connection is established */
++    server_detected(s);
+     alive(s);
+     update_detected(get_site_def_rw());
+   }
+@@ -1826,6 +1828,9 @@
              /* purecov: end */
            }
          }
