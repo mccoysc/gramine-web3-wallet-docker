@@ -1,0 +1,30 @@
+diff --git a/plugin/group_replication/libmysqlgcs/src/bindings/xcom/xcom/network/xcom_network_provider.cc b/plugin/group_replication/libmysqlgcs/src/bindings/xcom/xcom/network/xcom_network_provider.cc
+index 7ebd3e7b..88e7c5b3 100644
+--- a/plugin/group_replication/libmysqlgcs/src/bindings/xcom/xcom/network/xcom_network_provider.cc
++++ b/plugin/group_replication/libmysqlgcs/src/bindings/xcom/xcom/network/xcom_network_provider.cc
+@@ -118,7 +118,24 @@ void xcom_tcp_server_startup(Xcom_network_provider *net_provider) {
+           }
+ 
+           if (ret_ssl != SSL_SUCCESS) {
+-            G_DEBUG("acceptor learner accept SSL failed");
++            G_DEBUG("acceptor learner accept SSL failed, SSL_get_error=%d", err);
++            // Print detailed OpenSSL error information
++            long verify_result = SSL_get_verify_result(new_incoming_connection->ssl_fd);
++            G_DEBUG("SSL_get_verify_result=%ld", verify_result);
++            X509 *peer_cert = SSL_get_peer_certificate(new_incoming_connection->ssl_fd);
++            if (peer_cert) {
++              G_DEBUG("Peer certificate was received");
++              X509_free(peer_cert);
++            } else {
++              G_DEBUG("No peer certificate received");
++            }
++            // Print OpenSSL error stack
++            unsigned long ssl_err;
++            char err_buf[256];
++            while ((ssl_err = ERR_get_error()) != 0) {
++              ERR_error_string_n(ssl_err, err_buf, sizeof(err_buf));
++              G_DEBUG("OpenSSL error: %s", err_buf);
++            }
+             net_provider->close_connection(*new_incoming_connection);
+             accept_fd = -1;
+           }
