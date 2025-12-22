@@ -1265,48 +1265,31 @@ struct launcher_config {
 
 /* Parse command line arguments - args take priority over environment variables */
 static void parse_args(int argc, char *argv[], struct launcher_config *config) {
-    /* Initialize with environment variables as defaults */
-    config->contract_address = getenv("CONTRACT_ADDRESS");
-    config->rpc_url = getenv("RPC_URL");
-    config->whitelist_config = getenv("RA_TLS_WHITELIST_CONFIG");
-    config->cert_path = getenv("RA_TLS_CERT_PATH");
-    config->key_path = getenv("RA_TLS_KEY_PATH");
-    config->data_dir = getenv("MYSQL_DATA_DIR");
+    /* Initialize all options to NULL/0 first */
+    config->contract_address = NULL;
+    config->rpc_url = NULL;
+    config->whitelist_config = NULL;
+    config->cert_path = NULL;
+    config->key_path = NULL;
+    config->data_dir = NULL;
     
-    /* RA-TLS configuration from environment */
-    config->ra_tls_cert_algorithm = getenv("RA_TLS_CERT_ALGORITHM");
-    config->ratls_enable_verify = getenv("RA_TLS_ENABLE_VERIFY");
-    config->ratls_require_peer_cert = getenv("RA_TLS_REQUIRE_PEER_CERT");
-    config->ra_tls_allow_outdated_tcb = getenv("RA_TLS_ALLOW_OUTDATED_TCB_INSECURE");
-    config->ra_tls_allow_hw_config_needed = getenv("RA_TLS_ALLOW_HW_CONFIG_NEEDED");
-    config->ra_tls_allow_sw_hardening_needed = getenv("RA_TLS_ALLOW_SW_HARDENING_NEEDED");
+    config->ra_tls_cert_algorithm = NULL;
+    config->ratls_enable_verify = NULL;
+    config->ratls_require_peer_cert = NULL;
+    config->ra_tls_allow_outdated_tcb = NULL;
+    config->ra_tls_allow_hw_config_needed = NULL;
+    config->ra_tls_allow_sw_hardening_needed = NULL;
     
-    /* GR options default to NULL/0 */
     config->gr_group_name = NULL;
     config->gr_seeds = NULL;
     config->gr_local_address = NULL;
     config->gr_bootstrap = 0;
     config->gr_debug = 0;
+    config->gr_port = GR_DEFAULT_PORT;
+    config->gr_port_specified = 0;
+    config->mysql_port = 0;
+    config->mysql_port_specified = 0;
     
-    /* Port options - check environment variables first, default to standard ports
-     * Track whether user explicitly specified the port (for port availability checking) */
-    const char *gr_port_env = getenv("GR_PORT");
-    config->gr_port_specified = (gr_port_env != NULL) ? 1 : 0;
-    config->gr_port = gr_port_env ? atoi(gr_port_env) : GR_DEFAULT_PORT;
-    if (config->gr_port <= 0 || config->gr_port > 65535) {
-        config->gr_port = GR_DEFAULT_PORT;
-        config->gr_port_specified = 0;  /* Invalid value treated as not specified */
-    }
-    
-    const char *mysql_port_env = getenv("MYSQL_PORT");
-    config->mysql_port_specified = (mysql_port_env != NULL) ? 1 : 0;
-    config->mysql_port = mysql_port_env ? atoi(mysql_port_env) : 0;  /* 0 means use MySQL default (3306) */
-    if (config->mysql_port < 0 || config->mysql_port > 65535) {
-        config->mysql_port = 0;
-        config->mysql_port_specified = 0;  /* Invalid value treated as not specified */
-    }
-    
-    /* Testing options default to NULL/0 */
     config->dry_run = 0;
     config->test_lan_ip = NULL;
     config->test_public_ip = NULL;
@@ -1316,7 +1299,11 @@ static void parse_args(int argc, char *argv[], struct launcher_config *config) {
     config->mysql_argv = malloc(argc * sizeof(char *));
     config->mysql_argc = 0;
     
-    /* Parse arguments - args override environment variables
+    /* Track which options were set via command-line (for warning when env var overrides) */
+    int cli_gr_port = 0, cli_mysql_port = 0;
+    int cli_gr_bootstrap = 0, cli_gr_debug = 0, cli_dry_run = 0;
+    
+    /* STEP 1: Parse command-line arguments first
      * Supports both --arg=value and --arg value formats for options that take values */
     
     /* Helper macro to parse an option that takes a value
@@ -1357,11 +1344,12 @@ static void parse_args(int argc, char *argv[], struct launcher_config *config) {
         else PARSE_OPTION("--gr-local-address", 18, config->gr_local_address)
         else if (strcmp(argv[i], "--gr-bootstrap") == 0) {
             config->gr_bootstrap = 1;
+            cli_gr_bootstrap = 1;
         } else if (strcmp(argv[i], "--gr-debug") == 0) {
             config->gr_debug = 1;
+            cli_gr_debug = 1;
         }
-        /* Port options (for host network mode with multiple instances)
-         * Command-line args override environment variables and mark port as specified */
+        /* Port options (for host network mode with multiple instances) */
         else if (strncmp(argv[i], "--gr-port=", 10) == 0) {
             config->gr_port = atoi(argv[i] + 10);
             if (config->gr_port <= 0 || config->gr_port > 65535) {
@@ -1369,6 +1357,7 @@ static void parse_args(int argc, char *argv[], struct launcher_config *config) {
                 exit(1);
             }
             config->gr_port_specified = 1;
+            cli_gr_port = 1;
         } else if (strcmp(argv[i], "--gr-port") == 0) {
             if (i + 1 < argc && argv[i + 1][0] != '-') {
                 config->gr_port = atoi(argv[++i]);
@@ -1377,6 +1366,7 @@ static void parse_args(int argc, char *argv[], struct launcher_config *config) {
                     exit(1);
                 }
                 config->gr_port_specified = 1;
+                cli_gr_port = 1;
             } else {
                 fprintf(stderr, "[Launcher] Error: --gr-port requires a value\n");
                 exit(1);
@@ -1388,6 +1378,7 @@ static void parse_args(int argc, char *argv[], struct launcher_config *config) {
                 exit(1);
             }
             config->mysql_port_specified = 1;
+            cli_mysql_port = 1;
         } else if (strcmp(argv[i], "--mysql-port") == 0) {
             if (i + 1 < argc && argv[i + 1][0] != '-') {
                 config->mysql_port = atoi(argv[++i]);
@@ -1396,6 +1387,7 @@ static void parse_args(int argc, char *argv[], struct launcher_config *config) {
                     exit(1);
                 }
                 config->mysql_port_specified = 1;
+                cli_mysql_port = 1;
             } else {
                 fprintf(stderr, "[Launcher] Error: --mysql-port requires a value\n");
                 exit(1);
@@ -1404,6 +1396,7 @@ static void parse_args(int argc, char *argv[], struct launcher_config *config) {
         /* Testing options */
         else if (strcmp(argv[i], "--dry-run") == 0) {
             config->dry_run = 1;
+            cli_dry_run = 1;
         }
         else PARSE_OPTION("--test-lan-ip", 13, config->test_lan_ip)
         else PARSE_OPTION("--test-public-ip", 16, config->test_public_ip)
@@ -1419,6 +1412,89 @@ static void parse_args(int argc, char *argv[], struct launcher_config *config) {
     }
     
     #undef PARSE_OPTION
+    
+    /* STEP 2: Apply environment variables - they take PRIORITY over command-line args
+     * Print warning when env var overrides a CLI arg */
+    
+    /* Helper macro to apply env var with warning if it overrides CLI arg */
+    #define APPLY_ENV_VAR(env_name, target, cli_was_set) do { \
+        const char *env_val = getenv(env_name); \
+        if (env_val && strlen(env_val) > 0) { \
+            if ((cli_was_set) && target) { \
+                fprintf(stderr, "[Launcher] Warning: Environment variable %s overrides command-line argument (env=%s, cli=%s)\n", \
+                        env_name, env_val, (const char*)target); \
+            } \
+            target = env_val; \
+        } \
+    } while(0)
+    
+    #define APPLY_ENV_VAR_INT(env_name, target, target_specified, cli_was_set, default_val) do { \
+        const char *env_val = getenv(env_name); \
+        if (env_val && strlen(env_val) > 0) { \
+            int new_val = atoi(env_val); \
+            if (new_val > 0 && new_val <= 65535) { \
+                if (cli_was_set) { \
+                    fprintf(stderr, "[Launcher] Warning: Environment variable %s overrides command-line argument (env=%d, cli=%d)\n", \
+                            env_name, new_val, target); \
+                } \
+                target = new_val; \
+                target_specified = 1; \
+            } \
+        } \
+    } while(0)
+    
+    #define APPLY_ENV_VAR_BOOL(env_name, target, cli_was_set) do { \
+        const char *env_val = getenv(env_name); \
+        if (env_val && strlen(env_val) > 0) { \
+            int new_val = (strcmp(env_val, "1") == 0 || strcasecmp(env_val, "true") == 0); \
+            if (cli_was_set && target != new_val) { \
+                fprintf(stderr, "[Launcher] Warning: Environment variable %s overrides command-line argument (env=%s, cli=%d)\n", \
+                        env_name, env_val, target); \
+            } \
+            target = new_val; \
+        } \
+    } while(0)
+    
+    /* Contract and RPC options */
+    APPLY_ENV_VAR("CONTRACT_ADDRESS", config->contract_address, config->contract_address != NULL);
+    APPLY_ENV_VAR("RPC_URL", config->rpc_url, config->rpc_url != NULL);
+    
+    /* Whitelist config - only from env var (security) */
+    config->whitelist_config = getenv("RA_TLS_WHITELIST_CONFIG");
+    
+    /* Path options */
+    APPLY_ENV_VAR("RA_TLS_CERT_PATH", config->cert_path, config->cert_path != NULL);
+    config->key_path = getenv("RA_TLS_KEY_PATH");  /* Only from env var (security) */
+    config->data_dir = getenv("MYSQL_DATA_DIR");   /* Only from env var (security) */
+    
+    /* RA-TLS options */
+    APPLY_ENV_VAR("RA_TLS_CERT_ALGORITHM", config->ra_tls_cert_algorithm, config->ra_tls_cert_algorithm != NULL);
+    APPLY_ENV_VAR("RA_TLS_ENABLE_VERIFY", config->ratls_enable_verify, config->ratls_enable_verify != NULL);
+    APPLY_ENV_VAR("RA_TLS_REQUIRE_PEER_CERT", config->ratls_require_peer_cert, config->ratls_require_peer_cert != NULL);
+    APPLY_ENV_VAR("RA_TLS_ALLOW_OUTDATED_TCB_INSECURE", config->ra_tls_allow_outdated_tcb, config->ra_tls_allow_outdated_tcb != NULL);
+    APPLY_ENV_VAR("RA_TLS_ALLOW_HW_CONFIG_NEEDED", config->ra_tls_allow_hw_config_needed, config->ra_tls_allow_hw_config_needed != NULL);
+    APPLY_ENV_VAR("RA_TLS_ALLOW_SW_HARDENING_NEEDED", config->ra_tls_allow_sw_hardening_needed, config->ra_tls_allow_sw_hardening_needed != NULL);
+    
+    /* Group Replication options */
+    APPLY_ENV_VAR("MYSQL_GR_GROUP_NAME", config->gr_group_name, config->gr_group_name != NULL);
+    APPLY_ENV_VAR("GR_SEEDS", config->gr_seeds, config->gr_seeds != NULL);
+    APPLY_ENV_VAR("GR_LOCAL_ADDRESS", config->gr_local_address, config->gr_local_address != NULL);
+    APPLY_ENV_VAR_BOOL("GR_BOOTSTRAP", config->gr_bootstrap, cli_gr_bootstrap);
+    APPLY_ENV_VAR_BOOL("GR_DEBUG", config->gr_debug, cli_gr_debug);
+    
+    /* Port options */
+    APPLY_ENV_VAR_INT("GR_PORT", config->gr_port, config->gr_port_specified, cli_gr_port, GR_DEFAULT_PORT);
+    APPLY_ENV_VAR_INT("MYSQL_PORT", config->mysql_port, config->mysql_port_specified, cli_mysql_port, 0);
+    
+    /* Testing options */
+    APPLY_ENV_VAR_BOOL("DRY_RUN", config->dry_run, cli_dry_run);
+    APPLY_ENV_VAR("TEST_LAN_IP", config->test_lan_ip, config->test_lan_ip != NULL);
+    APPLY_ENV_VAR("TEST_PUBLIC_IP", config->test_public_ip, config->test_public_ip != NULL);
+    APPLY_ENV_VAR("TEST_OUTPUT_DIR", config->test_output_dir, config->test_output_dir != NULL);
+    
+    #undef APPLY_ENV_VAR
+    #undef APPLY_ENV_VAR_INT
+    #undef APPLY_ENV_VAR_BOOL
     
     /* Apply defaults for paths if not set */
     if (!config->cert_path || strlen(config->cert_path) == 0) {
@@ -1489,15 +1565,19 @@ static void print_usage(const char *prog_name) {
     printf("  --gr-seeds=SEEDS          Comma-separated list of additional seed nodes\n");
     printf("                            Format: host1:port1,host2:port2 or host1,host2\n");
     printf("                            (port defaults to --gr-port value if not specified)\n");
+    printf("                            (env: GR_SEEDS)\n");
     printf("                            Note: Local LAN IP and public IP are automatically added\n");
     printf("  --gr-local-address=IP     Override local IP address for GR communication\n");
+    printf("                            (env: GR_LOCAL_ADDRESS)\n");
     printf("                            (default: auto-detect LAN IP, port is set by --gr-port)\n");
     printf("  --gr-port=PORT            XCom communication port for Group Replication (default: %d)\n", GR_DEFAULT_PORT);
     printf("                            (env: GR_PORT)\n");
     printf("                            Use different ports for multiple instances on same host\n");
     printf("  --gr-bootstrap            Bootstrap a new replication group (first node only)\n");
+    printf("                            (env: GR_BOOTSTRAP=1|true)\n");
     printf("                            Without this flag, node will try to join existing group\n");
     printf("  --gr-debug                Enable verbose GR logging for debugging and troubleshooting\n");
+    printf("                            (env: GR_DEBUG=1|true)\n");
     printf("                            Logs XCom communication details to MySQL error log\n\n");
     
     printf("PORT OPTIONS (for host network mode with multiple instances):\n");
@@ -1510,10 +1590,14 @@ static void print_usage(const char *prog_name) {
     
     printf("TESTING OPTIONS:\n");
     printf("  --dry-run                 Run all logic but skip execve() to mysqld\n");
+    printf("                            (env: DRY_RUN=1|true)\n");
     printf("                            Useful for testing configuration generation\n");
     printf("  --test-lan-ip=IP          Override LAN IP detection (for testing)\n");
+    printf("                            (env: TEST_LAN_IP)\n");
     printf("  --test-public-ip=IP       Override public IP detection (for testing)\n");
-    printf("  --test-output-dir=DIR     Override output directory for config files (for testing)\n\n");
+    printf("                            (env: TEST_PUBLIC_IP)\n");
+    printf("  --test-output-dir=DIR     Override output directory for config files (for testing)\n");
+    printf("                            (env: TEST_OUTPUT_DIR)\n\n");
     
     printf("MYSQL OPTIONS:\n");
     printf("  Any unrecognized options are passed through to mysqld.\n\n");
@@ -1533,7 +1617,8 @@ static void print_usage(const char *prog_name) {
     
     printf("ENVIRONMENT VARIABLES:\n");
     printf("  All options can also be set via environment variables as noted above.\n");
-    printf("  Command-line arguments take priority over environment variables.\n");
+    printf("  Environment variables take PRIORITY over command-line arguments.\n");
+    printf("  When an env var overrides a CLI arg, a warning is printed.\n");
 }
 
 /* Validate and normalize configuration - handle mutual exclusions and dependencies */
