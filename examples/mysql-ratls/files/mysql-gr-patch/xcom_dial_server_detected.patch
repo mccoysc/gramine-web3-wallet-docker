@@ -9,11 +9,12 @@
    s->last_ping_received = 0.0;
    s->number_of_pings_received = 0;
  #if defined(_WIN32)
-@@ -1826,6 +1826,8 @@
+@@ -1826,6 +1826,9 @@
              /* purecov: end */
            }
          }
 +        /* Initialize detected timestamp for both new and reused servers */
++        s->servers[i]->detected = task_now();
 +        s->detected[i] = task_now();
          IFDBG(D_BUG, FN; PTREXP(s->servers[i]));
        }
