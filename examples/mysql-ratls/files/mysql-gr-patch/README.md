@@ -159,7 +159,7 @@ The launcher (`mysql_ratls_launcher.c`) automatically detects both LAN and publi
 - `ssl_accept_error_logging.patch` - Patch file for `plugin/group_replication/libmysqlgcs/src/bindings/xcom/xcom/network/xcom_network_provider.cc` to add detailed OpenSSL error logging when SSL_accept fails
 
 ### For XCom node detection race condition fix:
-- `xcom_dial_server_detected.patch` - Patch file for `plugin/group_replication/libmysqlgcs/src/bindings/xcom/xcom/xcom_transport.cc` to initialize `detected` timestamp to current time in `mksrv()` function
+- `xcom_dial_server_detected.patch` - Patch file for `plugin/group_replication/libmysqlgcs/src/bindings/xcom/xcom/xcom_transport.cc` to initialize `detected` timestamp to current time in both `mksrv()` function (new server creation) and `update_servers()` function (server object reuse)
 
 ## Problem 5: SSL Accept Error Logging
 
@@ -197,9 +197,11 @@ In normal environments, the first message exchange happens very quickly (millise
 
 This causes the new node to be classified as a "non-member suspect", leading to connection closure and "Broken pipe" errors on the joining node's SSL_accept.
 
-## Solution 6: Initialize detected Timestamp in mksrv()
+## Solution 6: Initialize detected Timestamp in mksrv() and update_servers()
 
-We patch `xcom_transport.cc` to initialize the `detected` timestamp to `task_now()` instead of `0.0` in the `mksrv()` function when a new server object is created:
+We patch `xcom_transport.cc` in two locations to ensure the `detected` timestamp is always set to `task_now()`:
+
+### Part 1: New server creation in mksrv()
 
 ```cpp
 // Before (initialized to 0.0):
@@ -211,20 +213,42 @@ s->active = 0.0;
 s->detected = task_now();  // Give new server a 5-second grace period
 ```
 
-**Why this location instead of `dial()`:**
-The previous fix attempted to call `server_detected(s)` in `dial()` after connection establishment. However, this was ineffective because:
-1. When a new node joins, `detector_task` detects the new `site_def` and immediately sets `local_notify = 1`
-2. `detector_task` then calls `deliver_view_msg()` which uses `DETECT(site, node)` to check node status
-3. At this point, `dial()` may not have completed yet, so `detected` is still `0.0`
-4. The new node is marked as "not alive" before `dial()` can update the timestamp
+### Part 2: Server object reuse in update_servers()
 
-By initializing `detected` to `task_now()` in `mksrv()`, the new server object has a valid timestamp from the moment it's created, giving it a 5-second grace period before the detector can mark it as failed.
+When configuration changes occur, XCom may reuse existing server objects from `all_servers` instead of creating new ones. The reused server objects may have `detected=0.0` (from initial creation before this fix, or from `reset_detected()`). We add a fix to update the timestamp when reusing server objects:
+
+```cpp
+// Before (only ping counters reset):
+if (sp) {
+  G_INFO("Using existing server node %d host %s:%d", i, name, port);
+  s->servers[i] = sp;
+  s->servers[i]->last_ping_received = 0.0;
+  s->servers[i]->number_of_pings_received = 0;
+  ...
+}
+
+// After (detected timestamp also updated):
+if (sp) {
+  G_INFO("Using existing server node %d host %s:%d", i, name, port);
+  s->servers[i] = sp;
+  s->servers[i]->detected = task_now();  // Give reused server a grace period
+  s->servers[i]->last_ping_received = 0.0;
+  s->servers[i]->number_of_pings_received = 0;
+  ...
+}
+```
+
+**Why both locations are needed:**
+- `mksrv()` fix: Covers new server object creation
+- `update_servers()` fix: Covers server object reuse (when `find_server()` finds an existing server in `all_servers`)
+
+The server reuse path is triggered when a node rejoins or configuration changes, and the log message "Using existing server node" indicates this path is taken.
 
 This fix:
-- Gives newly created server objects a 5-second grace period (DETECTOR_LIVE_TIMEOUT) before being marked as "not alive"
+- Gives both newly created and reused server objects a 5-second grace period (DETECTOR_LIVE_TIMEOUT) before being marked as "not alive"
 - Allows time for `dial()` to complete and first message exchange to occur in slower SGX/RA-TLS environments
 - Does not mask real failures: if no messages are received within 5 seconds, the node will still be marked as failed
-- Affects all new server objects, ensuring consistent behavior for both local and remote connections
+- Affects all server objects assigned to site_def, ensuring consistent behavior
 
 ## MySQL Version
 
