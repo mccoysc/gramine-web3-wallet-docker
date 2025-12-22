@@ -969,6 +969,16 @@ static int create_gr_config(const char *config_path, unsigned int server_id,
         "\n# IP Allowlist (explicit to avoid interface enumeration in SGX enclave)\n"
         "loose-group_replication_ip_allowlist=0.0.0.0/0,::/0\n");
     
+    /* Member expel timeout - increased from default 5s to 30s for SGX/RA-TLS environments.
+     * In SGX enclaves with RA-TLS, SSL handshakes take longer due to SGX quote generation
+     * and verification. The default 5-second timeout causes nodes to be expelled before
+     * they can complete the handshake and establish bidirectional communication.
+     * This is separate from XCom's DETECTOR_LIVE_TIMEOUT (also increased to 30s in patches). */
+    offset += snprintf(config_content + offset, sizeof(config_content) - offset,
+        "\n# Member Expel Timeout (increased for SGX/RA-TLS environments)\n"
+        "# Default is 5s which is too short for RA-TLS handshakes with SGX quote verification\n"
+        "loose-group_replication_member_expel_timeout=30\n");
+    
     /* Verbose logging for GR debugging and troubleshooting (only when --gr-debug is enabled) */
     if (gr_debug) {
         offset += snprintf(config_content + offset, sizeof(config_content) - offset,
@@ -977,8 +987,6 @@ static int create_gr_config(const char *config_path, unsigned int server_id,
             "log_error_verbosity=3\n"
             "# Enable all XCom communication debug options\n"
             "loose-group_replication_communication_debug_options=GCS_DEBUG_ALL\n"
-            "# Member expel timeout (seconds) - how long to wait before expelling unresponsive member\n"
-            "loose-group_replication_member_expel_timeout=5\n"
             "# Autorejoin tries - number of times to try rejoining after being expelled\n"
             "loose-group_replication_autorejoin_tries=3\n"
             "# Exit state action - what to do when member is expelled (READ_ONLY keeps data accessible)\n"
