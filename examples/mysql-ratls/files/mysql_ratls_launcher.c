@@ -1261,6 +1261,9 @@ struct launcher_config {
     /* Debug dump option */
     const char *dump_gcs_debug_trace;  /* --dump-gcs-debug-trace: dump GCS debug trace to specified path */
     
+    /* GCS debug trace path option */
+    const char *gcs_debug_trace_path;  /* --gcs-debug-trace-path: set GCS_DEBUG_TRACE_PATH env var for GR plugin */
+    
     /* Additional MySQL args to pass through */
     int mysql_argc;
     char **mysql_argv;
@@ -1298,6 +1301,7 @@ static void parse_args(int argc, char *argv[], struct launcher_config *config) {
     config->test_public_ip = NULL;
     config->test_output_dir = NULL;
     config->dump_gcs_debug_trace = NULL;
+    config->gcs_debug_trace_path = NULL;
     
     /* Allocate array for MySQL passthrough args */
     config->mysql_argv = malloc(argc * sizeof(char *));
@@ -1419,6 +1423,8 @@ static void parse_args(int argc, char *argv[], struct launcher_config *config) {
         else PARSE_OPTION("--test-output-dir", 17, config->test_output_dir)
         /* Debug dump option */
         else PARSE_OPTION("--dump-gcs-debug-trace", 22, config->dump_gcs_debug_trace)
+        /* GCS debug trace path option */
+        else PARSE_OPTION("--gcs-debug-trace-path", 22, config->gcs_debug_trace_path)
         /* Help */
         else if (strcmp(argv[i], "--help") == 0 || strcmp(argv[i], "-h") == 0) {
             print_usage(argv[0]);
@@ -1512,6 +1518,9 @@ static void parse_args(int argc, char *argv[], struct launcher_config *config) {
     
     /* Debug dump option */
     APPLY_ENV_VAR("DUMP_GCS_DEBUG_TRACE", config->dump_gcs_debug_trace, config->dump_gcs_debug_trace != NULL);
+    
+    /* GCS debug trace path option */
+    APPLY_ENV_VAR("GCS_DEBUG_TRACE_PATH", config->gcs_debug_trace_path, config->gcs_debug_trace_path != NULL);
     
     #undef APPLY_ENV_VAR
     #undef APPLY_ENV_VAR_INT
@@ -1626,7 +1635,12 @@ static void print_usage(const char *prog_name) {
     printf("                            (env: DUMP_GCS_DEBUG_TRACE)\n");
     printf("                            This copies the debug trace file and exits without starting MySQL\n");
     printf("                            Source: ${MYSQL_DATA_DIR}/GCS_DEBUG_TRACE (encrypted partition)\n");
-    printf("                            WARNING: Debug traces may contain sensitive information\n\n");
+    printf("                            WARNING: Debug traces may contain sensitive information\n");
+    printf("  --gcs-debug-trace-path=DIR\n");
+    printf("                            Set GCS_DEBUG_TRACE output directory for GR plugin\n");
+    printf("                            (env: GCS_DEBUG_TRACE_PATH, takes priority over CLI)\n");
+    printf("                            Default: MySQL data directory (encrypted partition)\n");
+    printf("                            Use this to write debug traces to a readable location\n\n");
     
     printf("MYSQL OPTIONS:\n");
     printf("  Any unrecognized options are passed through to mysqld.\n\n");
@@ -2821,9 +2835,9 @@ int main(int argc, char *argv[]) {
         snprintf(defaults_extra_file_arg, sizeof(defaults_extra_file_arg),
                  "--defaults-extra-file=%s", GR_CONFIG_FILE);
         
-        /* Note: GCS_DEBUG_TRACE will be written to ${datadir}/GCS_DEBUG_TRACE (encrypted partition).
-         * Symlinks cannot be used to redirect to non-encrypted partition in Gramine.
-         * The debug trace file will remain in the encrypted partition when --gr-debug is enabled. */
+        /* Note: GCS_DEBUG_TRACE will be written to ${datadir}/GCS_DEBUG_TRACE by default (encrypted partition).
+         * Use --gcs-debug-trace-path or GCS_DEBUG_TRACE_PATH env var to redirect to a readable location.
+         * The GR plugin patch reads this env var and writes debug traces to the specified directory. */
     }
     
     if (first_boot) {
@@ -2921,6 +2935,13 @@ int main(int argc, char *argv[]) {
     }
     
     new_argv[idx] = NULL;
+    
+    /* Set GCS_DEBUG_TRACE_PATH if configured */
+    /* This allows the GR plugin to write debug traces to a readable location */
+    if (config.gcs_debug_trace_path && strlen(config.gcs_debug_trace_path) > 0) {
+        printf("[Launcher] Setting GCS_DEBUG_TRACE_PATH=%s\n", config.gcs_debug_trace_path);
+        set_env("GCS_DEBUG_TRACE_PATH", config.gcs_debug_trace_path, 1);
+    }
     
     /* Set LD_LIBRARY_PATH to use custom OpenSSL library for mysqld */
     /* This ensures mysqld uses our compiled OpenSSL instead of system OpenSSL */

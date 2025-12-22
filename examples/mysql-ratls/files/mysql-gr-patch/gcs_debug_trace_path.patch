@@ -1,0 +1,27 @@
+--- a/plugin/group_replication/src/plugin.cc
++++ b/plugin/group_replication/src/plugin.cc
+@@ -2629,8 +2629,21 @@ int configure_group_communication(st_server_ssl_variables *ssl_variables) {
+   /*
+     By default debug files will be created in a path relative to
+     the data directory.
++    
++    Allow overriding via GCS_DEBUG_TRACE_PATH environment variable
++    to support SGX/Gramine environments where the data directory
++    is in an encrypted partition and cannot be read from outside.
+   */
+-  gcs_module_parameters.add_parameter("communication_debug_path",
+-                                      mysql_real_data_home);
++  const char *gcs_debug_trace_path_env = getenv("GCS_DEBUG_TRACE_PATH");
++  if (gcs_debug_trace_path_env != nullptr && gcs_debug_trace_path_env[0] != '\0') {
++    LogPluginErr(INFORMATION_LEVEL, ER_GRP_RPL_GRP_COMMUNICATION_INIT_WITH_CONF,
++                 "GCS_DEBUG_TRACE_PATH environment variable set, using custom path",
++                 gcs_debug_trace_path_env);
++    gcs_module_parameters.add_parameter("communication_debug_path",
++                                        gcs_debug_trace_path_env);
++  } else {
++    gcs_module_parameters.add_parameter("communication_debug_path",
++                                        mysql_real_data_home);
++  }
+ 
+   sv.deinit();
+   return result;
