@@ -9,12 +9,12 @@
    s->last_ping_received = 0.0;
    s->number_of_pings_received = 0;
  #if defined(_WIN32)
-@@ -1805,6 +1805,8 @@
-         if (sp) {
-           G_INFO("Using existing server node %d host %s:%d", i, name, port);
-           s->servers[i] = sp;
-+          s->servers[i]->detected = task_now();
-+          s->detected[i] = task_now();
- 
-           /*
-           Reset ping counters to make sure that we clear this state between
+@@ -1826,6 +1826,8 @@
+             /* purecov: end */
+           }
+         }
++        /* Initialize detected timestamp for both new and reused servers */
++        s->detected[i] = task_now();
+         IFDBG(D_BUG, FN; PTREXP(s->servers[i]));
+       }
+     }
