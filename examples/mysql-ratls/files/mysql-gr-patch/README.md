@@ -159,7 +159,7 @@ The launcher (`mysql_ratls_launcher.c`) automatically detects both LAN and publi
 - `ssl_accept_error_logging.patch` - Patch file for `plugin/group_replication/libmysqlgcs/src/bindings/xcom/xcom/network/xcom_network_provider.cc` to add detailed OpenSSL error logging when SSL_accept fails
 
 ### For XCom node detection race condition fix:
-- `xcom_dial_server_detected.patch` - Patch file for `plugin/group_replication/libmysqlgcs/src/bindings/xcom/xcom/xcom_transport.cc` to update `detected` timestamp when connection is established
+- `xcom_dial_server_detected.patch` - Patch file for `plugin/group_replication/libmysqlgcs/src/bindings/xcom/xcom/xcom_transport.cc` to initialize `detected` timestamp to current time in `mksrv()` function
 
 ## Problem 5: SSL Accept Error Logging
 
@@ -197,28 +197,34 @@ In normal environments, the first message exchange happens very quickly (millise
 
 This causes the new node to be classified as a "non-member suspect", leading to connection closure and "Broken pipe" errors on the joining node's SSL_accept.
 
-## Solution 6: Update detected Timestamp on Connection Establishment
+## Solution 6: Initialize detected Timestamp in mksrv()
 
-We patch `xcom_transport.cc` to call `server_detected(s)` in the `dial()` function when a connection is successfully established:
+We patch `xcom_transport.cc` to initialize the `detected` timestamp to `task_now()` instead of `0.0` in the `mksrv()` function when a new server object is created:
 
 ```cpp
-// Before (only alive() called):
-set_connected(s->con, CON_FD);
-alive(s);
-update_detected(get_site_def_rw());
+// Before (initialized to 0.0):
+s->active = 0.0;
+s->detected = 0.0;
 
-// After (server_detected() added):
-set_connected(s->con, CON_FD);
-server_detected(s);  // Give new node a 5-second grace period
-alive(s);
-update_detected(get_site_def_rw());
+// After (initialized to current time):
+s->active = 0.0;
+s->detected = task_now();  // Give new server a 5-second grace period
 ```
 
+**Why this location instead of `dial()`:**
+The previous fix attempted to call `server_detected(s)` in `dial()` after connection establishment. However, this was ineffective because:
+1. When a new node joins, `detector_task` detects the new `site_def` and immediately sets `local_notify = 1`
+2. `detector_task` then calls `deliver_view_msg()` which uses `DETECT(site, node)` to check node status
+3. At this point, `dial()` may not have completed yet, so `detected` is still `0.0`
+4. The new node is marked as "not alive" before `dial()` can update the timestamp
+
+By initializing `detected` to `task_now()` in `mksrv()`, the new server object has a valid timestamp from the moment it's created, giving it a 5-second grace period before the detector can mark it as failed.
+
 This fix:
-- Gives newly connected nodes a 5-second grace period before being marked as "not alive"
-- Allows time for the first message exchange to occur in slower SGX/RA-TLS environments
+- Gives newly created server objects a 5-second grace period (DETECTOR_LIVE_TIMEOUT) before being marked as "not alive"
+- Allows time for `dial()` to complete and first message exchange to occur in slower SGX/RA-TLS environments
 - Does not mask real failures: if no messages are received within 5 seconds, the node will still be marked as failed
-- Only affects the "dial" (outbound connection) path; inbound connections still rely on message-based detection
+- Affects all new server objects, ensuring consistent behavior for both local and remote connections
 
 ## MySQL Version
 
