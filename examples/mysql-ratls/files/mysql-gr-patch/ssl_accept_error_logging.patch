@@ -1,6 +1,8 @@
+diff --git a/plugin/group_replication/libmysqlgcs/src/bindings/xcom/xcom/network/xcom_network_provider.cc b/plugin/group_replication/libmysqlgcs/src/bindings/xcom/xcom/network/xcom_network_provider.cc
+index 7ebd3e7b..88e7c5b3 100644
 --- a/plugin/group_replication/libmysqlgcs/src/bindings/xcom/xcom/network/xcom_network_provider.cc
 +++ b/plugin/group_replication/libmysqlgcs/src/bindings/xcom/xcom/network/xcom_network_provider.cc
-@@ -118,7 +118,25 @@ void Xcom_network_provider::xcom_tcp_server_startup() {
+@@ -118,7 +118,24 @@ void xcom_tcp_server_startup(Xcom_network_provider *net_provider) {
            }
  
            if (ret_ssl != SSL_SUCCESS) {
