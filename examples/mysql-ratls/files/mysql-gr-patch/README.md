@@ -213,36 +213,42 @@ s->active = 0.0;
 s->detected = task_now();  // Give new server a 5-second grace period
 ```
 
-### Part 2: Server object reuse in update_servers()
+### Part 2: Site detected array initialization in update_servers()
 
-When configuration changes occur, XCom may reuse existing server objects from `all_servers` instead of creating new ones. The reused server objects may have `detected=0.0` (from initial creation before this fix, or from `reset_detected()`). We add a fix to update the timestamp when reusing server objects:
+There are TWO separate `detected` fields in XCom:
+- `server->detected`: Timestamp in the server object (set by `mksrv()` fix above)
+- `site->detected[i]`: Timestamp array in the site_def structure (used by `DETECT()` macro)
+
+The `DETECT(site, i)` macro checks `site->detected[i]`, NOT `server->detected`. The `update_detected()` function synchronizes these values, but it runs in the `detector_task` loop (every 1 second). When a new node joins, the liveness check may run BEFORE `update_detected()` has synchronized the values.
+
+We add a fix to initialize `site->detected[i]` immediately after `s->servers[i]` is assigned, covering BOTH the reuse path ("Using existing server node") AND the new creation path ("Creating new server node"):
 
 ```cpp
-// Before (only ping counters reset):
+// Before (site->detected[i] not initialized):
 if (sp) {
-  G_INFO("Using existing server node %d host %s:%d", i, name, port);
   s->servers[i] = sp;
-  s->servers[i]->last_ping_received = 0.0;
-  s->servers[i]->number_of_pings_received = 0;
   ...
+} else {
+  s->servers[i] = addsrv(name, port);
 }
+IFDBG(D_BUG, FN; PTREXP(s->servers[i]));
 
-// After (detected timestamp also updated):
+// After (site->detected[i] initialized for BOTH paths):
 if (sp) {
-  G_INFO("Using existing server node %d host %s:%d", i, name, port);
   s->servers[i] = sp;
-  s->servers[i]->detected = task_now();  // Give reused server a grace period
-  s->servers[i]->last_ping_received = 0.0;
-  s->servers[i]->number_of_pings_received = 0;
   ...
+} else {
+  s->servers[i] = addsrv(name, port);
 }
+/* Initialize detected timestamp for both new and reused servers */
+s->detected[i] = task_now();
+IFDBG(D_BUG, FN; PTREXP(s->servers[i]));
 ```
 
-**Why both locations are needed:**
-- `mksrv()` fix: Covers new server object creation
-- `update_servers()` fix: Covers server object reuse (when `find_server()` finds an existing server in `all_servers`)
-
-The server reuse path is triggered when a node rejoins or configuration changes, and the log message "Using existing server node" indicates this path is taken.
+**Why this location (after if/else block):**
+- Covers BOTH the reuse path (`if (sp)`) AND the new creation path (`else { addsrv() }`)
+- The `mksrv()` fix sets `server->detected`, but `site->detected[i]` is what `DETECT()` actually checks
+- Placing the fix after the if/else ensures `s->detected[i]` is always initialized regardless of which path is taken
 
 This fix:
 - Gives both newly created and reused server objects a 5-second grace period (DETECTOR_LIVE_TIMEOUT) before being marked as "not alive"
