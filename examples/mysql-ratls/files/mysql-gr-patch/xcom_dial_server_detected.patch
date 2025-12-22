@@ -1,15 +1,17 @@
 --- a/plugin/group_replication/libmysqlgcs/src/bindings/xcom/xcom/xcom_transport.cc
 +++ b/plugin/group_replication/libmysqlgcs/src/bindings/xcom/xcom/xcom_transport.cc
-@@ -826,6 +826,12 @@ static int dial(server *s,
-           NPUT(get_nodeno(get_site_def()), u); STRLIT(s->srv);
-           NDBG(s->port, u));
-     set_connected(s->con, CON_FD);
-+    // Fix: Update server's detected timestamp when connection is established.
-+    // This gives newly connected nodes a 5-second grace period before being
-+    // marked as "not alive" by the detector. In SGX/RA-TLS environments,
-+    // SSL handshakes are slower, and without this fix, new nodes may be
-+    // marked as failed before the first message exchange can occur.
-+    server_detected(s);
-     alive(s);
-     update_detected(get_site_def_rw());
-   }
+@@ -597,7 +597,13 @@ static server *mksrv(char *srv, xcom_port port) {
+   s->port = port;
+   s->con = new_connection(-1, nullptr);
+   s->active = 0.0;
+-  s->detected = 0.0;
++  // Fix: Initialize detected to current time instead of 0.0.
++  // This gives newly created server objects a 5-second grace period
++  // (DETECTOR_LIVE_TIMEOUT) before being marked as "not alive" by the
++  // detector_task. In SGX/RA-TLS environments, SSL handshakes are slower,
++  // and without this fix, new nodes may be marked as failed before dial()
++  // completes and the first message exchange can occur.
++  s->detected = task_now();
+   s->last_ping_received = 0.0;
+   s->number_of_pings_received = 0;
+ #if defined(_WIN32)
