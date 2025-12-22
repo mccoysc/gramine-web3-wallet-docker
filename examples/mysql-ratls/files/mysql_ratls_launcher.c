@@ -551,6 +551,56 @@ cleanup:
     return ret;
 }
 
+/* Check if a TCP port is available for binding
+ * Returns: 1 if port is available, 0 if occupied, -1 on error
+ */
+static int is_port_available(int port) {
+    int sock = socket(AF_INET, SOCK_STREAM, 0);
+    if (sock < 0) {
+        fprintf(stderr, "[Launcher] Warning: Could not create socket for port check: %s\n", strerror(errno));
+        return -1;
+    }
+    
+    /* Set SO_REUSEADDR to avoid false positives from TIME_WAIT sockets */
+    int optval = 1;
+    setsockopt(sock, SOL_SOCKET, SO_REUSEADDR, &optval, sizeof(optval));
+    
+    struct sockaddr_in addr;
+    memset(&addr, 0, sizeof(addr));
+    addr.sin_family = AF_INET;
+    addr.sin_addr.s_addr = INADDR_ANY;  /* Bind to 0.0.0.0 for conservative check */
+    addr.sin_port = htons(port);
+    
+    int result = bind(sock, (struct sockaddr *)&addr, sizeof(addr));
+    close(sock);
+    
+    if (result == 0) {
+        return 1;  /* Port is available */
+    } else if (errno == EADDRINUSE) {
+        return 0;  /* Port is occupied */
+    } else {
+        fprintf(stderr, "[Launcher] Warning: Port check failed for port %d: %s\n", port, strerror(errno));
+        return -1;  /* Error */
+    }
+}
+
+/* Find an available port starting from the given port
+ * Returns: available port number, or -1 if none found up to 65535
+ */
+static int find_available_port(int start_port) {
+    for (int port = start_port; port <= 65535; port++) {
+        int available = is_port_available(port);
+        if (available == 1) {
+            return port;
+        } else if (available == -1) {
+            /* Error checking port, try next one */
+            continue;
+        }
+        /* Port occupied, try next */
+    }
+    return -1;  /* No available port found */
+}
+
 /* Get or create stable server_id based on IP hash */
 static unsigned int get_or_create_server_id(const char *lan_ip, const char *public_ip) {
     unsigned int server_id = 0;
@@ -1194,11 +1244,13 @@ struct launcher_config {
     const char *gr_seeds;              /* --gr-seeds */
     const char *gr_local_address;      /* --gr-local-address */
     int gr_port;                       /* --gr-port / GR_PORT: XCom communication port */
+    int gr_port_specified;             /* 1 if user explicitly specified GR port */
     int gr_bootstrap;                  /* --gr-bootstrap */
     int gr_debug;                      /* --gr-debug: enable verbose GR logging */
     
     /* MySQL port option (for host network mode with multiple instances) */
     int mysql_port;                    /* --mysql-port / MYSQL_PORT: MySQL service port */
+    int mysql_port_specified;          /* 1 if user explicitly specified MySQL port */
     
     /* Testing options */
     int dry_run;                       /* --dry-run: run all logic but skip execve() */
@@ -1236,17 +1288,22 @@ static void parse_args(int argc, char *argv[], struct launcher_config *config) {
     config->gr_bootstrap = 0;
     config->gr_debug = 0;
     
-    /* Port options - check environment variables first, default to standard ports */
+    /* Port options - check environment variables first, default to standard ports
+     * Track whether user explicitly specified the port (for port availability checking) */
     const char *gr_port_env = getenv("GR_PORT");
+    config->gr_port_specified = (gr_port_env != NULL) ? 1 : 0;
     config->gr_port = gr_port_env ? atoi(gr_port_env) : GR_DEFAULT_PORT;
     if (config->gr_port <= 0 || config->gr_port > 65535) {
         config->gr_port = GR_DEFAULT_PORT;
+        config->gr_port_specified = 0;  /* Invalid value treated as not specified */
     }
     
     const char *mysql_port_env = getenv("MYSQL_PORT");
+    config->mysql_port_specified = (mysql_port_env != NULL) ? 1 : 0;
     config->mysql_port = mysql_port_env ? atoi(mysql_port_env) : 0;  /* 0 means use MySQL default (3306) */
     if (config->mysql_port < 0 || config->mysql_port > 65535) {
         config->mysql_port = 0;
+        config->mysql_port_specified = 0;  /* Invalid value treated as not specified */
     }
     
     /* Testing options default to NULL/0 */
@@ -1303,38 +1360,45 @@ static void parse_args(int argc, char *argv[], struct launcher_config *config) {
         } else if (strcmp(argv[i], "--gr-debug") == 0) {
             config->gr_debug = 1;
         }
-        /* Port options (for host network mode with multiple instances) */
+        /* Port options (for host network mode with multiple instances)
+         * Command-line args override environment variables and mark port as specified */
         else if (strncmp(argv[i], "--gr-port=", 10) == 0) {
             config->gr_port = atoi(argv[i] + 10);
             if (config->gr_port <= 0 || config->gr_port > 65535) {
-                fprintf(stderr, "[Launcher] Warning: Invalid --gr-port value, using default %d\n", GR_DEFAULT_PORT);
-                config->gr_port = GR_DEFAULT_PORT;
+                fprintf(stderr, "[Launcher] Error: Invalid --gr-port value '%s'\n", argv[i] + 10);
+                exit(1);
             }
+            config->gr_port_specified = 1;
         } else if (strcmp(argv[i], "--gr-port") == 0) {
             if (i + 1 < argc && argv[i + 1][0] != '-') {
                 config->gr_port = atoi(argv[++i]);
                 if (config->gr_port <= 0 || config->gr_port > 65535) {
-                    fprintf(stderr, "[Launcher] Warning: Invalid --gr-port value, using default %d\n", GR_DEFAULT_PORT);
-                    config->gr_port = GR_DEFAULT_PORT;
+                    fprintf(stderr, "[Launcher] Error: Invalid --gr-port value '%s'\n", argv[i]);
+                    exit(1);
                 }
+                config->gr_port_specified = 1;
             } else {
-                fprintf(stderr, "[Launcher] Warning: --gr-port requires a value\n");
+                fprintf(stderr, "[Launcher] Error: --gr-port requires a value\n");
+                exit(1);
             }
         } else if (strncmp(argv[i], "--mysql-port=", 13) == 0) {
             config->mysql_port = atoi(argv[i] + 13);
             if (config->mysql_port <= 0 || config->mysql_port > 65535) {
-                fprintf(stderr, "[Launcher] Warning: Invalid --mysql-port value, ignoring\n");
-                config->mysql_port = 0;
+                fprintf(stderr, "[Launcher] Error: Invalid --mysql-port value '%s'\n", argv[i] + 13);
+                exit(1);
             }
+            config->mysql_port_specified = 1;
         } else if (strcmp(argv[i], "--mysql-port") == 0) {
             if (i + 1 < argc && argv[i + 1][0] != '-') {
                 config->mysql_port = atoi(argv[++i]);
                 if (config->mysql_port <= 0 || config->mysql_port > 65535) {
-                    fprintf(stderr, "[Launcher] Warning: Invalid --mysql-port value, ignoring\n");
-                    config->mysql_port = 0;
+                    fprintf(stderr, "[Launcher] Error: Invalid --mysql-port value '%s'\n", argv[i]);
+                    exit(1);
                 }
+                config->mysql_port_specified = 1;
             } else {
-                fprintf(stderr, "[Launcher] Warning: --mysql-port requires a value\n");
+                fprintf(stderr, "[Launcher] Error: --mysql-port requires a value\n");
+                exit(1);
             }
         }
         /* Testing options */
@@ -1439,7 +1503,10 @@ static void print_usage(const char *prog_name) {
     printf("PORT OPTIONS (for host network mode with multiple instances):\n");
     printf("  --mysql-port=PORT         MySQL service port (default: 3306)\n");
     printf("                            (env: MYSQL_PORT)\n");
-    printf("                            Use different ports for multiple instances on same host\n\n");
+    printf("                            Use different ports for multiple instances on same host\n");
+    printf("  NOTE: Port availability is checked at startup:\n");
+    printf("        - If you specify a port and it's occupied: launcher exits with error\n");
+    printf("        - If using default port and it's occupied: auto-increments to find available port\n\n");
     
     printf("TESTING OPTIONS:\n");
     printf("  --dry-run                 Run all logic but skip execve() to mysqld\n");
@@ -2167,6 +2234,83 @@ int main(int argc, char *argv[]) {
         curl_global_cleanup();
         return 1;
     }
+    
+    /* Check port availability and handle conflicts
+     * - If user explicitly specified a port and it's occupied: error and exit
+     * - If port was not specified (using default) and it's occupied: auto-increment until available
+     */
+    printf("[Launcher] Checking port availability...\n");
+    
+    /* Check MySQL port (default 3306 if mysql_port is 0) */
+    int mysql_port_to_check = (config.mysql_port > 0) ? config.mysql_port : 3306;
+    int mysql_port_available = is_port_available(mysql_port_to_check);
+    
+    if (mysql_port_available == 0) {
+        /* Port is occupied */
+        if (config.mysql_port_specified) {
+            /* User explicitly specified this port - error */
+            fprintf(stderr, "[Launcher] ERROR: MySQL port %d is already in use\n", mysql_port_to_check);
+            fprintf(stderr, "[Launcher] Please specify a different port with --mysql-port or MYSQL_PORT\n");
+            curl_global_cleanup();
+            return 1;
+        } else {
+            /* Port was not specified - auto-increment to find available port */
+            printf("[Launcher] MySQL port %d is occupied, searching for available port...\n", mysql_port_to_check);
+            int new_port = find_available_port(mysql_port_to_check + 1);
+            if (new_port < 0) {
+                fprintf(stderr, "[Launcher] ERROR: Could not find available MySQL port (tried %d-65535)\n", mysql_port_to_check);
+                curl_global_cleanup();
+                return 1;
+            }
+            config.mysql_port = new_port;
+            printf("[Launcher] Auto-selected MySQL port: %d\n", config.mysql_port);
+        }
+    } else if (mysql_port_available == 1) {
+        /* Port is available */
+        if (config.mysql_port == 0) {
+            /* Using default port 3306, set it explicitly now */
+            config.mysql_port = 3306;
+        }
+        printf("[Launcher] MySQL port %d is available\n", config.mysql_port);
+    } else {
+        /* Error checking port - proceed with caution */
+        fprintf(stderr, "[Launcher] Warning: Could not verify MySQL port %d availability\n", mysql_port_to_check);
+        if (config.mysql_port == 0) {
+            config.mysql_port = 3306;
+        }
+    }
+    
+    /* Check GR XCom port */
+    int gr_port_available = is_port_available(config.gr_port);
+    
+    if (gr_port_available == 0) {
+        /* Port is occupied */
+        if (config.gr_port_specified) {
+            /* User explicitly specified this port - error */
+            fprintf(stderr, "[Launcher] ERROR: GR XCom port %d is already in use\n", config.gr_port);
+            fprintf(stderr, "[Launcher] Please specify a different port with --gr-port or GR_PORT\n");
+            curl_global_cleanup();
+            return 1;
+        } else {
+            /* Port was not specified - auto-increment to find available port */
+            printf("[Launcher] GR XCom port %d is occupied, searching for available port...\n", config.gr_port);
+            int new_port = find_available_port(config.gr_port + 1);
+            if (new_port < 0) {
+                fprintf(stderr, "[Launcher] ERROR: Could not find available GR XCom port (tried %d-65535)\n", config.gr_port);
+                curl_global_cleanup();
+                return 1;
+            }
+            config.gr_port = new_port;
+            printf("[Launcher] Auto-selected GR XCom port: %d\n", config.gr_port);
+        }
+    } else if (gr_port_available == 1) {
+        printf("[Launcher] GR XCom port %d is available\n", config.gr_port);
+    } else {
+        /* Error checking port - proceed with caution */
+        fprintf(stderr, "[Launcher] Warning: Could not verify GR XCom port %d availability\n", config.gr_port);
+    }
+    
+    printf("[Launcher] Final ports - MySQL: %d, GR XCom: %d\n\n", config.mysql_port, config.gr_port);
     
     /* Set RA-TLS configuration from parsed config (args override env vars) */
     printf("[Launcher] Setting up RA-TLS configuration...\n");
