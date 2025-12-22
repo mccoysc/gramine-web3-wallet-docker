@@ -1,6 +1,6 @@
 # MySQL Group Replication Patch for SGX/Gramine
 
-This directory contains modified MySQL Group Replication plugin source files that enable GR to work in SGX/Gramine environments. The patches address seven main issues:
+This directory contains modified MySQL Group Replication plugin source files that enable GR to work in SGX/Gramine environments. The patches address eight main issues:
 
 1. **Network Interface Enumeration**: The standard `getifaddrs()` system call is not available in Gramine/SGX due to netlink socket limitations.
 2. **SSL CA Configuration**: MySQL unconditionally passes an empty `ca_file` parameter to XCom SSL initialization, causing failures when using self-signed certificates without a CA (e.g., RA-TLS).
@@ -9,6 +9,7 @@ This directory contains modified MySQL Group Replication plugin source files tha
 5. **SSL Accept Error Logging**: When SSL_accept fails, MySQL only logs a generic error message without detailed OpenSSL error information, making it difficult to diagnose SSL handshake failures.
 6. **XCom Node Detection Race Condition**: When a new node joins the cluster, its `detected` timestamp is initialized to 0, causing it to be immediately marked as "not alive" before any message exchange can occur. This race condition is exacerbated in SGX/RA-TLS environments where SSL handshakes are slower.
 7. **XCom Connection Timeout Too Short**: The `dial()` function in XCom uses a hardcoded 1-second (1000ms) connection timeout for both TCP connect and SSL handshake. This is insufficient for RA-TLS in SGX environments where SGX quote generation and verification can take several seconds.
+8. **XCom Detector Live Timeout Too Short**: The `DETECTOR_LIVE_TIMEOUT` constant is hardcoded to 5 seconds. In SGX/RA-TLS environments, the time from connection establishment to first XCom message exchange can exceed 5 seconds due to slow SSL handshakes and protocol negotiation, causing the detector to incorrectly mark nodes as dead.
 
 ## Problem 1: getifaddrs() Not Available
 
@@ -165,6 +166,9 @@ The launcher (`mysql_ratls_launcher.c`) automatically detects both LAN and publi
 ### For XCom connection timeout fix:
 - `xcom_dial_connection_timeout.patch` - Patch file for `plugin/group_replication/libmysqlgcs/src/bindings/xcom/xcom/xcom_transport.cc` to increase the connection timeout from 1000ms to 30000ms in the `dial()` function
 
+### For XCom detector live timeout fix:
+- `xcom_detector_live_timeout.patch` - Patch file for `plugin/group_replication/libmysqlgcs/src/bindings/xcom/xcom/xcom_detector.h` to increase the `DETECTOR_LIVE_TIMEOUT` from 5.0 to 30.0 seconds
+
 ## Problem 5: SSL Accept Error Logging
 
 When SSL_accept fails during XCom SSL handshake, MySQL only logs a generic "acceptor learner accept SSL failed" message without any details about why the handshake failed. This makes it extremely difficult to diagnose SSL issues, especially in RA-TLS scenarios where certificate verification involves SGX quote validation.
@@ -298,6 +302,51 @@ This fix:
 - Allows cross-datacenter deployments with higher network latency to succeed
 - Does not affect normal operation: connections that complete quickly will still complete quickly
 - The 30-second timeout is a reasonable upper bound that balances reliability with failure detection
+
+## Problem 8: XCom Detector Live Timeout Too Short
+
+The `DETECTOR_LIVE_TIMEOUT` constant in `xcom_detector.h` is hardcoded to 5.0 seconds. This timeout determines how long XCom waits for messages from a peer before marking it as "not alive". In SGX/RA-TLS environments, this timeout is insufficient because:
+
+1. **Bidirectional Connection Establishment**: When Node2 joins the cluster, it connects to Node1. Node1 then makes a "reverse connection" back to Node2. This reverse connection's SSL handshake can take ~5 seconds due to RA-TLS quote generation/verification.
+
+2. **Message Exchange Delay**: After the reverse connection is established, XCom needs to send protocol negotiation messages. The `sender_task` may not immediately send messages after connection establishment, as it waits for certain conditions (e.g., `wakeup_sender()` to be called).
+
+3. **Join Request Response Delay**: Node2 sends a join request to Node1, but Node1 cannot respond until the reverse connection is fully established. If this takes more than 5 seconds, Node2's detector marks Node1 as dead.
+
+The typical failure sequence is:
+1. Node2 connects to Node1 and sends join request (T=0)
+2. Node1 starts reverse connection to Node2 (T=0)
+3. Reverse connection SSL handshake completes (T=5s)
+4. Node2's detector marks Node1 as dead (no response within 5s) (T=5s)
+5. Node2 closes the connection
+6. Node1's reverse connection fails with "Failure reading from fd=-1" (T=10s)
+
+## Solution 8: Increase Detector Live Timeout to 30 Seconds
+
+We patch `xcom_detector.h` to increase the `DETECTOR_LIVE_TIMEOUT` from 5.0 to 30.0 seconds:
+
+```cpp
+// Before (5 second timeout):
+#define DETECTOR_LIVE_TIMEOUT 5.0
+
+// After (30 second timeout for RA-TLS):
+/* Increased from 5.0 to 30.0 for RA-TLS in SGX environments */
+#define DETECTOR_LIVE_TIMEOUT 30.0
+```
+
+Additionally, we update `xcom_dial_server_detected.patch` to call `server_detected(s)` when a connection is successfully established in `dial()`, ensuring the detected timestamp is refreshed when the connection completes (not just when messages are received):
+
+```cpp
+// Added after set_connected(s->con, CON_FD):
+/* Update detected timestamp when connection is established */
+server_detected(s);
+```
+
+This combined fix:
+- Provides a 30-second grace period for RA-TLS handshakes and protocol negotiation
+- Updates the detected timestamp when connections are established, not just when messages arrive
+- Allows sufficient time for bidirectional connection establishment in SGX environments
+- Trade-off: Real node failures will take up to 30 seconds to detect (slower failover)
 
 ## MySQL Version
 
