@@ -44,7 +44,6 @@
 #define GR_SERVER_ID_FILE "/app/wallet/.mysql_server_id"
 #define GR_GROUP_NAME_FILE "/app/wallet/.mysql_gr_group_name"
 #define GR_GROUP_NAME_PLAINTEXT_FILE "/var/lib/mysql/gr_group_name.txt"  /* Plaintext copy for ops */
-#define PUBLIC_IP_URL "https://ifconfig.me/ip"
 #define MAX_SEEDS_LEN 4096
 #define MAX_IP_LEN 64
 #define UUID_LEN 36  /* xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx */
@@ -529,69 +528,6 @@ static int get_lan_ip(char *ip_buf, size_t buf_size) {
     return 0;
 }
 
-/* Get public IP address using libcurl */
-static int get_public_ip(char *ip_buf, size_t buf_size) {
-    CURL *curl;
-    CURLcode res;
-    struct curl_response response = {0};
-    int ret = -1;
-    
-    curl = curl_easy_init();
-    if (!curl) {
-        fprintf(stderr, "[Launcher] Failed to initialize curl for public IP detection\n");
-        return -1;
-    }
-    
-    response.data = malloc(1);
-    if (!response.data) {
-        curl_easy_cleanup(curl);
-        return -1;
-    }
-    response.data[0] = '\0';
-    response.size = 0;
-    
-    curl_easy_setopt(curl, CURLOPT_URL, PUBLIC_IP_URL);
-    curl_easy_setopt(curl, CURLOPT_WRITEFUNCTION, write_callback);
-    curl_easy_setopt(curl, CURLOPT_WRITEDATA, &response);
-    curl_easy_setopt(curl, CURLOPT_TIMEOUT, 10L);
-    curl_easy_setopt(curl, CURLOPT_CONNECTTIMEOUT, 5L);
-    curl_easy_setopt(curl, CURLOPT_FOLLOWLOCATION, 1L);
-    
-    res = curl_easy_perform(curl);
-    
-    if (res != CURLE_OK) {
-        fprintf(stderr, "[Launcher] Failed to get public IP: %s\n", curl_easy_strerror(res));
-        goto cleanup;
-    }
-    
-    /* Trim whitespace from response */
-    char *start = response.data;
-    while (*start && (*start == ' ' || *start == '\n' || *start == '\r' || *start == '\t')) {
-        start++;
-    }
-    char *end = start + strlen(start) - 1;
-    while (end > start && (*end == ' ' || *end == '\n' || *end == '\r' || *end == '\t')) {
-        *end = '\0';
-        end--;
-    }
-    
-    if (strlen(start) == 0 || strlen(start) >= buf_size) {
-        fprintf(stderr, "[Launcher] Invalid public IP response\n");
-        goto cleanup;
-    }
-    
-    strncpy(ip_buf, start, buf_size - 1);
-    ip_buf[buf_size - 1] = '\0';
-    
-    printf("[Launcher] Detected public IP: %s\n", ip_buf);
-    ret = 0;
-    
-cleanup:
-    curl_easy_cleanup(curl);
-    free(response.data);
-    return ret;
-}
-
 /* Check if a TCP port is available for binding
  * Returns: 1 if port is available, 0 if occupied, -1 on error
  */
@@ -643,7 +579,7 @@ static int find_available_port(int start_port) {
 }
 
 /* Get or create stable server_id based on IP hash */
-static unsigned int get_or_create_server_id(const char *lan_ip, const char *public_ip) {
+static unsigned int get_or_create_server_id(const char *lan_ip) {
     unsigned int server_id = 0;
     
     /* Try to read existing server_id from file */
@@ -657,14 +593,10 @@ static unsigned int get_or_create_server_id(const char *lan_ip, const char *publ
         fclose(f);
     }
     
-    /* Generate new server_id based on hash of IPs */
+    /* Generate new server_id based on hash of LAN IP */
     unsigned int hash = 5381;
     const char *str = lan_ip;
     int c;
-    while ((c = *str++)) {
-        hash = ((hash << 5) + hash) + c;
-    }
-    str = public_ip;
     while ((c = *str++)) {
         hash = ((hash << 5) + hash) + c;
     }
@@ -855,10 +787,10 @@ static int seed_in_list(const char *seeds, const char *seed_with_port) {
 }
 
 /* Build deduplicated seeds list: user-specified seeds first, then auto-generated IPs
- * Order: user-specified seeds (--gr-seeds), then 127.0.0.1, then specified_ip, then LAN IP, then public IP
+ * Order: user-specified seeds (--gr-seeds), then specified_ip, then LAN IP
  * All entries are deduplicated */
 static int build_seeds_list(char *seeds_buf, size_t buf_size,
-                            const char *specified_ip, const char *lan_ip, const char *public_ip,
+                            const char *specified_ip, const char *lan_ip,
                             const char *extra_seeds, int gr_port) {
     seeds_buf[0] = '\0';
     size_t len = 0;
@@ -925,18 +857,6 @@ static int build_seeds_list(char *seeds_buf, size_t buf_size,
                 len += snprintf(seeds_buf + len, buf_size - len, ",");
             }
             len += snprintf(seeds_buf + len, buf_size - len, "%s", lan_seed);
-        }
-    }
-    
-    /* Add public IP if valid */
-    if (public_ip && strlen(public_ip) > 0) {
-        char public_seed[MAX_IP_LEN + 16];
-        snprintf(public_seed, sizeof(public_seed), "%s:%d", public_ip, gr_port);
-        if (!seed_in_list(seeds_buf, public_seed)) {
-            if (len > 0) {
-                len += snprintf(seeds_buf + len, buf_size - len, ",");
-            }
-            len += snprintf(seeds_buf + len, buf_size - len, "%s", public_seed);
         }
     }
     
@@ -1296,7 +1216,6 @@ struct launcher_config {
     /* Testing options */
     int dry_run;                       /* --dry-run: run all logic but skip execve() */
     const char *test_lan_ip;           /* --test-lan-ip: override LAN IP for testing */
-    const char *test_public_ip;        /* --test-public-ip: override public IP for testing */
     const char *test_output_dir;       /* --test-output-dir: override output directory for testing */
     
     /* GCS debug trace path option */
@@ -1336,7 +1255,6 @@ static void parse_args(int argc, char *argv[], struct launcher_config *config) {
     
     config->dry_run = 0;
     config->test_lan_ip = NULL;
-    config->test_public_ip = NULL;
     config->test_output_dir = NULL;
     config->gcs_debug_trace_path = NULL;
     
@@ -1456,7 +1374,6 @@ static void parse_args(int argc, char *argv[], struct launcher_config *config) {
             cli_dry_run = 1;
         }
         else PARSE_OPTION("--test-lan-ip", 13, config->test_lan_ip)
-        else PARSE_OPTION("--test-public-ip", 16, config->test_public_ip)
         else PARSE_OPTION("--test-output-dir", 17, config->test_output_dir)
         /* GCS debug trace path option */
         else PARSE_OPTION("--gcs-debug-trace-path", 22, config->gcs_debug_trace_path)
@@ -1548,7 +1465,6 @@ static void parse_args(int argc, char *argv[], struct launcher_config *config) {
     /* Testing options */
     APPLY_ENV_VAR_BOOL("DRY_RUN", config->dry_run, cli_dry_run);
     APPLY_ENV_VAR("TEST_LAN_IP", config->test_lan_ip, config->test_lan_ip != NULL);
-    APPLY_ENV_VAR("TEST_PUBLIC_IP", config->test_public_ip, config->test_public_ip != NULL);
     APPLY_ENV_VAR("TEST_OUTPUT_DIR", config->test_output_dir, config->test_output_dir != NULL);
     
     /* GCS debug trace path option */
@@ -1656,8 +1572,6 @@ static void print_usage(const char *prog_name) {
     printf("                            Useful for testing configuration generation\n");
     printf("  --test-lan-ip=IP          Override LAN IP detection (for testing)\n");
     printf("                            (env: TEST_LAN_IP)\n");
-    printf("  --test-public-ip=IP       Override public IP detection (for testing)\n");
-    printf("                            (env: TEST_PUBLIC_IP)\n");
     printf("  --test-output-dir=DIR     Override output directory for config files (for testing)\n");
     printf("                            (env: TEST_OUTPUT_DIR)\n\n");
     
@@ -2661,7 +2575,6 @@ int main(int argc, char *argv[]) {
     char gr_config_path[MAX_PATH_LEN] = {0};
     char defaults_extra_file_arg[MAX_PATH_LEN] = {0};
     char lan_ip[MAX_IP_LEN] = {0};
-    char public_ip[MAX_IP_LEN] = {0};
     char seeds_list[MAX_SEEDS_LEN] = {0};
     uint32_t server_id = 0;
     
@@ -2689,22 +2602,12 @@ int main(int argc, char *argv[]) {
             printf("[Launcher] Detected LAN IP: %s\n", lan_ip);
         }
         
-        /* Get public IP - use test override if provided */
-        if (config.test_public_ip && strlen(config.test_public_ip) > 0) {
-            strncpy(public_ip, config.test_public_ip, sizeof(public_ip) - 1);
-            printf("[Launcher] Using test public IP: %s\n", public_ip);
-        } else if (get_public_ip(public_ip, sizeof(public_ip)) != 0) {
-            fprintf(stderr, "[Launcher] Warning: Could not detect public IP\n");
-        } else {
-            printf("[Launcher] Detected public IP: %s\n", public_ip);
-        }
-        
         /* Get or create stable server ID */
-        server_id = get_or_create_server_id(lan_ip, public_ip);
+        server_id = get_or_create_server_id(lan_ip);
         printf("[Launcher] Server ID: %u\n", server_id);
         
         /* Build seeds list with user-specified seeds first, then auto-generated IPs
-         * Order: user-specified seeds (--gr-seeds), then specified_ip, then LAN IP, then public IP
+         * Order: user-specified seeds (--gr-seeds), then specified_ip, then LAN IP
          * All IPs are deduplicated in build_seeds_list
          * Note: --gr-local-address only accepts IP (no port), port is controlled by --gr-port */
         char specified_ip[MAX_IP_LEN] = {0};
@@ -2714,14 +2617,14 @@ int main(int argc, char *argv[]) {
         }
         
         /* Build seeds list: user-specified seeds first, then auto-generated IPs */
-        build_seeds_list(seeds_list, sizeof(seeds_list), specified_ip, lan_ip, public_ip, config.gr_seeds, config.gr_port);
+        build_seeds_list(seeds_list, sizeof(seeds_list), specified_ip, lan_ip, config.gr_seeds, config.gr_port);
         printf("[Launcher] Seeds list: %s\n", seeds_list);
         printf("[Launcher] GR XCom port: %d\n", config.gr_port);
         
         /* Determine local address for GR
          * Each node MUST have a unique local address for Group Replication to work.
          * Using 127.0.0.1 for all nodes causes "Old incarnation found" errors.
-         * Priority: --gr-local-address > LAN IP > public IP
+         * Priority: --gr-local-address > LAN IP
          * 
          * IMPORTANT: group_replication_local_address MUST be in host:port format.
          * The port is always taken from --gr-port (which has already been validated for availability).
@@ -2735,9 +2638,6 @@ int main(int argc, char *argv[]) {
         } else if (strlen(lan_ip) > 0) {
             /* Default to LAN IP for unique local address across nodes */
             snprintf(gr_local_address, sizeof(gr_local_address), "%s:%d", lan_ip, config.gr_port);
-        } else if (strlen(public_ip) > 0) {
-            /* Fallback to public IP if LAN IP is not available */
-            snprintf(gr_local_address, sizeof(gr_local_address), "%s:%d", public_ip, config.gr_port);
         } else {
             fprintf(stderr, "[Launcher] ERROR: Could not determine local IP address for Group Replication\n");
             fprintf(stderr, "[Launcher] Please specify --gr-local-address explicitly\n");
@@ -2794,11 +2694,6 @@ int main(int argc, char *argv[]) {
         /* Add auto-detected LAN IP */
         if (strlen(lan_ip) > 0) {
             ADD_IP_IF_UNIQUE(lan_ip);
-        }
-        
-        /* Add public IP */
-        if (strlen(public_ip) > 0) {
-            ADD_IP_IF_UNIQUE(public_ip);
         }
         
         #undef ADD_IP_IF_UNIQUE
