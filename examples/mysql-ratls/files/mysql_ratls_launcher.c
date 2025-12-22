@@ -1258,6 +1258,9 @@ struct launcher_config {
     const char *test_public_ip;        /* --test-public-ip: override public IP for testing */
     const char *test_output_dir;       /* --test-output-dir: override output directory for testing */
     
+    /* Debug dump option */
+    const char *dump_gcs_debug_trace;  /* --dump-gcs-debug-trace: dump GCS debug trace to specified path */
+    
     /* Additional MySQL args to pass through */
     int mysql_argc;
     char **mysql_argv;
@@ -1294,6 +1297,7 @@ static void parse_args(int argc, char *argv[], struct launcher_config *config) {
     config->test_lan_ip = NULL;
     config->test_public_ip = NULL;
     config->test_output_dir = NULL;
+    config->dump_gcs_debug_trace = NULL;
     
     /* Allocate array for MySQL passthrough args */
     config->mysql_argv = malloc(argc * sizeof(char *));
@@ -1413,6 +1417,8 @@ static void parse_args(int argc, char *argv[], struct launcher_config *config) {
         else PARSE_OPTION("--test-lan-ip", 13, config->test_lan_ip)
         else PARSE_OPTION("--test-public-ip", 16, config->test_public_ip)
         else PARSE_OPTION("--test-output-dir", 17, config->test_output_dir)
+        /* Debug dump option */
+        else PARSE_OPTION("--dump-gcs-debug-trace", 22, config->dump_gcs_debug_trace)
         /* Help */
         else if (strcmp(argv[i], "--help") == 0 || strcmp(argv[i], "-h") == 0) {
             print_usage(argv[0]);
@@ -1503,6 +1509,9 @@ static void parse_args(int argc, char *argv[], struct launcher_config *config) {
     APPLY_ENV_VAR("TEST_LAN_IP", config->test_lan_ip, config->test_lan_ip != NULL);
     APPLY_ENV_VAR("TEST_PUBLIC_IP", config->test_public_ip, config->test_public_ip != NULL);
     APPLY_ENV_VAR("TEST_OUTPUT_DIR", config->test_output_dir, config->test_output_dir != NULL);
+    
+    /* Debug dump option */
+    APPLY_ENV_VAR("DUMP_GCS_DEBUG_TRACE", config->dump_gcs_debug_trace, config->dump_gcs_debug_trace != NULL);
     
     #undef APPLY_ENV_VAR
     #undef APPLY_ENV_VAR_INT
@@ -1610,6 +1619,14 @@ static void print_usage(const char *prog_name) {
     printf("                            (env: TEST_PUBLIC_IP)\n");
     printf("  --test-output-dir=DIR     Override output directory for config files (for testing)\n");
     printf("                            (env: TEST_OUTPUT_DIR)\n\n");
+    
+    printf("DEBUG OPTIONS:\n");
+    printf("  --dump-gcs-debug-trace=PATH\n");
+    printf("                            Dump GCS_DEBUG_TRACE from encrypted partition to specified path\n");
+    printf("                            (env: DUMP_GCS_DEBUG_TRACE)\n");
+    printf("                            This copies the debug trace file and exits without starting MySQL\n");
+    printf("                            Source: ${MYSQL_DATA_DIR}/GCS_DEBUG_TRACE (encrypted partition)\n");
+    printf("                            WARNING: Debug traces may contain sensitive information\n\n");
     
     printf("MYSQL OPTIONS:\n");
     printf("  Any unrecognized options are passed through to mysqld.\n\n");
@@ -2324,6 +2341,43 @@ int main(int argc, char *argv[]) {
     /* Parse command line arguments - args take priority over environment variables */
     struct launcher_config config;
     parse_args(argc, argv, &config);
+    
+    /* Handle --dump-gcs-debug-trace mode: copy debug trace file and exit */
+    if (config.dump_gcs_debug_trace && strlen(config.dump_gcs_debug_trace) > 0) {
+        printf("[Launcher] Dump GCS debug trace mode\n");
+        
+        /* Build source path: ${data_dir}/GCS_DEBUG_TRACE */
+        const char *data_dir = config.data_dir;
+        if (!data_dir || strlen(data_dir) == 0) {
+            data_dir = DEFAULT_DATA_DIR;
+        }
+        
+        char src_path[MAX_PATH_LEN];
+        snprintf(src_path, sizeof(src_path), "%s/GCS_DEBUG_TRACE", data_dir);
+        
+        printf("[Launcher] Source: %s (encrypted partition)\n", src_path);
+        printf("[Launcher] Destination: %s\n", config.dump_gcs_debug_trace);
+        printf("[Launcher] WARNING: Debug traces may contain sensitive information!\n");
+        
+        /* Check if source file exists */
+        if (!file_exists(src_path)) {
+            fprintf(stderr, "[Launcher] ERROR: GCS_DEBUG_TRACE file not found at %s\n", src_path);
+            fprintf(stderr, "[Launcher] Make sure MySQL was started with --gr-debug and has generated debug traces\n");
+            curl_global_cleanup();
+            return 1;
+        }
+        
+        /* Copy the file using existing copy_file function */
+        if (copy_file(src_path, config.dump_gcs_debug_trace) != 0) {
+            fprintf(stderr, "[Launcher] ERROR: Failed to copy GCS_DEBUG_TRACE to %s\n", config.dump_gcs_debug_trace);
+            curl_global_cleanup();
+            return 1;
+        }
+        
+        printf("[Launcher] Successfully dumped GCS_DEBUG_TRACE to %s\n", config.dump_gcs_debug_trace);
+        curl_global_cleanup();
+        return 0;
+    }
     
     /* Validate configuration - handle mutual exclusions and dependencies */
     if (validate_config(&config) != 0) {
