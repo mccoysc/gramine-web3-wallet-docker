@@ -1,6 +1,6 @@
 --- a/plugin/group_replication/libmysqlgcs/src/bindings/xcom/xcom/xcom_transport.cc
 +++ b/plugin/group_replication/libmysqlgcs/src/bindings/xcom/xcom/xcom_transport.cc
-@@ -597,7 +597,12 @@ static server *mksrv(char *srv, xcom_port port) {
+@@ -597,7 +597,13 @@ static server *mksrv(char *srv, xcom_port port) {
    s->port = port;
    s->con = new_connection(-1, nullptr);
    s->active = 0.0;
