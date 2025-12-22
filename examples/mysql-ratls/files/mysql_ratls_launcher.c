@@ -2577,10 +2577,21 @@ int main(int argc, char *argv[]) {
          * Each node MUST have a unique local address for Group Replication to work.
          * Using 127.0.0.1 for all nodes causes "Old incarnation found" errors.
          * Priority: --gr-local-address > LAN IP > public IP
+         * 
+         * IMPORTANT: group_replication_local_address MUST be in host:port format.
+         * If user provides only IP (no port), we append the configured GR port.
          */
         char gr_local_address[MAX_IP_LEN + 16] = {0};
         if (config.gr_local_address && strlen(config.gr_local_address) > 0) {
-            strncpy(gr_local_address, config.gr_local_address, sizeof(gr_local_address) - 1);
+            /* Check if user provided port (contains ':') */
+            if (strchr(config.gr_local_address, ':') != NULL) {
+                /* User provided host:port format, use as-is */
+                strncpy(gr_local_address, config.gr_local_address, sizeof(gr_local_address) - 1);
+            } else {
+                /* User provided only IP, append the configured GR port */
+                snprintf(gr_local_address, sizeof(gr_local_address), "%s:%d", config.gr_local_address, config.gr_port);
+                printf("[Launcher] Note: --gr-local-address did not include port, using %s\n", gr_local_address);
+            }
         } else if (strlen(lan_ip) > 0) {
             /* Default to LAN IP for unique local address across nodes */
             snprintf(gr_local_address, sizeof(gr_local_address), "%s:%d", lan_ip, config.gr_port);
