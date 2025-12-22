@@ -1,0 +1,101 @@
+diff --git a/plugin/group_replication/libmysqlgcs/src/bindings/xcom/xcom/xcom_transport.cc b/plugin/group_replication/libmysqlgcs/src/bindings/xcom/xcom/xcom_transport.cc
+index 76601a9e..c8d4e071 100644
+--- a/plugin/group_replication/libmysqlgcs/src/bindings/xcom/xcom/xcom_transport.cc
++++ b/plugin/group_replication/libmysqlgcs/src/bindings/xcom/xcom/xcom_transport.cc
+@@ -26,6 +26,11 @@
+ #include <errno.h>
+ #include <limits.h>
+ #include <math.h>
++
++/* Stack trace support for connection close debugging */
++#include <execinfo.h>
++#include <dlfcn.h>
++#include <cxxabi.h>
+ #ifdef _MSC_VER
+ #include <stdint.h>
+ #endif
+@@ -99,7 +104,74 @@ static xcom_port xcom_listen_port = 0; /* Port used by xcom */
+ static int pm(xcom_port port) { return port == xcom_listen_port; }
+ /* purecov: end */
+ 
++/* Debug helper: print stack trace with symbols for connection close debugging */
++static void xcom_print_close_stacktrace(const char *reason, int fd,
++                                        const char *remote_addr) {
++  void *buffer[64];
++  int nptrs;
++
++  nptrs = backtrace(buffer, 64);
++
++  fprintf(stderr,
++          "\n[XCOM-CLOSE-DEBUG] ========================================\n");
++  fprintf(stderr, "[XCOM-CLOSE-DEBUG] Connection close event\n");
++  fprintf(stderr, "[XCOM-CLOSE-DEBUG] Reason: %s\n",
++          reason ? reason : "unknown");
++  fprintf(stderr, "[XCOM-CLOSE-DEBUG] FD: %d\n", fd);
++  fprintf(stderr, "[XCOM-CLOSE-DEBUG] Remote: %s\n",
++          remote_addr ? remote_addr : "unknown");
++  fprintf(stderr, "[XCOM-CLOSE-DEBUG] Timestamp: %f\n", task_now());
++  fprintf(stderr, "[XCOM-CLOSE-DEBUG] Stack trace (%d frames):\n", nptrs);
++
++  /* Get symbol names using backtrace_symbols */
++  char **symbols = backtrace_symbols(buffer, nptrs);
++  if (symbols) {
++    for (int i = 0; i < nptrs; i++) {
++      /* Try to get more detailed info using dladdr */
++      Dl_info info;
++      if (dladdr(buffer[i], &info)) {
++        /* Try to demangle C++ symbols */
++        const char *symbol_name = info.dli_sname;
++        char *demangled = nullptr;
++        if (symbol_name) {
++          int status;
++          demangled = abi::__cxa_demangle(symbol_name, nullptr, nullptr, &status);
++        }
++
++        /* Calculate offset from symbol base */
++        ptrdiff_t offset = 0;
++        if (info.dli_saddr) {
++          offset = (char *)buffer[i] - (char *)info.dli_saddr;
++        }
++
++        fprintf(stderr,
++                "[XCOM-CLOSE-DEBUG]   #%d %p: %s(%s+0x%lx) [%s]\n", i, buffer[i],
++                info.dli_fname ? info.dli_fname : "??",
++                demangled ? demangled : (symbol_name ? symbol_name : "??"),
++                (unsigned long)offset, symbols[i]);
++
++        if (demangled) {
++          free(demangled);
++        }
++      } else {
++        fprintf(stderr, "[XCOM-CLOSE-DEBUG]   #%d %s\n", i, symbols[i]);
++      }
++    }
++    free(symbols);
++  } else {
++    /* Fallback: just print addresses */
++    for (int i = 0; i < nptrs; i++) {
++      fprintf(stderr, "[XCOM-CLOSE-DEBUG]   #%d %p\n", i, buffer[i]);
++    }
++  }
++  fprintf(stderr,
++          "[XCOM-CLOSE-DEBUG] ========================================\n\n");
++  fflush(stderr);
++}
++
+ int close_open_connection(connection_descriptor *conn) {
++  xcom_print_close_stacktrace("close_open_connection", conn ? conn->fd : -1,
++                              nullptr);
+   return Network_provider_manager::getInstance().close_xcom_connection(conn);
+ }
+ 
+@@ -1923,7 +1995,8 @@ void close_connection(connection_descriptor *con) {
+ }
+ 
+ void shutdown_connection(connection_descriptor *con) {
+-  /* printstack(1); */
++  xcom_print_close_stacktrace("shutdown_connection", con ? con->fd : -1,
++                              nullptr);
+   ADD_DBG(D_TRANSPORT, add_event(EVENT_DUMP_PAD, string_arg("con->fd"));
+           add_event(EVENT_DUMP_PAD, int_arg(con->fd)););
+   close_connection(con);
