@@ -1,10 +1,11 @@
 # MySQL Group Replication Patch for SGX/Gramine
 
-This directory contains modified MySQL Group Replication plugin source files that enable GR to work in SGX/Gramine environments. The patches address three main issues:
+This directory contains modified MySQL Group Replication plugin source files that enable GR to work in SGX/Gramine environments. The patches address four main issues:
 
 1. **Network Interface Enumeration**: The standard `getifaddrs()` system call is not available in Gramine/SGX due to netlink socket limitations.
 2. **SSL CA Configuration**: MySQL unconditionally passes an empty `ca_file` parameter to XCom SSL initialization, causing failures when using self-signed certificates without a CA (e.g., RA-TLS).
 3. **GCS Debug Trace Path**: The GCS_DEBUG_TRACE file is hardcoded to be written in the MySQL data directory, which is in an encrypted partition in SGX environments and cannot be read from outside.
+4. **XCom SSL Verify Mode**: When `group_replication_ssl_mode=REQUIRED`, MySQL sets `SSL_VERIFY_NONE` for both server and client SSL contexts, which prevents mutual TLS certificate exchange required for RA-TLS.
 
 ## Problem 1: getifaddrs() Not Available
 
@@ -56,11 +57,44 @@ if (!ssl_ca.empty())
 
 This allows MySQL Group Replication to work with self-signed certificates (like RA-TLS) where no CA certificate is configured. When `ca_file` is not added, the XCom SSL initialization falls back to using default CA locations or skips CA verification entirely (depending on `ssl_mode`).
 
-## Problem 3: GCS Debug Trace Path
+## Problem 3: XCom SSL Verify Mode
+
+When `group_replication_ssl_mode=REQUIRED`, MySQL's XCom network provider sets `SSL_VERIFY_NONE` for both server and client SSL contexts. This means:
+
+1. **Server context**: Does not request client certificates (no `CertificateRequest` sent)
+2. **Client context**: Does not verify server certificates (verify callback not triggered)
+
+This is problematic for RA-TLS (Remote Attestation TLS) deployments where:
+- Both sides need to exchange certificates containing SGX quotes
+- The RA-TLS verification callback must be triggered to verify SGX quotes
+- Mutual TLS is required for bidirectional attestation
+
+## Solution 3: Conditional SSL_VERIFY_PEER
+
+We patch `xcom_network_provider_ssl_native_lib.cc` to enable `SSL_VERIFY_PEER` when client certificates are configured:
+
+```cpp
+// Before (SSL_REQUIRED mode):
+verify_server = SSL_VERIFY_NONE;
+verify_client = SSL_VERIFY_NONE;
+
+// After (when client_cert_file is configured):
+if (ssl_mode != SSL_REQUIRED || (client_cert_file && client_cert_file[0] != '\0'))
+    verify_server = SSL_VERIFY_PEER | SSL_VERIFY_CLIENT_ONCE;
+if (ssl_mode != SSL_REQUIRED || (client_cert_file && client_cert_file[0] != '\0'))
+    verify_client = SSL_VERIFY_PEER;
+```
+
+This fix:
+- Preserves original `SSL_REQUIRED` semantics (encryption-only) for non-RA-TLS deployments
+- Enables mutual TLS when client certificates are configured (RA-TLS scenario)
+- Ensures the server requests client certificates and triggers verification callbacks
+
+## Problem 4: GCS Debug Trace Path
 
 When `group_replication_communication_debug_options` includes `GCS_DEBUG_TRACE`, MySQL writes debug trace information to a file named `GCS_DEBUG_TRACE` in the MySQL data directory. In SGX/Gramine environments, the data directory is typically in an encrypted partition, making the debug trace file unreadable from outside the enclave.
 
-## Solution 3: Configurable GCS Debug Trace Path
+## Solution 4: Configurable GCS Debug Trace Path
 
 We patch `plugin.cc` to check for the `GCS_DEBUG_TRACE_PATH` environment variable. If set, the debug trace file will be written to the specified directory instead of the data directory:
 
@@ -112,6 +146,9 @@ The launcher (`mysql_ratls_launcher.c`) automatically detects both LAN and publi
 
 ### For SSL CA empty string fix:
 - `plugin_ssl_ca_fix.patch` - Patch file for `plugin/group_replication/src/plugin.cc` to fix the SSL CA empty string bug
+
+### For XCom SSL verify mode fix:
+- `xcom_ssl_verify_fix.patch` - Patch file for `plugin/group_replication/libmysqlgcs/src/bindings/xcom/xcom/network/xcom_network_provider_ssl_native_lib.cc` to enable SSL_VERIFY_PEER when client certificates are configured
 
 ### For GCS debug trace path:
 - `gcs_debug_trace_path.patch` - Patch file for `plugin/group_replication/src/plugin.cc` to support configurable debug trace path via `GCS_DEBUG_TRACE_PATH` environment variable
