@@ -1,11 +1,12 @@
 # MySQL Group Replication Patch for SGX/Gramine
 
-This directory contains modified MySQL Group Replication plugin source files that enable GR to work in SGX/Gramine environments. The patches address four main issues:
+This directory contains modified MySQL Group Replication plugin source files that enable GR to work in SGX/Gramine environments. The patches address five main issues:
 
 1. **Network Interface Enumeration**: The standard `getifaddrs()` system call is not available in Gramine/SGX due to netlink socket limitations.
 2. **SSL CA Configuration**: MySQL unconditionally passes an empty `ca_file` parameter to XCom SSL initialization, causing failures when using self-signed certificates without a CA (e.g., RA-TLS).
 3. **GCS Debug Trace Path**: The GCS_DEBUG_TRACE file is hardcoded to be written in the MySQL data directory, which is in an encrypted partition in SGX environments and cannot be read from outside.
 4. **XCom SSL Verify Mode**: When `group_replication_ssl_mode=REQUIRED`, MySQL sets `SSL_VERIFY_NONE` for both server and client SSL contexts, which prevents mutual TLS certificate exchange required for RA-TLS.
+5. **SSL Accept Error Logging**: When SSL_accept fails, MySQL only logs a generic error message without detailed OpenSSL error information, making it difficult to diagnose SSL handshake failures.
 
 ## Problem 1: getifaddrs() Not Available
 
@@ -152,6 +153,28 @@ The launcher (`mysql_ratls_launcher.c`) automatically detects both LAN and publi
 
 ### For GCS debug trace path:
 - `gcs_debug_trace_path.patch` - Patch file for `plugin/group_replication/src/plugin.cc` to support configurable debug trace path via `GCS_DEBUG_TRACE_PATH` environment variable
+
+### For SSL accept error logging:
+- `ssl_accept_error_logging.patch` - Patch file for `plugin/group_replication/libmysqlgcs/src/bindings/xcom/xcom/network/xcom_network_provider.cc` to add detailed OpenSSL error logging when SSL_accept fails
+
+## Problem 5: SSL Accept Error Logging
+
+When SSL_accept fails during XCom SSL handshake, MySQL only logs a generic "acceptor learner accept SSL failed" message without any details about why the handshake failed. This makes it extremely difficult to diagnose SSL issues, especially in RA-TLS scenarios where certificate verification involves SGX quote validation.
+
+## Solution 5: Detailed OpenSSL Error Logging
+
+We patch `xcom_network_provider.cc` to log detailed error information when SSL_accept fails:
+
+1. **SSL_get_error code**: The specific SSL error type (e.g., SSL_ERROR_SSL, SSL_ERROR_SYSCALL)
+2. **SSL_get_verify_result**: The certificate verification result code
+3. **Peer certificate presence**: Whether the peer sent a certificate
+4. **OpenSSL error stack**: All errors from the OpenSSL error queue with human-readable descriptions
+
+This information appears in the GCS_DEBUG_TRACE file and helps diagnose issues like:
+- Client not sending certificate
+- Certificate verification failures
+- Signature algorithm mismatches
+- RA-TLS quote verification failures
 
 ## MySQL Version
 
