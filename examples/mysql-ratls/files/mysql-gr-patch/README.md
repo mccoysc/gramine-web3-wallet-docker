@@ -1,12 +1,13 @@
 # MySQL Group Replication Patch for SGX/Gramine
 
-This directory contains modified MySQL Group Replication plugin source files that enable GR to work in SGX/Gramine environments. The patches address five main issues:
+This directory contains modified MySQL Group Replication plugin source files that enable GR to work in SGX/Gramine environments. The patches address six main issues:
 
 1. **Network Interface Enumeration**: The standard `getifaddrs()` system call is not available in Gramine/SGX due to netlink socket limitations.
 2. **SSL CA Configuration**: MySQL unconditionally passes an empty `ca_file` parameter to XCom SSL initialization, causing failures when using self-signed certificates without a CA (e.g., RA-TLS).
 3. **GCS Debug Trace Path**: The GCS_DEBUG_TRACE file is hardcoded to be written in the MySQL data directory, which is in an encrypted partition in SGX environments and cannot be read from outside.
 4. **XCom SSL Verify Mode**: When `group_replication_ssl_mode=REQUIRED`, MySQL sets `SSL_VERIFY_NONE` for both server and client SSL contexts, which prevents mutual TLS certificate exchange required for RA-TLS.
 5. **SSL Accept Error Logging**: When SSL_accept fails, MySQL only logs a generic error message without detailed OpenSSL error information, making it difficult to diagnose SSL handshake failures.
+6. **XCom Node Detection Race Condition**: When a new node joins the cluster, its `detected` timestamp is initialized to 0, causing it to be immediately marked as "not alive" before any message exchange can occur. This race condition is exacerbated in SGX/RA-TLS environments where SSL handshakes are slower.
 
 ## Problem 1: getifaddrs() Not Available
 
@@ -157,6 +158,9 @@ The launcher (`mysql_ratls_launcher.c`) automatically detects both LAN and publi
 ### For SSL accept error logging:
 - `ssl_accept_error_logging.patch` - Patch file for `plugin/group_replication/libmysqlgcs/src/bindings/xcom/xcom/network/xcom_network_provider.cc` to add detailed OpenSSL error logging when SSL_accept fails
 
+### For XCom node detection race condition fix:
+- `xcom_dial_server_detected.patch` - Patch file for `plugin/group_replication/libmysqlgcs/src/bindings/xcom/xcom/xcom_transport.cc` to update `detected` timestamp when connection is established
+
 ## Problem 5: SSL Accept Error Logging
 
 When SSL_accept fails during XCom SSL handshake, MySQL only logs a generic "acceptor learner accept SSL failed" message without any details about why the handshake failed. This makes it extremely difficult to diagnose SSL issues, especially in RA-TLS scenarios where certificate verification involves SGX quote validation.
@@ -175,6 +179,46 @@ This information appears in the GCS_DEBUG_TRACE file and helps diagnose issues l
 - Certificate verification failures
 - Signature algorithm mismatches
 - RA-TLS quote verification failures
+
+## Problem 6: XCom Node Detection Race Condition
+
+When a new node joins the MySQL Group Replication cluster, XCom's detector mechanism may incorrectly mark it as "not alive" before any message exchange can occur. This happens because:
+
+1. **`task_now()` returns epoch seconds** (~1.7 billion), not relative time
+2. **New server's `detected` timestamp is initialized to 0.0** in `mksrv()` (xcom_transport.cc:600)
+3. **The DETECT macro** checks `detected[i] + 5.0 > task_now()`, which is always FALSE when `detected=0.0`
+4. **`server_detected()` is only called when receiving messages** via `dispatch_op()`, not when establishing connections
+5. **`alive()` only updates `s->active`**, not `s->detected`
+
+In normal environments, the first message exchange happens very quickly (milliseconds), so `note_detected()` is called before the detector checks the node status. However, in SGX/RA-TLS environments:
+- SSL handshakes are slower due to SGX enclave overhead and RA-TLS quote generation/verification
+- The time window between connection establishment and first message exchange is longer
+- The detector may run and mark the new node as "failed" before any message arrives
+
+This causes the new node to be classified as a "non-member suspect", leading to connection closure and "Broken pipe" errors on the joining node's SSL_accept.
+
+## Solution 6: Update detected Timestamp on Connection Establishment
+
+We patch `xcom_transport.cc` to call `server_detected(s)` in the `dial()` function when a connection is successfully established:
+
+```cpp
+// Before (only alive() called):
+set_connected(s->con, CON_FD);
+alive(s);
+update_detected(get_site_def_rw());
+
+// After (server_detected() added):
+set_connected(s->con, CON_FD);
+server_detected(s);  // Give new node a 5-second grace period
+alive(s);
+update_detected(get_site_def_rw());
+```
+
+This fix:
+- Gives newly connected nodes a 5-second grace period before being marked as "not alive"
+- Allows time for the first message exchange to occur in slower SGX/RA-TLS environments
+- Does not mask real failures: if no messages are received within 5 seconds, the node will still be marked as failed
+- Only affects the "dial" (outbound connection) path; inbound connections still rely on message-based detection
 
 ## MySQL Version
 
