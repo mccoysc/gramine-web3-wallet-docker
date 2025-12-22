@@ -1345,8 +1345,16 @@ static void parse_args(int argc, char *argv[], struct launcher_config *config) {
         else if (strcmp(argv[i], "--gr-bootstrap") == 0) {
             config->gr_bootstrap = 1;
             cli_gr_bootstrap = 1;
+        } else if (strncmp(argv[i], "--gr-bootstrap=", 15) == 0) {
+            const char *val = argv[i] + 15;
+            config->gr_bootstrap = (strcmp(val, "1") == 0 || strcasecmp(val, "true") == 0);
+            cli_gr_bootstrap = 1;
         } else if (strcmp(argv[i], "--gr-debug") == 0) {
             config->gr_debug = 1;
+            cli_gr_debug = 1;
+        } else if (strncmp(argv[i], "--gr-debug=", 11) == 0) {
+            const char *val = argv[i] + 11;
+            config->gr_debug = (strcmp(val, "1") == 0 || strcasecmp(val, "true") == 0);
             cli_gr_debug = 1;
         }
         /* Port options (for host network mode with multiple instances) */
@@ -1396,6 +1404,10 @@ static void parse_args(int argc, char *argv[], struct launcher_config *config) {
         /* Testing options */
         else if (strcmp(argv[i], "--dry-run") == 0) {
             config->dry_run = 1;
+            cli_dry_run = 1;
+        } else if (strncmp(argv[i], "--dry-run=", 10) == 0) {
+            const char *val = argv[i] + 10;
+            config->dry_run = (strcmp(val, "1") == 0 || strcasecmp(val, "true") == 0);
             cli_dry_run = 1;
         }
         else PARSE_OPTION("--test-lan-ip", 13, config->test_lan_ip)
