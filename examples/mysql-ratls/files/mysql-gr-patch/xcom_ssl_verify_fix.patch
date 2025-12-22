@@ -18,7 +18,7 @@
    SSL_CTX_set_verify(server_ctx, verify_server, nullptr);
  
    G_DEBUG("Configuring SSL for the client")
-@@ -538,10 +543,13 @@ int Xcom_network_provider_ssl_library::xcom_init_ssl(
+@@ -538,10 +543,14 @@ int Xcom_network_provider_ssl_library::xcom_init_ssl(
                 crl_path, cipher, tls_version, tls_ciphersuites, client_ctx))
      goto error;
  
