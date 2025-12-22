@@ -221,10 +221,10 @@ There are TWO separate `detected` fields in XCom:
 
 The `DETECT(site, i)` macro checks `site->detected[i]`, NOT `server->detected`. The `update_detected()` function synchronizes these values, but it runs in the `detector_task` loop (every 1 second). When a new node joins, the liveness check may run BEFORE `update_detected()` has synchronized the values.
 
-We add a fix to initialize `site->detected[i]` immediately after `s->servers[i]` is assigned, covering BOTH the reuse path ("Using existing server node") AND the new creation path ("Creating new server node"):
+We add a fix to initialize BOTH `server->detected` AND `site->detected[i]` immediately after `s->servers[i]` is assigned, covering BOTH the reuse path ("Using existing server node") AND the new creation path ("Creating new server node"):
 
 ```cpp
-// Before (site->detected[i] not initialized):
+// Before (detected fields not initialized):
 if (sp) {
   s->servers[i] = sp;
   ...
@@ -233,7 +233,7 @@ if (sp) {
 }
 IFDBG(D_BUG, FN; PTREXP(s->servers[i]));
 
-// After (site->detected[i] initialized for BOTH paths):
+// After (BOTH detected fields initialized for BOTH paths):
 if (sp) {
   s->servers[i] = sp;
   ...
@@ -241,14 +241,20 @@ if (sp) {
   s->servers[i] = addsrv(name, port);
 }
 /* Initialize detected timestamp for both new and reused servers */
+s->servers[i]->detected = task_now();
 s->detected[i] = task_now();
 IFDBG(D_BUG, FN; PTREXP(s->servers[i]));
 ```
 
+**Why BOTH fields must be updated:**
+- `site->detected[i]` is what `DETECT()` macro checks for liveness
+- `server->detected` is synchronized to `site->detected[i]` by `update_detected()` every second
+- If only `site->detected[i]` is set, `update_detected()` will overwrite it with the old `server->detected` value on the next detector cycle
+- Setting both fields ensures the fix persists across detector cycles
+
 **Why this location (after if/else block):**
 - Covers BOTH the reuse path (`if (sp)`) AND the new creation path (`else { addsrv() }`)
-- The `mksrv()` fix sets `server->detected`, but `site->detected[i]` is what `DETECT()` actually checks
-- Placing the fix after the if/else ensures `s->detected[i]` is always initialized regardless of which path is taken
+- Placing the fix after the if/else ensures both fields are always initialized regardless of which path is taken
 
 This fix:
 - Gives both newly created and reused server objects a 5-second grace period (DETECTOR_LIVE_TIMEOUT) before being marked as "not alive"
