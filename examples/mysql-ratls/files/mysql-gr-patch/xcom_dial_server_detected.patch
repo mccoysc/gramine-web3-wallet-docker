@@ -1,6 +1,6 @@
 --- a/plugin/group_replication/libmysqlgcs/src/bindings/xcom/xcom/xcom_transport.cc
 +++ b/plugin/group_replication/libmysqlgcs/src/bindings/xcom/xcom/xcom_transport.cc
-@@ -597,7 +597,7 @@ static server *mksrv(char *srv, xcom_port port) {
+@@ -597,7 +597,7 @@
    s->port = port;
    s->con = new_connection(-1, nullptr);
    s->active = 0.0;
@@ -9,12 +9,12 @@
    s->last_ping_received = 0.0;
    s->number_of_pings_received = 0;
  #if defined(_WIN32)
-@@ -1805,6 +1805,8 @@ void update_servers(site_def *s, cargo_type operation) {
-        if (sp) {
-          G_INFO("Using existing server node %d host %s:%d", i, name, port);
-          s->servers[i] = sp;
+@@ -1805,6 +1805,8 @@
+         if (sp) {
+           G_INFO("Using existing server node %d host %s:%d", i, name, port);
+           s->servers[i] = sp;
 +          s->servers[i]->detected = task_now();
 +          s->detected[i] = task_now();
-
-          /*
-          Reset ping counters to make sure that we clear this state between
+ 
+           /*
+           Reset ping counters to make sure that we clear this state between
