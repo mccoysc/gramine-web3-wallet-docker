@@ -6,7 +6,6 @@ diff --git a/plugin/group_replication/src/gcs_view_modification_notifier.cc b/pl
  #include "plugin/group_replication/include/gcs_view_modification_notifier.h"
  
 +#include <errno.h>
-+#include <time.h>
  #include <time.h>
  
  #include "my_dbug.h"
@@ -297,13 +296,14 @@ diff --git a/plugin/group_replication/src/gcs_event_handlers.cc b/plugin/group_r
      }
 @@ -714,6 +746,10 @@ void Plugin_gcs_events_handler::on_view_changed(
  
-     // Signal that the injected view was delivered
-     if (gcs_module->is_injected_view_modification())
+    // Signal that the injected view was delivered
+     if (gcs_module->is_injected_view_modification()) {
 +      fprintf(stderr, "[GCS-EVENT] on_view_changed: injected view, calling notify_of_view_change_end "
 +              "thread=%lu realtime=%.6f monotonic=%.6f\n",
 +              EVT_GET_THREAD_ID(), evt_get_realtime(), evt_get_monotonic_time());
 +      fflush(stderr);
        gcs_module->notify_of_view_change_end();
++    }
  
      group_events_observation_manager->after_view_change(
 @@ -859,6 +895,12 @@ void Plugin_gcs_events_handler::handle_joining_members(const Gcs_view &new_view,
