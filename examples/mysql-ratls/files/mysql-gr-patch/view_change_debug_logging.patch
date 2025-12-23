@@ -1,0 +1,403 @@
+diff --git a/plugin/group_replication/src/gcs_event_handlers.cc b/plugin/group_replication/src/gcs_event_handlers.cc
+index 5d4c8a53..fac8d224 100644
+--- a/plugin/group_replication/src/gcs_event_handlers.cc
++++ b/plugin/group_replication/src/gcs_event_handlers.cc
+@@ -51,6 +51,25 @@
+ 
+ using std::vector;
+ 
++/* Debug helper: get monotonic timestamp in seconds */
++static double evt_get_monotonic_time() {
++  struct timespec ts;
++  clock_gettime(CLOCK_MONOTONIC, &ts);
++  return (double)ts.tv_sec + (double)ts.tv_nsec / 1000000000.0;
++}
++
++/* Debug helper: get realtime timestamp in seconds */
++static double evt_get_realtime() {
++  struct timespec ts;
++  clock_gettime(CLOCK_REALTIME, &ts);
++  return (double)ts.tv_sec + (double)ts.tv_nsec / 1000000000.0;
++}
++
++/* Debug helper: get thread ID */
++#include <pthread.h>
++#define EVT_GET_THREAD_ID() ((unsigned long)pthread_self())
++
++
+ Plugin_gcs_events_handler::Plugin_gcs_events_handler(
+     Applier_module_interface *applier_module, Recovery_module *recovery_module,
+     Compatibility_module *compatibility_module, ulong components_stop_timeout)
+@@ -649,6 +668,10 @@ void Plugin_gcs_events_handler::on_view_changed(
+       local_member_info->get_recovery_status() ==
+           Group_member_info::MEMBER_ERROR &&
+       !autorejoin_module->is_autorejoin_ongoing()) {
++    fprintf(stderr, "[GCS-EVENT] on_view_changed: MEMBER_ERROR detected, calling notify_of_view_change_cancellation "
++            "thread=%lu realtime=%.6f monotonic=%.6f\n",
++            EVT_GET_THREAD_ID(), evt_get_realtime(), evt_get_monotonic_time());
++    fflush(stderr);
+     LogPluginErr(ERROR_LEVEL, ER_GRP_RPL_MEMBER_EXIT_PLUGIN_ERROR);
+     gcs_module->notify_of_view_change_cancellation(
+         GROUP_REPLICATION_CONFIGURATION_ERROR);
+@@ -683,6 +706,10 @@ void Plugin_gcs_events_handler::on_view_changed(
+     if (update_group_info_manager(new_view, exchanged_data, is_joining,
+                                   is_leaving) &&
+         is_joining) {
++      fprintf(stderr, "[GCS-EVENT] on_view_changed: update_group_info_manager FAILED, calling notify_of_view_change_cancellation "
++              "thread=%lu realtime=%.6f monotonic=%.6f\n",
++              EVT_GET_THREAD_ID(), evt_get_realtime(), evt_get_monotonic_time());
++      fflush(stderr);
+       gcs_module->notify_of_view_change_cancellation();
+       return;
+     }
+@@ -714,8 +741,13 @@ void Plugin_gcs_events_handler::on_view_changed(
+     if (is_leaving) gcs_module->leave_coordination_member_left();
+ 
+     // Signal that the injected view was delivered
+-    if (gcs_module->is_injected_view_modification())
++    if (gcs_module->is_injected_view_modification()) {
++      fprintf(stderr, "[GCS-EVENT] on_view_changed: injected view, calling notify_of_view_change_end "
++              "thread=%lu realtime=%.6f monotonic=%.6f\n",
++              EVT_GET_THREAD_ID(), evt_get_realtime(), evt_get_monotonic_time());
++      fflush(stderr);
+       gcs_module->notify_of_view_change_end();
++    }
+ 
+     group_events_observation_manager->after_view_change(
+         new_view.get_joined_members(), new_view.get_leaving_members(),
+@@ -867,6 +899,14 @@ void Plugin_gcs_events_handler::handle_joining_members(const Gcs_view &new_view,
+   size_t number_of_joining_members = new_view.get_joined_members().size();
+   size_t number_of_leaving_members = new_view.get_leaving_members().size();
+ 
++  fprintf(stderr, "[GCS-EVENT] handle_joining_members BEGIN: thread=%lu is_joining=%d is_leaving=%d "
++          "number_of_members=%zu number_of_joining=%zu number_of_leaving=%zu "
++          "realtime=%.6f monotonic=%.6f\n",
++          EVT_GET_THREAD_ID(), is_joining, is_leaving,
++          number_of_members, number_of_joining_members, number_of_leaving_members,
++          evt_get_realtime(), evt_get_monotonic_time());
++  fflush(stderr);
++
+   /*
+    If we are joining, 3 scenarios exist:
+    1) We are incompatible with the group so we leave
+@@ -875,7 +915,16 @@ void Plugin_gcs_events_handler::handle_joining_members(const Gcs_view &new_view,
+   */
+   if (is_joining) {
+     int error = 0;
++    fprintf(stderr, "[GCS-EVENT] handle_joining_members: is_joining=true, calling check_group_compatibility "
++            "thread=%lu realtime=%.6f monotonic=%.6f\n",
++            EVT_GET_THREAD_ID(), evt_get_realtime(), evt_get_monotonic_time());
++    fflush(stderr);
+     if ((error = check_group_compatibility(number_of_members))) {
++      fprintf(stderr, "[GCS-EVENT] handle_joining_members: check_group_compatibility FAILED error=%d, "
++              "calling notify_of_view_change_cancellation thread=%lu "
++              "realtime=%.6f monotonic=%.6f\n",
++              error, EVT_GET_THREAD_ID(), evt_get_realtime(), evt_get_monotonic_time());
++      fflush(stderr);
+       gcs_module->notify_of_view_change_cancellation(error);
+       return;
+     }
+@@ -906,6 +955,10 @@ void Plugin_gcs_events_handler::handle_joining_members(const Gcs_view &new_view,
+       this will allow check them while join and automatic rejoin are
+       still ongoing.
+     */
++    fprintf(stderr, "[GCS-EVENT] handle_joining_members: calling notify_of_view_change_end "
++            "thread=%lu realtime=%.6f monotonic=%.6f\n",
++            EVT_GET_THREAD_ID(), evt_get_realtime(), evt_get_monotonic_time());
++    fflush(stderr);
+     gcs_module->notify_of_view_change_end();
+ 
+     update_member_status(
+diff --git a/plugin/group_replication/src/gcs_operations.cc b/plugin/group_replication/src/gcs_operations.cc
+index 7ee88e6b..560ae85d 100644
+--- a/plugin/group_replication/src/gcs_operations.cc
++++ b/plugin/group_replication/src/gcs_operations.cc
+@@ -30,6 +30,25 @@
+ #include "my_dbug.h"
+ #include "plugin/group_replication/include/plugin.h"
+ #include "plugin/group_replication/include/plugin_messages/transaction_message.h"
++/* Debug helper: get monotonic timestamp in seconds */
++static double gcs_ops_get_monotonic_time() {
++  struct timespec ts;
++  clock_gettime(CLOCK_MONOTONIC, &ts);
++  return (double)ts.tv_sec + (double)ts.tv_nsec / 1000000000.0;
++}
++
++/* Debug helper: get realtime timestamp in seconds */
++static double gcs_ops_get_realtime() {
++  struct timespec ts;
++  clock_gettime(CLOCK_REALTIME, &ts);
++  return (double)ts.tv_sec + (double)ts.tv_nsec / 1000000000.0;
++}
++
++/* Debug helper: get thread ID */
++#include <pthread.h>
++#define GCS_OPS_GET_THREAD_ID() ((unsigned long)pthread_self())
++
++
+ 
+ const std::string Gcs_operations::gcs_engine = "xcom";
+ 
+@@ -322,8 +341,16 @@ end:
+ 
+ void Gcs_operations::notify_of_view_change_end() {
+   view_observers_lock->rdlock();
++  fprintf(stderr, "[GCS-OPS] notify_of_view_change_end: thread=%lu list_size=%zu "
++          "realtime=%.6f monotonic=%.6f\n",
++          GCS_OPS_GET_THREAD_ID(), view_change_notifier_list.size(),
++          gcs_ops_get_realtime(), gcs_ops_get_monotonic_time());
++  fflush(stderr);
+   for (Plugin_gcs_view_modification_notifier *view_notifier :
+        view_change_notifier_list) {
++    fprintf(stderr, "[GCS-OPS] notify_of_view_change_end: calling end_view_modification on notifier=%p\n",
++            (void*)view_notifier);
++    fflush(stderr);
+     view_notifier->end_view_modification();
+   }
+   view_observers_lock->unlock();
+@@ -331,8 +358,16 @@ void Gcs_operations::notify_of_view_change_end() {
+ 
+ void Gcs_operations::notify_of_view_change_cancellation(int error) {
+   view_observers_lock->rdlock();
++  fprintf(stderr, "[GCS-OPS] notify_of_view_change_cancellation: thread=%lu error=%d list_size=%zu "
++          "realtime=%.6f monotonic=%.6f\n",
++          GCS_OPS_GET_THREAD_ID(), error, view_change_notifier_list.size(),
++          gcs_ops_get_realtime(), gcs_ops_get_monotonic_time());
++  fflush(stderr);
+   for (Plugin_gcs_view_modification_notifier *view_notifier :
+        view_change_notifier_list) {
++    fprintf(stderr, "[GCS-OPS] notify_of_view_change_cancellation: calling cancel_view_modification on notifier=%p error=%d\n",
++            (void*)view_notifier, error);
++    fflush(stderr);
+     view_notifier->cancel_view_modification(error);
+   }
+   view_observers_lock->unlock();
+@@ -350,7 +385,15 @@ void Gcs_operations::remove_view_notifer(
+   if (nullptr == view_notifier) return;
+ 
+   view_observers_lock->wrlock();
++  size_t size_before = view_change_notifier_list.size();
+   view_change_notifier_list.remove(view_notifier);
++  size_t size_after = view_change_notifier_list.size();
++  fprintf(stderr, "[GCS-OPS] remove_view_notifer: notifier=%p thread=%lu "
++          "size_before=%zu size_after=%zu realtime=%.6f monotonic=%.6f\n",
++          (void*)view_notifier, GCS_OPS_GET_THREAD_ID(),
++          size_before, size_after,
++          gcs_ops_get_realtime(), gcs_ops_get_monotonic_time());
++  fflush(stderr);
+   view_observers_lock->unlock();
+ }
+ 
+diff --git a/plugin/group_replication/src/gcs_view_modification_notifier.cc b/plugin/group_replication/src/gcs_view_modification_notifier.cc
+index 22a695fa..4bbe2cdd 100644
+--- a/plugin/group_replication/src/gcs_view_modification_notifier.cc
++++ b/plugin/group_replication/src/gcs_view_modification_notifier.cc
+@@ -23,6 +23,8 @@
+ 
+ #include "plugin/group_replication/include/gcs_view_modification_notifier.h"
+ 
++#include <errno.h>
++#include <pthread.h>
+ #include <time.h>
+ 
+ #include "my_dbug.h"
+@@ -30,6 +32,23 @@
+ #include "mysql/psi/mysql_cond.h"
+ #include "plugin/group_replication/include/plugin_psi.h"
+ 
++/* Debug helper: get monotonic timestamp in seconds */
++static double get_monotonic_time() {
++  struct timespec ts;
++  clock_gettime(CLOCK_MONOTONIC, &ts);
++  return (double)ts.tv_sec + (double)ts.tv_nsec / 1000000000.0;
++}
++
++/* Debug helper: get realtime timestamp in seconds */
++static double get_realtime() {
++  struct timespec ts;
++  clock_gettime(CLOCK_REALTIME, &ts);
++  return (double)ts.tv_sec + (double)ts.tv_nsec / 1000000000.0;
++}
++
++/* Debug helper: get thread ID */
++#define GET_THREAD_ID() ((unsigned long)pthread_self())
++
+ Plugin_gcs_view_modification_notifier::Plugin_gcs_view_modification_notifier()
+     : view_changing(false), cancelled_view_change(false), error(0) {
+   mysql_cond_init(key_GR_COND_view_modification_wait, &wait_for_view_cond);
+@@ -48,6 +67,10 @@ void Plugin_gcs_view_modification_notifier::start_view_modification() {
+   view_changing = true;
+   cancelled_view_change = false;
+   error = 0;
++  fprintf(stderr, "[VIEW-NOTIFIER] start_view_modification: notifier=%p thread=%lu "
++          "realtime=%.6f monotonic=%.6f\n",
++          (void*)this, GET_THREAD_ID(), get_realtime(), get_monotonic_time());
++  fflush(stderr);
+   mysql_mutex_unlock(&wait_for_view_mutex);
+ }
+ 
+@@ -60,6 +83,11 @@ bool Plugin_gcs_view_modification_notifier::is_view_modification_ongoing() {
+ 
+ void Plugin_gcs_view_modification_notifier::end_view_modification() {
+   mysql_mutex_lock(&wait_for_view_mutex);
++  fprintf(stderr, "[VIEW-NOTIFIER] end_view_modification: notifier=%p thread=%lu "
++          "view_changing=%d cancelled=%d realtime=%.6f monotonic=%.6f\n",
++          (void*)this, GET_THREAD_ID(), view_changing, cancelled_view_change,
++          get_realtime(), get_monotonic_time());
++  fflush(stderr);
+   view_changing = false;
+   mysql_cond_broadcast(&wait_for_view_cond);
+   mysql_mutex_unlock(&wait_for_view_mutex);
+@@ -68,6 +96,11 @@ void Plugin_gcs_view_modification_notifier::end_view_modification() {
+ void Plugin_gcs_view_modification_notifier::cancel_view_modification(
+     int errnr) {
+   mysql_mutex_lock(&wait_for_view_mutex);
++  fprintf(stderr, "[VIEW-NOTIFIER] cancel_view_modification: notifier=%p thread=%lu "
++          "errnr=%d view_changing=%d realtime=%.6f monotonic=%.6f\n",
++          (void*)this, GET_THREAD_ID(), errnr, view_changing,
++          get_realtime(), get_monotonic_time());
++  fflush(stderr);
+   view_changing = false;
+   cancelled_view_change = true;
+   this->error = errnr;
+@@ -84,22 +117,54 @@ bool Plugin_gcs_view_modification_notifier::wait_for_view_modification(
+     long timeout) {
+   int result = 0;
+ 
++  double wait_start_realtime = get_realtime();
++  double wait_start_monotonic = get_monotonic_time();
++  fprintf(stderr, "[VIEW-NOTIFIER] wait_for_view_modification BEGIN: notifier=%p thread=%lu "
++          "timeout=%ld realtime=%.6f monotonic=%.6f\n",
++          (void*)this, GET_THREAD_ID(), timeout, wait_start_realtime, wait_start_monotonic);
++  fflush(stderr);
++
+   mysql_mutex_lock(&wait_for_view_mutex);
+ 
+   DBUG_EXECUTE_IF("group_replication_skip_wait_for_view_modification",
+                   { view_changing = false; };);
+ 
++  int loop_count = 0;
+   while (view_changing && !cancelled_view_change) {
+     struct timespec ts;
+     set_timespec(&ts, timeout);
++    double deadline_sec = (double)ts.tv_sec + (double)ts.tv_nsec / 1000000000.0;
++    double current_realtime = get_realtime();
++    double current_monotonic = get_monotonic_time();
++    fprintf(stderr, "[VIEW-NOTIFIER] wait_for_view_modification LOOP[%d]: notifier=%p "
++            "view_changing=%d cancelled=%d deadline=%.6f current_realtime=%.6f "
++            "current_monotonic=%.6f time_until_deadline=%.6f\n",
++            loop_count, (void*)this, view_changing, cancelled_view_change,
++            deadline_sec, current_realtime, current_monotonic,
++            deadline_sec - current_realtime);
++    fflush(stderr);
++
+     result =
+         mysql_cond_timedwait(&wait_for_view_cond, &wait_for_view_mutex, &ts);
+ 
+-    if (result != 0)  // It means that it broke by timeout or an error.
+-    {
++    double after_wait_realtime = get_realtime();
++    double after_wait_monotonic = get_monotonic_time();
++    int is_etimedout = (result == ETIMEDOUT);
++    fprintf(stderr, "[VIEW-NOTIFIER] wait_for_view_modification AFTER_WAIT[%d]: notifier=%p "
++            "result=%d is_ETIMEDOUT=%d errno=%d view_changing=%d cancelled=%d "
++            "realtime=%.6f monotonic=%.6f elapsed_realtime=%.6f elapsed_monotonic=%.6f\n",
++            loop_count, (void*)this, result, is_etimedout, errno,
++            view_changing, cancelled_view_change,
++            after_wait_realtime, after_wait_monotonic,
++            after_wait_realtime - wait_start_realtime,
++            after_wait_monotonic - wait_start_monotonic);
++    fflush(stderr);
++
++    if (result != 0) {
+       view_changing = false;
+       break;
+     }
++    loop_count++;
+   }
+ 
+   DBUG_EXECUTE_IF("group_replication_force_view_modification_timeout",
+@@ -108,6 +173,17 @@ bool Plugin_gcs_view_modification_notifier::wait_for_view_modification(
+ 
+   mysql_mutex_unlock(&wait_for_view_mutex);
+ 
++  double wait_end_realtime = get_realtime();
++  double wait_end_monotonic = get_monotonic_time();
++  fprintf(stderr, "[VIEW-NOTIFIER] wait_for_view_modification END: notifier=%p thread=%lu "
++          "result=%d cancelled=%d error=%d total_elapsed_realtime=%.6f "
++          "total_elapsed_monotonic=%.6f realtime=%.6f monotonic=%.6f\n",
++          (void*)this, GET_THREAD_ID(), result, cancelled_view_change, error,
++          wait_end_realtime - wait_start_realtime,
++          wait_end_monotonic - wait_start_monotonic,
++          wait_end_realtime, wait_end_monotonic);
++  fflush(stderr);
++
+   return (result != 0 || cancelled_view_change);
+ }
+ 
+diff --git a/plugin/group_replication/src/plugin.cc b/plugin/group_replication/src/plugin.cc
+index 03b94a71..cc73b2fa 100644
+--- a/plugin/group_replication/src/plugin.cc
++++ b/plugin/group_replication/src/plugin.cc
+@@ -51,6 +51,25 @@
+ #include "plugin/group_replication/include/udf/udf_registration.h"
+ #include "plugin/group_replication/include/udf/udf_utils.h"
+ 
++/* Debug helper: get monotonic timestamp in seconds */
++static double plugin_get_monotonic_time() {
++  struct timespec ts;
++  clock_gettime(CLOCK_MONOTONIC, &ts);
++  return (double)ts.tv_sec + (double)ts.tv_nsec / 1000000000.0;
++}
++
++/* Debug helper: get realtime timestamp in seconds */
++static double plugin_get_realtime() {
++  struct timespec ts;
++  clock_gettime(CLOCK_REALTIME, &ts);
++  return (double)ts.tv_sec + (double)ts.tv_nsec / 1000000000.0;
++}
++
++/* Debug helper: get thread ID */
++#include <pthread.h>
++#define PLUGIN_GET_THREAD_ID() ((unsigned long)pthread_self())
++
++
+ #ifndef NDEBUG
+ #include "plugin/group_replication/include/services/notification/impl/gms_listener_test.h"
+ #endif
+@@ -805,15 +824,35 @@ int initialize_plugin_and_join(
+     goto err;
+   }
+ 
++  fprintf(stderr, "[GR-PLUGIN] initialize_plugin_and_join: calling wait_for_view_modification "
++          "notifier=%p thread=%lu realtime=%.6f monotonic=%.6f\n",
++          (void*)view_change_notifier, PLUGIN_GET_THREAD_ID(),
++          plugin_get_realtime(), plugin_get_monotonic_time());
++  fflush(stderr);
++
+   if (view_change_notifier->wait_for_view_modification()) {
++    fprintf(stderr, "[GR-PLUGIN] initialize_plugin_and_join: wait_for_view_modification RETURNED TRUE (timeout/error) "
++            "notifier=%p is_cancelled=%d thread=%lu realtime=%.6f monotonic=%.6f\n",
++            (void*)view_change_notifier, view_change_notifier->is_cancelled(),
++            PLUGIN_GET_THREAD_ID(), plugin_get_realtime(), plugin_get_monotonic_time());
++    fflush(stderr);
+     if (!view_change_notifier->is_cancelled()) {
+       // Only log a error when a view modification was not cancelled.
++      fprintf(stderr, "[GR-PLUGIN] initialize_plugin_and_join: TIMEOUT (not cancelled), logging error "
++              "thread=%lu realtime=%.6f monotonic=%.6f\n",
++              PLUGIN_GET_THREAD_ID(), plugin_get_realtime(), plugin_get_monotonic_time());
++      fflush(stderr);
+       LogPluginErr(ERROR_LEVEL, ER_GRP_RPL_TIMEOUT_ON_VIEW_AFTER_JOINING_GRP);
+     }
+     error = view_change_notifier->get_error();
+     gcs_module->remove_view_notifer(view_change_notifier);
+     goto err;
+   }
++  fprintf(stderr, "[GR-PLUGIN] initialize_plugin_and_join: wait_for_view_modification SUCCESS "
++          "notifier=%p thread=%lu realtime=%.6f monotonic=%.6f\n",
++          (void*)view_change_notifier, PLUGIN_GET_THREAD_ID(),
++          plugin_get_realtime(), plugin_get_monotonic_time());
++  fflush(stderr);
+   gcs_module->remove_view_notifer(view_change_notifier);
+ 
+   transaction_consistency_manager->register_transaction_observer();
