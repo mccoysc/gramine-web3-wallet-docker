@@ -2670,8 +2670,8 @@ int main(int argc, char *argv[]) {
         } while(0)
         
         /* First, add specified IP (from --gr-local-address) if provided */
-        if (strlen(specified_ip) > 0) {
-            ADD_IP_IF_UNIQUE(specified_ip);
+        if (config.gr_local_address && strlen(config.gr_local_address) > 0) {
+            ADD_IP_IF_UNIQUE(config.gr_local_address);
         }
         
         /* Add auto-detected LAN IP */
