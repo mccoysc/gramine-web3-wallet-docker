@@ -13,9 +13,9 @@
 -                                      mysql_real_data_home);
 +  const char *gcs_debug_trace_path_env = getenv("GCS_DEBUG_TRACE_PATH");
 +  if (gcs_debug_trace_path_env != nullptr && gcs_debug_trace_path_env[0] != '\0') {
-+    LogPluginErr(INFORMATION_LEVEL, ER_GRP_RPL_GRP_COMMUNICATION_INIT_WITH_CONF,
-+                 "GCS_DEBUG_TRACE_PATH environment variable set, using custom path",
-+                 gcs_debug_trace_path_env);
++    /* Note: Using fprintf instead of LogPluginErr to avoid format string mismatch
++     * with ER_GRP_RPL_GRP_COMMUNICATION_INIT_WITH_CONF which expects many arguments */
++    fprintf(stderr, "[GCS] Using custom GCS_DEBUG_TRACE_PATH: %s\n", gcs_debug_trace_path_env);
 +    gcs_module_parameters.add_parameter("communication_debug_path",
 +                                        gcs_debug_trace_path_env);
 +  } else {
