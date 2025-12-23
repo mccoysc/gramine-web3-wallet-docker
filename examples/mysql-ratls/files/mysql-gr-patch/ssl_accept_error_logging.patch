@@ -10,7 +10,7 @@ index 7ebd3e7b..88e7c5b3 100644
  #endif
  
  #ifdef WIN32
-@@ -45,6 +46,10 @@ void xcom_tcp_server_startup(Xcom_network_provider *net_provider) {
+@@ -45,6 +46,11 @@ void xcom_tcp_server_startup(Xcom_network_provider *net_provider) {
    xcom_port port = net_provider->get_port();
    result tcp_fd = {0, 0};
  
@@ -22,7 +22,7 @@ index 7ebd3e7b..88e7c5b3 100644
    tcp_fd = Xcom_network_provider_library::announce_tcp(port);
  
    if (tcp_fd.val < 0) {
-@@ -52,6 +57,10 @@ void xcom_tcp_server_startup(Xcom_network_provider *net_provider) {
+@@ -52,5 +58,8 @@ void xcom_tcp_server_startup(Xcom_network_provider *net_provider) {
               "Unable to announce tcp port %d. Port already in use?", port);
      net_provider->notify_provider_ready(true);
 +    fprintf(stderr, "[XCOM-LISTENER] xcom_tcp_server_startup FAILED port=%d tcp_fd=%d timestamp=%f\n",
@@ -31,7 +31,7 @@ index 7ebd3e7b..88e7c5b3 100644
      return;
    }
  
-@@ -60,6 +69,10 @@ void xcom_tcp_server_startup(Xcom_network_provider *net_provider) {
+@@ -60,6 +69,9 @@ void xcom_tcp_server_startup(Xcom_network_provider *net_provider) {
    net_provider->set_open_server_socket(tcp_fd);
  
    G_INFO("XCom initialized and ready to accept incoming connections on port %d", port);
@@ -41,7 +41,7 @@ index 7ebd3e7b..88e7c5b3 100644
  
    int accept_fd = -1;
    struct sockaddr_storage sock_addr;
-@@ -80,6 +93,22 @@ void xcom_tcp_server_startup(Xcom_network_provider *net_provider) {
+@@ -80,6 +93,24 @@ void xcom_tcp_server_startup(Xcom_network_provider *net_provider) {
        continue;
      }
  
@@ -66,7 +66,7 @@ index 7ebd3e7b..88e7c5b3 100644
      if (net_provider->get_ssl_mode() == SSL_REQUIRED ||
          net_provider->get_ssl_mode() == SSL_VERIFY_CA ||
          net_provider->get_ssl_mode() == SSL_VERIFY_IDENTITY) {
-@@ -119,7 +148,42 @@ void xcom_tcp_server_startup(Xcom_network_provider *net_provider) {
+@@ -119,7 +150,79 @@ void xcom_tcp_server_startup(Xcom_network_provider *net_provider) {
            }
  
            if (ret_ssl != SSL_SUCCESS) {
