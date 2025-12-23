@@ -1,101 +1,131 @@
-diff --git a/plugin/group_replication/libmysqlgcs/src/bindings/xcom/xcom/xcom_transport.cc b/plugin/group_replication/libmysqlgcs/src/bindings/xcom/xcom/xcom_transport.cc
-index 76601a9e..c8d4e071 100644
---- a/plugin/group_replication/libmysqlgcs/src/bindings/xcom/xcom/xcom_transport.cc
-+++ b/plugin/group_replication/libmysqlgcs/src/bindings/xcom/xcom/xcom_transport.cc
-@@ -26,6 +26,11 @@
- #include <errno.h>
- #include <limits.h>
- #include <math.h>
+diff --git a/plugin/group_replication/libmysqlgcs/src/bindings/xcom/xcom/task.cc b/plugin/group_replication/libmysqlgcs/src/bindings/xcom/xcom/task.cc
+index 7cdfe99b..0bde664d 100644
+--- a/plugin/group_replication/libmysqlgcs/src/bindings/xcom/xcom/task.cc
++++ b/plugin/group_replication/libmysqlgcs/src/bindings/xcom/xcom/task.cc
+@@ -894,11 +894,72 @@ result con_read(connection_descriptor const *rfd, void *buf, int n) {
+   if (rfd->ssl_fd) {
+     ERR_clear_error();
+     ret.val = SSL_read(rfd->ssl_fd, buf, n);
+-    ret.funerr = to_ssl_err(SSL_get_error(rfd->ssl_fd, ret.val));
++    int ssl_err = SSL_get_error(rfd->ssl_fd, ret.val);
++    ret.funerr = to_ssl_err(ssl_err);
 +
-+/* Stack trace support for connection close debugging */
-+#include <execinfo.h>
-+#include <dlfcn.h>
-+#include <cxxabi.h>
- #ifdef _MSC_VER
- #include <stdint.h>
- #endif
-@@ -99,7 +104,74 @@ static xcom_port xcom_listen_port = 0; /* Port used by xcom */
- static int pm(xcom_port port) { return port == xcom_listen_port; }
- /* purecov: end */
- 
-+/* Debug helper: print stack trace with symbols for connection close debugging */
-+static void xcom_print_close_stacktrace(const char *reason, int fd,
-+                                        const char *remote_addr) {
-+  void *buffer[64];
-+  int nptrs;
-+
-+  nptrs = backtrace(buffer, 64);
-+
-+  fprintf(stderr,
-+          "\n[XCOM-CLOSE-DEBUG] ========================================\n");
-+  fprintf(stderr, "[XCOM-CLOSE-DEBUG] Connection close event\n");
-+  fprintf(stderr, "[XCOM-CLOSE-DEBUG] Reason: %s\n",
-+          reason ? reason : "unknown");
-+  fprintf(stderr, "[XCOM-CLOSE-DEBUG] FD: %d\n", fd);
-+  fprintf(stderr, "[XCOM-CLOSE-DEBUG] Remote: %s\n",
-+          remote_addr ? remote_addr : "unknown");
-+  fprintf(stderr, "[XCOM-CLOSE-DEBUG] Timestamp: %f\n", task_now());
-+  fprintf(stderr, "[XCOM-CLOSE-DEBUG] Stack trace (%d frames):\n", nptrs);
-+
-+  /* Get symbol names using backtrace_symbols */
-+  char **symbols = backtrace_symbols(buffer, nptrs);
-+  if (symbols) {
-+    for (int i = 0; i < nptrs; i++) {
-+      /* Try to get more detailed info using dladdr */
-+      Dl_info info;
-+      if (dladdr(buffer[i], &info)) {
-+        /* Try to demangle C++ symbols */
-+        const char *symbol_name = info.dli_sname;
-+        char *demangled = nullptr;
-+        if (symbol_name) {
-+          int status;
-+          demangled = abi::__cxa_demangle(symbol_name, nullptr, nullptr, &status);
-+        }
-+
-+        /* Calculate offset from symbol base */
-+        ptrdiff_t offset = 0;
-+        if (info.dli_saddr) {
-+          offset = (char *)buffer[i] - (char *)info.dli_saddr;
-+        }
-+
-+        fprintf(stderr,
-+                "[XCOM-CLOSE-DEBUG]   #%d %p: %s(%s+0x%lx) [%s]\n", i, buffer[i],
-+                info.dli_fname ? info.dli_fname : "??",
-+                demangled ? demangled : (symbol_name ? symbol_name : "??"),
-+                (unsigned long)offset, symbols[i]);
-+
-+        if (demangled) {
-+          free(demangled);
++    /* Debug logging for read failures */
++    if (ret.val <= 0) {
++      int saved_errno = errno;
++      fprintf(stderr,
++              "[XCOM-READ-DEBUG] con_read SSL: fd=%d ret.val=%d ssl_err=%d "
++              "errno=%d(%s) timestamp=%f\n",
++              rfd->fd, ret.val, ssl_err, saved_errno, strerror(saved_errno),
++              task_now());
++      /* Classify SSL error */
++      if (ret.val == 0) {
++        if (ssl_err == SSL_ERROR_ZERO_RETURN) {
++          fprintf(stderr,
++                  "[XCOM-READ-DEBUG]   -> Peer sent TLS close_notify (orderly "
++                  "shutdown)\n");
++        } else if (ssl_err == SSL_ERROR_SYSCALL && saved_errno == 0) {
++          fprintf(stderr,
++                  "[XCOM-READ-DEBUG]   -> Peer closed connection without "
++                  "close_notify (abrupt)\n");
++        } else {
++          fprintf(stderr, "[XCOM-READ-DEBUG]   -> EOF with ssl_err=%d\n",
++                  ssl_err);
 +        }
 +      } else {
-+        fprintf(stderr, "[XCOM-CLOSE-DEBUG]   #%d %s\n", i, symbols[i]);
++        if (ssl_err == SSL_ERROR_WANT_READ) {
++          fprintf(stderr, "[XCOM-READ-DEBUG]   -> SSL_ERROR_WANT_READ (will "
++                          "retry)\n");
++        } else if (ssl_err == SSL_ERROR_SYSCALL) {
++          fprintf(stderr,
++                  "[XCOM-READ-DEBUG]   -> SSL_ERROR_SYSCALL errno=%d(%s)\n",
++                  saved_errno, strerror(saved_errno));
++        } else {
++          fprintf(stderr, "[XCOM-READ-DEBUG]   -> SSL error code=%d\n",
++                  ssl_err);
++        }
++        /* Drain OpenSSL error queue */
++        unsigned long ossl_err;
++        while ((ossl_err = ERR_get_error()) != 0) {
++          char err_buf[256];
++          ERR_error_string_n(ossl_err, err_buf, sizeof(err_buf));
++          fprintf(stderr, "[XCOM-READ-DEBUG]   OpenSSL: %s\n", err_buf);
++        }
 +      }
++      fflush(stderr);
 +    }
-+    free(symbols);
-+  } else {
-+    /* Fallback: just print addresses */
-+    for (int i = 0; i < nptrs; i++) {
-+      fprintf(stderr, "[XCOM-CLOSE-DEBUG]   #%d %p\n", i, buffer[i]);
-+    }
-+  }
-+  fprintf(stderr,
-+          "[XCOM-CLOSE-DEBUG] ========================================\n\n");
-+  fflush(stderr);
-+}
+   } else {
+     SET_OS_ERR(0);
+     ret.val = (int)recv(rfd->fd, (xcom_buf *)buf, (size_t)n, 0);
+     ret.funerr = to_errno(GET_OS_ERR);
 +
- int close_open_connection(connection_descriptor *conn) {
-+  xcom_print_close_stacktrace("close_open_connection", conn ? conn->fd : -1,
-+                              nullptr);
-   return Network_provider_manager::getInstance().close_xcom_connection(conn);
++    /* Debug logging for read failures */
++    if (ret.val <= 0) {
++      int saved_errno = GET_OS_ERR;
++      fprintf(stderr,
++              "[XCOM-READ-DEBUG] con_read socket: fd=%d ret.val=%d errno=%d(%s) "
++              "timestamp=%f\n",
++              rfd->fd, ret.val, saved_errno, strerror(saved_errno), task_now());
++      if (ret.val == 0) {
++        fprintf(stderr, "[XCOM-READ-DEBUG]   -> Peer closed connection\n");
++      } else {
++        fprintf(stderr, "[XCOM-READ-DEBUG]   -> Socket error\n");
++      }
++      fflush(stderr);
++    }
+   }
+   return ret;
  }
+diff --git a/plugin/group_replication/libmysqlgcs/src/bindings/xcom/xcom/xcom_base.cc b/plugin/group_replication/libmysqlgcs/src/bindings/xcom/xcom/xcom_base.cc
+index 984c81ce..5c6a9642 100644
+--- a/plugin/group_replication/libmysqlgcs/src/bindings/xcom/xcom/xcom_base.cc
++++ b/plugin/group_replication/libmysqlgcs/src/bindings/xcom/xcom/xcom_base.cc
+@@ -6493,6 +6493,7 @@ int acceptor_learner_task(task_arg arg) {
+   server *srv;
+   site_def const *site;
+   int behind;
++  double start_ts;  /* Debug: connection start timestamp */
+   ENV_INIT
+   END_ENV_INIT
+   END_ENV;
+@@ -6510,6 +6511,13 @@ int acceptor_learner_task(task_arg arg) {
+   ep->errors = 0;
+   ep->srv = nullptr;
+   ep->behind = FALSE;
++  ep->start_ts = task_now();  /* Debug: record start time */
++
++  /* Debug: log task start */
++  fprintf(stderr,
++          "[XCOM-CONN-DEBUG] acceptor_learner_task START fd=%d start_ts=%f\n",
++          ep->rfd->fd, ep->start_ts);
++  fflush(stderr);
  
-@@ -1923,7 +1995,8 @@ void close_connection(connection_descriptor *con) {
- }
+   /* We have a connection, make socket non-blocking and wait for request */
+   unblock_fd(ep->rfd->fd);
+@@ -6517,6 +6525,13 @@ int acceptor_learner_task(task_arg arg) {
+   wait_io(stack, ep->rfd->fd, 'r');
+   TASK_YIELD;
  
- void shutdown_connection(connection_descriptor *con) {
--  /* printstack(1); */
-+  xcom_print_close_stacktrace("shutdown_connection", con ? con->fd : -1,
-+                              nullptr);
-   ADD_DBG(D_TRANSPORT, add_event(EVENT_DUMP_PAD, string_arg("con->fd"));
-           add_event(EVENT_DUMP_PAD, int_arg(con->fd)););
-   close_connection(con);
++  /* Debug: log first readable event */
++  fprintf(stderr,
++          "[XCOM-CONN-DEBUG] acceptor_learner_task FIRST_READABLE fd=%d "
++          "now=%f delta=%f\n",
++          ep->rfd->fd, task_now(), task_now() - ep->start_ts);
++  fflush(stderr);
++
+   set_connected(ep->rfd, CON_FD);
+   link_init(&ep->reply_queue, TYPE_HASH("msg_link"));
+ 
+@@ -6549,6 +6564,12 @@ again:
+       continue;
+     }
+     if (n <= 0) {
++      /* Debug: log read failure with time delta */
++      fprintf(stderr,
++              "[XCOM-CONN-DEBUG] acceptor_learner_task READ_FAILED fd=%d n=%ld "
++              "now=%f delta=%f\n",
++              ep->rfd->fd, (long)n, task_now(), task_now() - ep->start_ts);
++      fflush(stderr);
+       break;
+     }
+     if (ep->p->op != client_msg) {  // Clients have no site
