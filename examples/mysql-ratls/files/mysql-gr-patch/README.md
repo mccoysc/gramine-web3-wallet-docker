@@ -1,6 +1,6 @@
 # MySQL Group Replication Patch for SGX/Gramine
 
-This directory contains modified MySQL Group Replication plugin source files that enable GR to work in SGX/Gramine environments. The patches address eight main issues:
+This directory contains modified MySQL Group Replication plugin source files that enable GR to work in SGX/Gramine environments. The patches address nine main issues:
 
 1. **Network Interface Enumeration**: The standard `getifaddrs()` system call is not available in Gramine/SGX due to netlink socket limitations.
 2. **SSL CA Configuration**: MySQL unconditionally passes an empty `ca_file` parameter to XCom SSL initialization, causing failures when using self-signed certificates without a CA (e.g., RA-TLS).
@@ -10,6 +10,7 @@ This directory contains modified MySQL Group Replication plugin source files tha
 6. **XCom Node Detection Race Condition**: When a new node joins the cluster, its `detected` timestamp is initialized to 0, causing it to be immediately marked as "not alive" before any message exchange can occur. This race condition is exacerbated in SGX/RA-TLS environments where SSL handshakes are slower.
 7. **XCom Connection Timeout Too Short**: The `dial()` function in XCom uses a hardcoded 1-second (1000ms) connection timeout for both TCP connect and SSL handshake. This is insufficient for RA-TLS in SGX environments where SGX quote generation and verification can take several seconds.
 8. **XCom Detector Live Timeout Too Short**: The `DETECTOR_LIVE_TIMEOUT` constant is hardcoded to 5 seconds. In SGX/RA-TLS environments, the time from connection establishment to first XCom message exchange can exceed 5 seconds due to slow SSL handshakes and protocol negotiation, causing the detector to incorrectly mark nodes as dead.
+9. **View Change Notification Debug Logging**: When Node2 joins Node1's cluster, the "Timeout on wait for view after joining group" error occurs after ~35 seconds. This debug patch adds comprehensive logging to trace the view change notification flow and identify the root cause.
 
 ## Problem 1: getifaddrs() Not Available
 
@@ -369,3 +370,91 @@ Or let the auto-detection work by not setting the variable (requires network con
 ## Building
 
 The GitHub Actions workflow in this repository automatically compiles the modified GR plugin and publishes it to GitHub Releases when these files change.
+
+## Problem 9: View Change Notification Debug Logging
+
+When Node2 attempts to join Node1's cluster, the join fails with "Timeout on wait for view after joining group" error after approximately 35 seconds, even though the `VIEW_MODIFICATION_TIMEOUT` is set to 60 seconds. Analysis of the GCS_DEBUG_TRACE logs shows:
+
+1. Node1 successfully connects to Node2:33062 three times (SSL handshakes succeed)
+2. Node1 sees `process_view: total_number_nodes=2` (Node2 joined successfully at XCom layer)
+3. Then connections start failing with "error 0-Success" (poll timeout)
+4. Node2's XCom port 33062 closes prematurely
+
+The root cause is unclear because the XCom layer successfully delivers the view to both nodes, but the GR plugin layer on Node2 may not be processing the view change notification correctly. Possible causes include:
+
+1. **Clock skew in SGX/Gramine**: The `wait_for_view_modification()` function uses `CLOCK_REALTIME` for the timeout deadline. In SGX enclaves, `CLOCK_REALTIME` can be unstable or drift, causing a 60-second timeout to expire in ~35 seconds of wall time.
+
+2. **Notifier mismatch**: The view change event handler might be using a different notifier instance than the one being waited on in `initialize_plugin_and_join()`.
+
+3. **View event not reaching GR plugin layer**: The XCom layer delivered the view, but the GR plugin layer on Node2 might not have processed it due to thread blockage or an error in the event handler chain.
+
+4. **`mysql_cond_timedwait` returning unexpected error**: The function treats any non-zero return as a timeout, but it could be returning an error code other than `ETIMEDOUT`.
+
+## Solution 9: Comprehensive Debug Logging
+
+We add detailed logging to trace the view change notification flow:
+
+### 1. `gcs_view_modification_notifier.cc` - Notifier state machine
+
+Logs are added to `start_view_modification()`, `end_view_modification()`, `cancel_view_modification()`, and `wait_for_view_modification()` with:
+- Notifier pointer address (to detect notifier mismatch)
+- Thread ID (to detect thread blockage)
+- Both `CLOCK_REALTIME` and `CLOCK_MONOTONIC` timestamps (to detect clock skew)
+- `mysql_cond_timedwait` return code and whether it equals `ETIMEDOUT`
+- Computed deadline and time until deadline
+- Elapsed time (both realtime and monotonic)
+
+### 2. `gcs_operations.cc` - Notifier registration/unregistration
+
+Logs are added to `notify_of_view_change_end()`, `notify_of_view_change_cancellation()`, and `remove_view_notifer()` with:
+- Notifier list size before/after operations
+- Notifier pointer addresses being iterated
+
+### 3. `gcs_event_handlers.cc` - View change handler
+
+Logs are added to `on_view_changed()` and `handle_joining_members()` with:
+- `is_joining` and `is_leaving` flags
+- View member counts
+- `check_group_compatibility()` result
+- Which notification path is taken (end vs cancel)
+
+### 4. `plugin.cc` - Join initialization
+
+Logs are added around `wait_for_view_modification()` call with:
+- Notifier pointer address
+- Whether wait returned due to timeout or cancellation
+
+### Log Format
+
+All logs use the format `[COMPONENT] function: key=value ...` and include:
+- `realtime=X.XXXXXX` - `CLOCK_REALTIME` timestamp
+- `monotonic=X.XXXXXX` - `CLOCK_MONOTONIC` timestamp
+- `thread=XXXXXXXX` - Thread ID
+
+### How to Use
+
+1. Apply the patch and rebuild the GR plugin
+2. Start Node1 and Node2 with GR enabled
+3. Capture stderr output from both nodes
+4. Look for the following patterns:
+   - `[VIEW-NOTIFIER] wait_for_view_modification BEGIN` - When wait starts
+   - `[VIEW-NOTIFIER] wait_for_view_modification AFTER_WAIT` - After each timedwait
+   - `[GCS-EVENT] handle_joining_members` - When view change is processed
+   - `[VIEW-NOTIFIER] end_view_modification` - When notifier is signaled
+   - `[VIEW-NOTIFIER] wait_for_view_modification END` - When wait completes
+
+### Diagnosing the Issue
+
+Compare the timestamps to identify:
+- **Clock skew**: If `elapsed_realtime` differs significantly from `elapsed_monotonic`, clock skew is present
+- **Notifier mismatch**: If the notifier pointer in `wait_for_view_modification` differs from the one in `end_view_modification`
+- **Handler not called**: If `handle_joining_members` is never logged on Node2
+- **Unexpected error**: If `result != 0` but `is_ETIMEDOUT=0`, the timedwait returned an unexpected error
+
+### Files Modified
+
+- `view_change_debug_logging.patch` - Patch file for:
+  - `plugin/group_replication/src/gcs_view_modification_notifier.cc`
+  - `plugin/group_replication/src/gcs_operations.cc`
+  - `plugin/group_replication/src/gcs_event_handlers.cc`
+  - `plugin/group_replication/src/plugin.cc`
