@@ -1,5 +1,4 @@
 diff --git a/plugin/group_replication/libmysqlgcs/src/bindings/xcom/xcom/network/xcom_network_provider.cc b/plugin/group_replication/libmysqlgcs/src/bindings/xcom/xcom/network/xcom_network_provider.cc
-index 7ebd3e7b..88e7c5b3 100644
 --- a/plugin/group_replication/libmysqlgcs/src/bindings/xcom/xcom/network/xcom_network_provider.cc
 +++ b/plugin/group_replication/libmysqlgcs/src/bindings/xcom/xcom/network/xcom_network_provider.cc
 @@ -23,6 +23,7 @@
@@ -10,20 +9,19 @@ index 7ebd3e7b..88e7c5b3 100644
  #endif
  
  #ifdef WIN32
-@@ -45,6 +46,11 @@ void xcom_tcp_server_startup(Xcom_network_provider *net_provider) {
+@@ -42,10 +43,19 @@ void xcom_tcp_server_startup(Xcom_network_provider *net_provider) {
    xcom_port port = net_provider->get_port();
-   result tcp_fd = {0, 0};
  
+   result tcp_fd = {0, 0};
++
 +  /* Debug: log listener startup */
 +  fprintf(stderr, "[XCOM-LISTENER] xcom_tcp_server_startup BEGIN port=%d timestamp=%f\n",
 +          port, seconds());
 +  fflush(stderr);
 +
    tcp_fd = Xcom_network_provider_library::announce_tcp(port);
- 
    if (tcp_fd.val < 0) {
-@@ -52,5 +58,8 @@ void xcom_tcp_server_startup(Xcom_network_provider *net_provider) {
-              "Unable to announce tcp port %d. Port already in use?", port);
+     g_critical("Unable to announce tcp port %d. Port already in use?", port);
      net_provider->notify_provider_ready(true);
 +    fprintf(stderr, "[XCOM-LISTENER] xcom_tcp_server_startup FAILED port=%d tcp_fd=%d timestamp=%f\n",
 +            port, tcp_fd.val, seconds());
@@ -31,17 +29,17 @@ index 7ebd3e7b..88e7c5b3 100644
      return;
    }
  
-@@ -60,6 +69,9 @@ void xcom_tcp_server_startup(Xcom_network_provider *net_provider) {
-   net_provider->set_open_server_socket(tcp_fd);
+@@ -54,6 +64,9 @@ void xcom_tcp_server_startup(Xcom_network_provider *net_provider) {
  
-   G_INFO("XCom initialized and ready to accept incoming connections on port %d", port);
+   G_INFO("XCom initialized and ready to accept incoming connections on port %d",
+          port);
 +  fprintf(stderr, "[XCOM-LISTENER] xcom_tcp_server_startup LISTENING port=%d fd=%d timestamp=%f\n",
 +          port, tcp_fd.val, seconds());
 +  fflush(stderr);
  
    int accept_fd = -1;
    struct sockaddr_storage sock_addr;
-@@ -80,6 +93,24 @@ void xcom_tcp_server_startup(Xcom_network_provider *net_provider) {
+@@ -77,6 +90,24 @@ void xcom_tcp_server_startup(Xcom_network_provider *net_provider) {
        continue;
      }
  
@@ -63,10 +61,10 @@ index 7ebd3e7b..88e7c5b3 100644
 +      fflush(stderr);
 +    }
 +
-     if (net_provider->get_ssl_mode() == SSL_REQUIRED ||
-         net_provider->get_ssl_mode() == SSL_VERIFY_CA ||
-         net_provider->get_ssl_mode() == SSL_VERIFY_IDENTITY) {
-@@ -119,7 +150,79 @@ void xcom_tcp_server_startup(Xcom_network_provider *net_provider) {
+     /* Callback to check that the file descriptor is accepted. */
+     if (!Xcom_network_provider_library::allowlist_socket_accept(
+             accept_fd, get_site_def())) {
+@@ -118,9 +149,68 @@ void xcom_tcp_server_startup(Xcom_network_provider *net_provider) {
            }
  
            if (ret_ssl != SSL_SUCCESS) {
@@ -113,7 +111,6 @@ index 7ebd3e7b..88e7c5b3 100644
 +            fflush(stderr);
              net_provider->close_connection(*new_incoming_connection);
              accept_fd = -1;
--          }
 +          } else {
 +            // SSL accept succeeded - log success
 +            char peer_addr[INET6_ADDRSTRLEN] = {0};
@@ -134,17 +131,18 @@ index 7ebd3e7b..88e7c5b3 100644
 +            fprintf(stderr, "[XCOM-LISTENER] SSL_accept SUCCESS: fd=%d peer=%s:%d timestamp=%f\n",
 +                    accept_fd, peer_addr, peer_port, seconds());
 +            fflush(stderr);
-+          }
-+        }
-+      }
-+    }
-+  } while (!net_provider->should_shutdown_tcp_server());
-+
+           }
+         }
+       }
+@@ -134,6 +224,11 @@ void xcom_tcp_server_startup(Xcom_network_provider *net_provider) {
+     }
+   } while (!net_provider->should_shutdown_tcp_server());
+ 
 +  /* Debug: log listener shutdown */
 +  fprintf(stderr, "[XCOM-LISTENER] xcom_tcp_server_startup SHUTDOWN port=%d timestamp=%f\n",
 +          port, seconds());
 +  fflush(stderr);
 +
-+  net_provider->cleanup_secure_connections_context();
-+  return;
-+}
+   net_provider->cleanup_secure_connections_context();
+ 
+   return;
