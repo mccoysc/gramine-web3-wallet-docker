@@ -578,8 +578,8 @@ static int find_available_port(int start_port) {
     return -1;  /* No available port found */
 }
 
-/* Get or create stable server_id based on IP hash */
-static unsigned int get_or_create_server_id(const char *lan_ip) {
+/* Get or create random server_id for MySQL Group Replication */
+static unsigned int get_or_create_server_id(void) {
     unsigned int server_id = 0;
     
     /* Try to read existing server_id from file */
@@ -593,18 +593,31 @@ static unsigned int get_or_create_server_id(const char *lan_ip) {
         fclose(f);
     }
     
-    /* Generate new server_id based on hash of LAN IP */
-    unsigned int hash = 5381;
-    const char *str = lan_ip;
-    int c;
-    while ((c = *str++)) {
-        hash = ((hash << 5) + hash) + c;
+    /* Generate random server_id using /dev/urandom.
+     * Each node must have a unique server_id for MySQL Group Replication.
+     * Random generation ensures uniqueness even when multiple nodes
+     * run on the same host with network=host (same IP).
+     */
+    f = fopen("/dev/urandom", "rb");
+    if (f) {
+        if (fread(&server_id, sizeof(server_id), 1, f) != 1) {
+            /* Fallback to time-based seed if urandom fails */
+            srand((unsigned int)time(NULL) ^ getpid());
+            server_id = (unsigned int)rand();
+        }
+        fclose(f);
+    } else {
+        /* Fallback to time-based seed */
+        srand((unsigned int)time(NULL) ^ getpid());
+        server_id = (unsigned int)rand();
     }
     
     /* Ensure server_id is in valid range (1 to 2^32-1) and not 0 */
-    server_id = (hash % 4294967294) + 1;
+    if (server_id == 0) {
+        server_id = 1;
+    }
     
-    /* Save server_id to file */
+    /* Save server_id to file for persistence across restarts */
     f = fopen(GR_SERVER_ID_FILE, "w");
     if (f) {
         fprintf(f, "%u\n", server_id);
@@ -2592,7 +2605,7 @@ int main(int argc, char *argv[]) {
         }
         
         /* Get or create stable server ID */
-        server_id = get_or_create_server_id(lan_ip);
+        server_id = get_or_create_server_id();
         printf("[Launcher] Server ID: %u\n", server_id);
         
         /* Build seeds list from user-specified seeds only.
