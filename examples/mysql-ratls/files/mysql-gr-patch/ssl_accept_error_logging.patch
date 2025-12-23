@@ -10,7 +10,63 @@ index 7ebd3e7b..88e7c5b3 100644
  #endif
  
  #ifdef WIN32
-@@ -119,7 +120,42 @@ void xcom_tcp_server_startup(Xcom_network_provider *net_provider) {
+@@ -45,6 +46,10 @@ void xcom_tcp_server_startup(Xcom_network_provider *net_provider) {
+   xcom_port port = net_provider->get_port();
+   result tcp_fd = {0, 0};
+ 
++  /* Debug: log listener startup */
++  fprintf(stderr, "[XCOM-LISTENER] xcom_tcp_server_startup BEGIN port=%d timestamp=%f\n",
++          port, seconds());
++  fflush(stderr);
++
+   tcp_fd = Xcom_network_provider_library::announce_tcp(port);
+ 
+   if (tcp_fd.val < 0) {
+@@ -52,6 +57,10 @@ void xcom_tcp_server_startup(Xcom_network_provider *net_provider) {
+              "Unable to announce tcp port %d. Port already in use?", port);
+     net_provider->notify_provider_ready(true);
++    fprintf(stderr, "[XCOM-LISTENER] xcom_tcp_server_startup FAILED port=%d tcp_fd=%d timestamp=%f\n",
++            port, tcp_fd.val, seconds());
++    fflush(stderr);
+     return;
+   }
+ 
+@@ -60,6 +69,10 @@ void xcom_tcp_server_startup(Xcom_network_provider *net_provider) {
+   net_provider->set_open_server_socket(tcp_fd);
+ 
+   G_INFO("XCom initialized and ready to accept incoming connections on port %d", port);
++  fprintf(stderr, "[XCOM-LISTENER] xcom_tcp_server_startup LISTENING port=%d fd=%d timestamp=%f\n",
++          port, tcp_fd.val, seconds());
++  fflush(stderr);
+ 
+   int accept_fd = -1;
+   struct sockaddr_storage sock_addr;
+@@ -80,6 +93,22 @@ void xcom_tcp_server_startup(Xcom_network_provider *net_provider) {
+       continue;
+     }
+ 
++    /* Debug: log accepted connection */
++    {
++      char peer_addr[INET6_ADDRSTRLEN] = {0};
++      int peer_port = 0;
++      if (sock_addr.ss_family == AF_INET) {
++        struct sockaddr_in *s4 = (struct sockaddr_in *)&sock_addr;
++        inet_ntop(AF_INET, &s4->sin_addr, peer_addr, sizeof(peer_addr));
++        peer_port = ntohs(s4->sin_port);
++      } else if (sock_addr.ss_family == AF_INET6) {
++        struct sockaddr_in6 *s6 = (struct sockaddr_in6 *)&sock_addr;
++        inet_ntop(AF_INET6, &s6->sin6_addr, peer_addr, sizeof(peer_addr));
++        peer_port = ntohs(s6->sin6_port);
++      }
++      fprintf(stderr, "[XCOM-LISTENER] TCP accept: fd=%d peer=%s:%d timestamp=%f\n",
++              accept_fd, peer_addr, peer_port, seconds());
++      fflush(stderr);
++    }
++
+     if (net_provider->get_ssl_mode() == SSL_REQUIRED ||
+         net_provider->get_ssl_mode() == SSL_VERIFY_CA ||
+         net_provider->get_ssl_mode() == SSL_VERIFY_IDENTITY) {
+@@ -119,7 +148,42 @@ void xcom_tcp_server_startup(Xcom_network_provider *net_provider) {
            }
  
            if (ret_ssl != SSL_SUCCESS) {
@@ -34,6 +90,8 @@ index 7ebd3e7b..88e7c5b3 100644
 +            int saved_errno = errno;
 +            G_DEBUG("acceptor learner accept SSL failed, SSL_get_error=%d, peer=%s:%d, errno=%d(%s)",
 +                    err, peer_addr, peer_port, saved_errno, strerror(saved_errno));
++            fprintf(stderr, "[XCOM-LISTENER] SSL_accept FAILED: fd=%d peer=%s:%d ssl_err=%d errno=%d(%s) timestamp=%f\n",
++                    accept_fd, peer_addr, peer_port, err, saved_errno, strerror(saved_errno), seconds());
 +            // Print detailed OpenSSL error information
 +            long verify_result = SSL_get_verify_result(new_incoming_connection->ssl_fd);
 +            G_DEBUG("SSL_get_verify_result=%ld", verify_result);
@@ -50,7 +108,43 @@ index 7ebd3e7b..88e7c5b3 100644
 +            while ((ssl_err = ERR_get_error()) != 0) {
 +              ERR_error_string_n(ssl_err, err_buf, sizeof(err_buf));
 +              G_DEBUG("OpenSSL error: %s", err_buf);
++              fprintf(stderr, "[XCOM-LISTENER]   OpenSSL: %s\n", err_buf);
 +            }
++            fflush(stderr);
              net_provider->close_connection(*new_incoming_connection);
              accept_fd = -1;
-           }
+-          }
++          } else {
++            // SSL accept succeeded - log success
++            char peer_addr[INET6_ADDRSTRLEN] = {0};
++            int peer_port = 0;
++            struct sockaddr_storage peer_sockaddr;
++            socklen_t peer_len = sizeof(peer_sockaddr);
++            if (getpeername(accept_fd, (struct sockaddr *)&peer_sockaddr, &peer_len) == 0) {
++              if (peer_sockaddr.ss_family == AF_INET) {
++                struct sockaddr_in *s4 = (struct sockaddr_in *)&peer_sockaddr;
++                inet_ntop(AF_INET, &s4->sin_addr, peer_addr, sizeof(peer_addr));
++                peer_port = ntohs(s4->sin_port);
++              } else if (peer_sockaddr.ss_family == AF_INET6) {
++                struct sockaddr_in6 *s6 = (struct sockaddr_in6 *)&peer_sockaddr;
++                inet_ntop(AF_INET6, &s6->sin6_addr, peer_addr, sizeof(peer_addr));
++                peer_port = ntohs(s6->sin6_port);
++              }
++            }
++            fprintf(stderr, "[XCOM-LISTENER] SSL_accept SUCCESS: fd=%d peer=%s:%d timestamp=%f\n",
++                    accept_fd, peer_addr, peer_port, seconds());
++            fflush(stderr);
++          }
++        }
++      }
++    }
++  } while (!net_provider->should_shutdown_tcp_server());
++
++  /* Debug: log listener shutdown */
++  fprintf(stderr, "[XCOM-LISTENER] xcom_tcp_server_startup SHUTDOWN port=%d timestamp=%f\n",
++          port, seconds());
++  fflush(stderr);
++
++  net_provider->cleanup_secure_connections_context();
++  return;
++}
