@@ -1,8 +1,8 @@
 diff --git a/plugin/group_replication/libmysqlgcs/src/bindings/xcom/xcom/task.cc b/plugin/group_replication/libmysqlgcs/src/bindings/xcom/xcom/task.cc
-index 7cdfe99b..e077d329 100644
+index 7cdfe99b..993d1a76 100644
 --- a/plugin/group_replication/libmysqlgcs/src/bindings/xcom/xcom/task.cc
 +++ b/plugin/group_replication/libmysqlgcs/src/bindings/xcom/xcom/task.cc
-@@ -888,17 +888,200 @@ static uint64_t send_bytes;
+@@ -888,17 +888,123 @@ static uint64_t send_bytes;
  static uint64_t receive_bytes;
  
  #ifndef XCOM_WITHOUT_OPENSSL
@@ -124,95 +124,11 @@ index 7cdfe99b..e077d329 100644
 +      }
 +      fflush(stderr);
 +    }
-  }
+   }
    return ret;
  }
-+
-+result con_write(connection_descriptor const *wfd, void *buf, int n) {
-+  result ret = {0, 0};
-+
-+  if (wfd->ssl_fd) {
-+    ERR_clear_error();
-+    ret.val = SSL_write(wfd->ssl_fd, buf, n);
-+    int ssl_err = SSL_get_error(wfd->ssl_fd, ret.val);
-+    ret.funerr = to_ssl_err(ssl_err);
-+
-+    /* Debug logging for write operations */
-+    {
-+      int saved_errno = errno;
-+      char local_addr[INET6_ADDRSTRLEN + 1] = {0};
-+      char peer_addr[INET6_ADDRSTRLEN + 1] = {0};
-+      int local_port = 0, peer_port = 0;
-+      get_local_addr_str(wfd->fd, local_addr, sizeof(local_addr), &local_port);
-+      get_peer_addr_str(wfd->fd, peer_addr, sizeof(peer_addr), &peer_port);
-+      
-+      if (ret.val <= 0) {
-+        fprintf(stderr,
-+                "[XCOM-WRITE-DEBUG] con_write SSL FAILED: fd=%d local=%s:%d peer=%s:%d "
-+                "n=%d ret.val=%d ssl_err=%d errno=%d(%s) timestamp=%f\n",
-+                wfd->fd, local_addr, local_port, peer_addr, peer_port,
-+                n, ret.val, ssl_err, saved_errno, strerror(saved_errno), task_now());
-+        /* Classify SSL error */
-+        if (ssl_err == SSL_ERROR_WANT_WRITE) {
-+          fprintf(stderr, "[XCOM-WRITE-DEBUG]   -> SSL_ERROR_WANT_WRITE (will retry)\n");
-+        } else if (ssl_err == SSL_ERROR_SYSCALL) {
-+          fprintf(stderr, "[XCOM-WRITE-DEBUG]   -> SSL_ERROR_SYSCALL errno=%d(%s)\n",
-+                  saved_errno, strerror(saved_errno));
-+        } else if (ssl_err == SSL_ERROR_ZERO_RETURN) {
-+          fprintf(stderr, "[XCOM-WRITE-DEBUG]   -> SSL_ERROR_ZERO_RETURN (peer closed)\n");
-+        } else {
-+          fprintf(stderr, "[XCOM-WRITE-DEBUG]   -> SSL error code=%d\n", ssl_err);
-+        }
-+        /* Drain OpenSSL error queue */
-+        unsigned long ossl_err;
-+        while ((ossl_err = ERR_get_error()) != 0) {
-+          char err_buf[256];
-+          ERR_error_string_n(ossl_err, err_buf, sizeof(err_buf));
-+          fprintf(stderr, "[XCOM-WRITE-DEBUG]   OpenSSL: %s\n", err_buf);
-+        }
-+        fflush(stderr);
-+      } else {
-+        /* Log successful first write for debugging connection establishment */
-+        static int first_write_logged = 0;
-+        if (!first_write_logged || ret.val != n) {
-+          fprintf(stderr,
-+                  "[XCOM-WRITE-DEBUG] con_write SSL: fd=%d local=%s:%d peer=%s:%d "
-+                  "n=%d ret.val=%d timestamp=%f\n",
-+                  wfd->fd, local_addr, local_port, peer_addr, peer_port,
-+                  n, ret.val, task_now());
-+          fflush(stderr);
-+          first_write_logged = 1;
-+        }
-+      }
-+    }
-+  } else {
-+    SET_OS_ERR(0);
-+    ret.val = (int)send(wfd->fd, (xcom_buf *)buf, (size_t)n, 0);
-+    ret.funerr = to_errno(GET_OS_ERR);
-+
-+    /* Debug logging for write operations */
-+    {
-+      int saved_errno = GET_OS_ERR;
-+      char local_addr[INET6_ADDRSTRLEN + 1] = {0};
-+      char peer_addr[INET6_ADDRSTRLEN + 1] = {0};
-+      int local_port = 0, peer_port = 0;
-+      get_local_addr_str(wfd->fd, local_addr, sizeof(local_addr), &local_port);
-+      get_peer_addr_str(wfd->fd, peer_addr, sizeof(peer_addr), &peer_port);
-+      
-+      if (ret.val <= 0) {
-+        fprintf(stderr,
-+                "[XCOM-WRITE-DEBUG] con_write socket FAILED: fd=%d local=%s:%d peer=%s:%d "
-+                "n=%d ret.val=%d errno=%d(%s) timestamp=%f\n",
-+                wfd->fd, local_addr, local_port, peer_addr, peer_port,
-+                n, ret.val, saved_errno, strerror(saved_errno), task_now());
-+        fflush(stderr);
-+      }
-+    }
-+  }
-+  return ret;
-+}
- diff --git a/plugin/group_replication/libmysqlgcs/src/bindings/xcom/xcom/xcom_base.cc b/plugin/group_replication/libmysqlgcs/src/bindings/xcom/xcom/xcom_base.cc
-index 984c81ce..12782382 100644
+diff --git a/plugin/group_replication/libmysqlgcs/src/bindings/xcom/xcom/xcom_base.cc b/plugin/group_replication/libmysqlgcs/src/bindings/xcom/xcom/xcom_base.cc
+index 984c81ce..80efb694 100644
 --- a/plugin/group_replication/libmysqlgcs/src/bindings/xcom/xcom/xcom_base.cc
 +++ b/plugin/group_replication/libmysqlgcs/src/bindings/xcom/xcom/xcom_base.cc
 @@ -6481,6 +6481,26 @@ static bool_t should_poll_cache(pax_op op) {
@@ -286,17 +202,3 @@ index 984c81ce..12782382 100644
    set_connected(ep->rfd, CON_FD);
    link_init(&ep->reply_queue, TYPE_HASH("msg_link"));
  
-@@ -6549,6 +6592,13 @@ again:
-       continue;
-     }
-     if (n <= 0) {
-+      /* Debug: log read failure with time delta */
-+      fprintf(stderr,
-+              "[XCOM-CONN-DEBUG] acceptor_learner_task READ_FAILED fd=%d "
-+              "peer=%s:%d n=%ld now=%f delta=%f\n",
-+              ep->rfd->fd, ep->peer_addr, ep->peer_port, (long)n, task_now(),
-+              task_now() - ep->start_ts);
-+      fflush(stderr);
-       break;
-     }
-     if (ep->p->op != client_msg) {  // Clients have no site
