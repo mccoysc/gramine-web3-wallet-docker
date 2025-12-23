@@ -578,8 +578,8 @@ static int find_available_port(int start_port) {
     return -1;  /* No available port found */
 }
 
-/* Get or create stable server_id based on IP hash */
-static unsigned int get_or_create_server_id(const char *lan_ip) {
+/* Get or create server_id for MySQL Group Replication based on IP+port hash */
+static unsigned int get_or_create_server_id(const char *lan_ip, int gr_port) {
     unsigned int server_id = 0;
     
     /* Try to read existing server_id from file */
@@ -593,18 +593,24 @@ static unsigned int get_or_create_server_id(const char *lan_ip) {
         fclose(f);
     }
     
-    /* Generate new server_id based on hash of LAN IP */
+    /* Generate server_id based on hash of LAN IP and GR port.
+     * Including the GR port ensures unique server_ids when multiple nodes
+     * run on the same host with network=host (same IP, different ports).
+     */
     unsigned int hash = 5381;
     const char *str = lan_ip;
     int c;
     while ((c = *str++)) {
         hash = ((hash << 5) + hash) + c;
     }
+    /* Include GR port in the hash to differentiate nodes on the same host */
+    hash = ((hash << 5) + hash) + (gr_port & 0xFF);
+    hash = ((hash << 5) + hash) + ((gr_port >> 8) & 0xFF);
     
     /* Ensure server_id is in valid range (1 to 2^32-1) and not 0 */
     server_id = (hash % 4294967294) + 1;
     
-    /* Save server_id to file */
+    /* Save server_id to file for persistence across restarts */
     f = fopen(GR_SERVER_ID_FILE, "w");
     if (f) {
         fprintf(f, "%u\n", server_id);
@@ -2592,7 +2598,7 @@ int main(int argc, char *argv[]) {
         }
         
         /* Get or create stable server ID */
-        server_id = get_or_create_server_id(lan_ip);
+        server_id = get_or_create_server_id(lan_ip, config.gr_port);
         printf("[Launcher] Server ID: %u\n", server_id);
         
         /* Build seeds list from user-specified seeds only.
