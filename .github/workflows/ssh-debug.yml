@@ -225,9 +225,9 @@ jobs:
             OLD_PID=$(cat "$TMATE_PID_FILE" 2>/dev/null || echo "")
             if [ -n "$OLD_PID" ] && kill -0 "$OLD_PID" 2>/dev/null; then
               echo "Killing old tmate process (PID: $OLD_PID)"
-              kill "$OLD_PID" 2>/dev/null || true
+              sudo kill "$OLD_PID" 2>/dev/null || kill "$OLD_PID" 2>/dev/null || true
             fi
-            rm -f "$TMATE_PID_FILE"
+            sudo rm -f "$TMATE_PID_FILE" 2>/dev/null || rm -f "$TMATE_PID_FILE" 2>/dev/null || true
           fi
           
           # Kill old monitor if exists
@@ -235,13 +235,13 @@ jobs:
             OLD_PID=$(cat "$MONITOR_PID_FILE" 2>/dev/null || echo "")
             if [ -n "$OLD_PID" ] && kill -0 "$OLD_PID" 2>/dev/null; then
               echo "Killing old monitor process (PID: $OLD_PID)"
-              kill "$OLD_PID" 2>/dev/null || true
+              sudo kill "$OLD_PID" 2>/dev/null || kill "$OLD_PID" 2>/dev/null || true
             fi
-            rm -f "$MONITOR_PID_FILE"
+            sudo rm -f "$MONITOR_PID_FILE" 2>/dev/null || rm -f "$MONITOR_PID_FILE" 2>/dev/null || true
           fi
           
-          # Remove old socket
-          rm -f "$TMATE_SOCK"
+          # Remove old socket and authorized keys (may be owned by different user from previous run)
+          sudo rm -f "$TMATE_SOCK" /tmp/ssh-debug-authorized-keys 2>/dev/null || rm -f "$TMATE_SOCK" /tmp/ssh-debug-authorized-keys 2>/dev/null || true
           echo "Cleanup completed"
           
       - name: Fetch GitHub SSH keys for actor
@@ -256,6 +256,8 @@ jobs:
           else
             echo "Found SSH keys for $GITHUB_ACTOR:"
             echo "$KEYS"
+            # Remove old file if exists (may be owned by different user from previous run)
+            sudo rm -f /tmp/ssh-debug-authorized-keys 2>/dev/null || rm -f /tmp/ssh-debug-authorized-keys 2>/dev/null || true
             echo "$KEYS" > /tmp/ssh-debug-authorized-keys
           fi
           
