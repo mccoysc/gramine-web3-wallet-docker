@@ -2,7 +2,15 @@ diff --git a/plugin/group_replication/libmysqlgcs/src/bindings/xcom/xcom/network
 index 7ebd3e7b..88e7c5b3 100644
 --- a/plugin/group_replication/libmysqlgcs/src/bindings/xcom/xcom/network/xcom_network_provider.cc
 +++ b/plugin/group_replication/libmysqlgcs/src/bindings/xcom/xcom/network/xcom_network_provider.cc
-@@ -118,7 +118,42 @@ void xcom_tcp_server_startup(Xcom_network_provider *net_provider) {
+@@ -23,6 +23,7 @@
+ 
+ #ifndef _WIN32
+ #include <poll.h>
++#include <arpa/inet.h>
+ #endif
+ 
+ #ifdef WIN32
+@@ -119,7 +120,42 @@ void xcom_tcp_server_startup(Xcom_network_provider *net_provider) {
            }
  
            if (ret_ssl != SSL_SUCCESS) {
