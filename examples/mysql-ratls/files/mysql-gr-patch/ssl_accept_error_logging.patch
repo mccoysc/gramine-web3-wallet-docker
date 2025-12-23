@@ -2,12 +2,30 @@ diff --git a/plugin/group_replication/libmysqlgcs/src/bindings/xcom/xcom/network
 index 7ebd3e7b..88e7c5b3 100644
 --- a/plugin/group_replication/libmysqlgcs/src/bindings/xcom/xcom/network/xcom_network_provider.cc
 +++ b/plugin/group_replication/libmysqlgcs/src/bindings/xcom/xcom/network/xcom_network_provider.cc
-@@ -118,7 +118,24 @@ void xcom_tcp_server_startup(Xcom_network_provider *net_provider) {
+@@ -118,7 +118,43 @@ void xcom_tcp_server_startup(Xcom_network_provider *net_provider) {
            }
  
            if (ret_ssl != SSL_SUCCESS) {
 -            G_DEBUG("acceptor learner accept SSL failed");
-+            G_DEBUG("acceptor learner accept SSL failed, SSL_get_error=%d", err);
++            // Get peer address and port for debugging
++            char peer_addr[INET6_ADDRSTRLEN] = {0};
++            int peer_port = 0;
++            struct sockaddr_storage peer_sockaddr;
++            socklen_t peer_len = sizeof(peer_sockaddr);
++            if (getpeername(accept_fd, (struct sockaddr *)&peer_sockaddr, &peer_len) == 0) {
++              if (peer_sockaddr.ss_family == AF_INET) {
++                struct sockaddr_in *s4 = (struct sockaddr_in *)&peer_sockaddr;
++                inet_ntop(AF_INET, &s4->sin_addr, peer_addr, sizeof(peer_addr));
++                peer_port = ntohs(s4->sin_port);
++              } else if (peer_sockaddr.ss_family == AF_INET6) {
++                struct sockaddr_in6 *s6 = (struct sockaddr_in6 *)&peer_sockaddr;
++                inet_ntop(AF_INET6, &s6->sin6_addr, peer_addr, sizeof(peer_addr));
++                peer_port = ntohs(s6->sin6_port);
++              }
++            }
++            int saved_errno = errno;
++            G_DEBUG("acceptor learner accept SSL failed, SSL_get_error=%d, peer=%s:%d, errno=%d(%s)",
++                    err, peer_addr, peer_port, saved_errno, strerror(saved_errno));
 +            // Print detailed OpenSSL error information
 +            long verify_result = SSL_get_verify_result(new_incoming_connection->ssl_fd);
 +            G_DEBUG("SSL_get_verify_result=%ld", verify_result);

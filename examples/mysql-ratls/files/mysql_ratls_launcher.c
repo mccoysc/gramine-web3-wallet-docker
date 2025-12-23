@@ -786,16 +786,21 @@ static int seed_in_list(const char *seeds, const char *seed_with_port) {
     return found;
 }
 
-/* Build deduplicated seeds list: user-specified seeds first, then auto-generated IPs
- * Order: user-specified seeds (--gr-seeds), then specified_ip, then LAN IP
- * All entries are deduplicated */
+/* Build seeds list from user-specified seeds only.
+ * 
+ * IMPORTANT: We no longer auto-add the local node's IP (specified_ip/lan_ip) to seeds.
+ * This fixes a potential issue where self-connection attempts during Group Replication
+ * join could cause SSL handshake failures and connection churn.
+ * 
+ * For non-bootstrap nodes, seeds should only contain other nodes' addresses.
+ * For bootstrap nodes, seeds list can be empty (they don't need to connect to anyone).
+ */
 static int build_seeds_list(char *seeds_buf, size_t buf_size,
-                            const char *specified_ip, const char *lan_ip,
                             const char *extra_seeds, int gr_port) {
     seeds_buf[0] = '\0';
     size_t len = 0;
     
-    /* First, add user-specified seeds (extra_seeds) at the front */
+    /* Add user-specified seeds (extra_seeds) */
     if (extra_seeds && strlen(extra_seeds) > 0) {
         char *extra_copy = strdup(extra_seeds);
         if (!extra_copy) return -1;
@@ -834,30 +839,6 @@ static int build_seeds_list(char *seeds_buf, size_t buf_size,
         }
         
         free(extra_copy);
-    }
-    
-    /* Add specified IP (from --gr-local-address) if valid */
-    if (specified_ip && strlen(specified_ip) > 0) {
-        char specified_seed[MAX_IP_LEN + 16];
-        snprintf(specified_seed, sizeof(specified_seed), "%s:%d", specified_ip, gr_port);
-        if (!seed_in_list(seeds_buf, specified_seed)) {
-            if (len > 0) {
-                len += snprintf(seeds_buf + len, buf_size - len, ",");
-            }
-            len += snprintf(seeds_buf + len, buf_size - len, "%s", specified_seed);
-        }
-    }
-    
-    /* Add LAN IP if valid */
-    if (lan_ip && strlen(lan_ip) > 0) {
-        char lan_seed[MAX_IP_LEN + 16];
-        snprintf(lan_seed, sizeof(lan_seed), "%s:%d", lan_ip, gr_port);
-        if (!seed_in_list(seeds_buf, lan_seed)) {
-            if (len > 0) {
-                len += snprintf(seeds_buf + len, buf_size - len, ",");
-            }
-            len += snprintf(seeds_buf + len, buf_size - len, "%s", lan_seed);
-        }
     }
     
     printf("[Launcher] Built seeds list: %s\n", seeds_buf);
@@ -2614,18 +2595,12 @@ int main(int argc, char *argv[]) {
         server_id = get_or_create_server_id(lan_ip);
         printf("[Launcher] Server ID: %u\n", server_id);
         
-        /* Build seeds list with user-specified seeds first, then auto-generated IPs
-         * Order: user-specified seeds (--gr-seeds), then specified_ip, then LAN IP
-         * All IPs are deduplicated in build_seeds_list
+        /* Build seeds list from user-specified seeds only.
+         * We no longer auto-add the local node's IP to seeds to avoid self-connection issues.
          * Note: --gr-local-address only accepts IP (no port), port is controlled by --gr-port */
-        char specified_ip[MAX_IP_LEN] = {0};
-        if (config.gr_local_address && strlen(config.gr_local_address) > 0) {
-            strncpy(specified_ip, config.gr_local_address, sizeof(specified_ip) - 1);
-            printf("[Launcher] Specified local address IP: %s\n", specified_ip);
-        }
         
-        /* Build seeds list: user-specified seeds first, then auto-generated IPs */
-        build_seeds_list(seeds_list, sizeof(seeds_list), specified_ip, lan_ip, config.gr_seeds, config.gr_port);
+        /* Build seeds list: only user-specified seeds, no auto-generated IPs */
+        build_seeds_list(seeds_list, sizeof(seeds_list), config.gr_seeds, config.gr_port);
         printf("[Launcher] Seeds list: %s\n", seeds_list);
         printf("[Launcher] GR XCom port: %d\n", config.gr_port);
         
