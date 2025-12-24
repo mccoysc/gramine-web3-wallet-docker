@@ -29,7 +29,7 @@
 /* Configuration constants */
 #define DEFAULT_CERT_PATH "/var/lib/mysql-client-ssl/client-cert.pem"
 #define DEFAULT_KEY_PATH "/app/wallet/mysql-client-keys/client-key.pem"
-#define CLIENT_SCRIPT_PATH "/app/mysql-client.js"
+#define CLIENT_SCRIPT_PATH "/app/code/mysql-client.js"
 
 /* Node.js binary candidate paths (searched in order)
  * IMPORTANT: /usr/local/bin/node is a shell script wrapper, NOT the actual binary!

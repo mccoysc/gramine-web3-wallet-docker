@@ -138,8 +138,11 @@ sys.stack.size = "8M"
 # __TRUSTED_FILES_PLACEHOLDER__
 
 # Allowed files (can be modified at runtime, not integrity-checked)
+# Note: Code directory (/app/code/) is in trusted_files for integrity protection
 sgx.allowed_files = [
+  # Application root directory (for runtime files, excluding /app/code/ which is in trusted_files)
   "file:/app",
+  
   # SSL certificates directory (public certificates only, private keys in encrypted partition)
   "file:/var/lib/mysql-client-ssl/",
   

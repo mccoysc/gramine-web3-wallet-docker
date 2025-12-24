@@ -55,10 +55,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     && rm -rf /var/lib/apt/lists/*
 
 # Create application directories
-RUN mkdir -p /app /opt/mysql-client-ratls/launcher /var/lib/mysql-client-ssl
-
-# Install mysql2 npm package for Node.js MySQL client
-RUN cd /app && npm init -y && npm install mysql2 && npm cache clean --force
+RUN mkdir -p /app/code /opt/mysql-client-ratls/launcher /var/lib/mysql-client-ssl
 
 # Download cJSON library (MIT licensed JSON parser)
 RUN curl -fsSL https://raw.githubusercontent.com/DaveGamble/cJSON/v1.7.18/cJSON.c \
@@ -78,10 +75,17 @@ RUN cd /opt/mysql-client-ratls/launcher && \
     install -m 755 mysql-client-ratls-launcher /usr/local/bin/mysql-client-ratls-launcher && \
     echo "Launcher compiled and installed successfully"
 
-# Download the Node.js client script from repository
-RUN curl -fsSL https://raw.githubusercontent.com/mccoysc/gramine-web3-wallet-docker/main/examples/mysql-client-ratls/files/mysql-client.js \
-      -o /app/mysql-client.js && \
-    chmod +x /app/mysql-client.js
+# Download the Node.js client script and package.json from repository to code directory
+RUN curl -fsSL https://raw.githubusercontent.com/mccoysc/gramine-web3-wallet-docker/main/examples/mysql-client-ratls/files/code/mysql-client.js \
+      -o /app/code/mysql-client.js && \
+    chmod +x /app/code/mysql-client.js
+
+# Download package.json for the code directory
+RUN curl -fsSL https://raw.githubusercontent.com/mccoysc/gramine-web3-wallet-docker/main/examples/mysql-client-ratls/files/code/package.json \
+      -o /app/code/package.json
+
+# Install npm dependencies in the code directory
+RUN cd /app/code && npm install && npm cache clean --force
 
 # Download the Gramine manifest template from repository
 RUN curl -fsSL https://raw.githubusercontent.com/mccoysc/gramine-web3-wallet-docker/main/examples/mysql-client-ratls/files/mysql-client-ratls.manifest.template \

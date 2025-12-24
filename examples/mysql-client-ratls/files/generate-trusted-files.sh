@@ -421,6 +421,29 @@ done
 # Note: OpenSSL libraries are discovered automatically via ldd from Node.js and other binaries
 # No need to explicitly scan directories - the script discovers whatever is actually used
 
+# Scan code directory and add files based on type:
+# - Executable files (.so, ELF binaries): recursively add with dependencies
+# - Text files (scripts, json, etc.): add directly
+CODE_DIR="/app/code"
+echo "# Scanning code directory: $CODE_DIR..." >&2
+if [ -d "$CODE_DIR" ]; then
+    find "$CODE_DIR" -type f 2>/dev/null | while read -r file; do
+        if [ -f "$file" ]; then
+            # Check if file is an ELF binary or shared library
+            if is_elf "$file"; then
+                echo "# Found executable in code dir: $file (adding with dependencies)" >&2
+                add_dep_recursive "$file"
+            else
+                # Text file (script, json, etc.) - add directly
+                echo "# Found text file in code dir: $file (adding directly)" >&2
+                echo "$file" >> "$ALL_DEPS"
+            fi
+        fi
+    done
+else
+    echo "# Warning: Code directory $CODE_DIR not found" >&2
+fi
+
 # Sort and deduplicate, then resolve symlinks
 echo "# Deduplicating and resolving symlinks..." >&2
 UNIQUE_DEPS=$(sort -u "$ALL_DEPS" | while read -r dep; do
@@ -449,11 +472,9 @@ generate_output() {
     echo "  # Launcher binary (entrypoint)"
     echo '  "file:{{ entrypoint }}",'
     echo ""
-    echo "  # Client script"
-    echo '  "file:/app/mysql-client.js",'
-    echo ""
     echo "  # System libraries and executables (auto-detected via ldd and script parsing)"
     echo "  # Includes: symlinks + real paths, script interpreters, exec targets"
+    echo "  # Also includes files from /app/code/ directory (executables with deps, text files directly)"
     
     # Output each library/executable
     echo "$UNIQUE_DEPS" | while read -r lib; do
@@ -463,8 +484,8 @@ generate_output() {
     done
     
     echo ""
-    echo "  # Node.js modules directory (installed during Docker build)"
-    echo '  "file:/app/node_modules/",'
+    echo "  # Node.js modules directory (installed during Docker build in code directory)"
+    echo '  "file:/app/code/node_modules/",'
     echo ""
     echo "  # System configuration files"
     echo '  "file:/etc/hosts",'
