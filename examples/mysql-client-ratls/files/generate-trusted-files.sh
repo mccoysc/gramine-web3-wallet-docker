@@ -424,10 +424,14 @@ done
 # Scan code directory and add files based on type:
 # - Executable files (.so, ELF binaries): recursively add with dependencies
 # - Text files (scripts, json, etc.): add directly
+# - EXCLUDE /app/code/data directory (encrypted partition for runtime data)
 CODE_DIR="/app/code"
+CODE_DATA_DIR="/app/code/data"
 echo "# Scanning code directory: $CODE_DIR..." >&2
+echo "# Excluding encrypted data directory: $CODE_DATA_DIR" >&2
 if [ -d "$CODE_DIR" ]; then
-    find "$CODE_DIR" -type f 2>/dev/null | while read -r file; do
+    # Use -path to exclude the data directory from scanning
+    find "$CODE_DIR" -path "$CODE_DATA_DIR" -prune -o -type f -print 2>/dev/null | while read -r file; do
         if [ -f "$file" ]; then
             # Check if file is an ELF binary or shared library
             if is_elf "$file"; then
