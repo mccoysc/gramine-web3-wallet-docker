@@ -11,7 +11,7 @@ This example uses a **self-contained Dockerfile** - no external files are needed
 - **Mutual RA-TLS Authentication**: Both client and server must be running in SGX enclaves
 - **Certificate-Only Authentication**: MySQL uses X.509 certificates for authentication (no passwords)
 - **SGX Quote-Based Certificates**: Certificates are generated at startup from SGX quotes
-- **Ethereum Compatible**: Uses secp256k1 curve for certificate generation
+- **Ethereum Compatible**: Uses secp256r1 curve for certificate generation
 - **Smart Contract Whitelist**: Optional whitelist configuration from Ethereum smart contract
 - **Pre-compiled Manifest**: Gramine manifest is pre-compiled and signed during Docker build
 - **Interactive Mode**: Supports interactive SQL queries
@@ -140,7 +140,7 @@ The following RA-TLS environment variables are configured by the C launcher (fol
 
 | Variable | Value | Description |
 |----------|-------|-------------|
-| `RA_TLS_CERT_ALGORITHM` | `secp256k1` | Elliptic curve for certificate generation (Ethereum compatible) |
+| `RA_TLS_CERT_ALGORITHM` | `secp256r1` | Elliptic curve for certificate generation |
 | `RA_TLS_ENABLE_VERIFY` | `1` | Enable RA-TLS verification during TLS handshake |
 | `RA_TLS_REQUIRE_PEER_CERT` | `1` | Require peer certificate for mutual TLS authentication |
 | `RA_TLS_CERT_PATH` | `/var/lib/mysql-client-ssl/client-cert.pem` | Path to store generated certificate (regular directory) |

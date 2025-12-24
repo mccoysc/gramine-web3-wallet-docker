@@ -11,7 +11,7 @@
 - **双向 RA-TLS 认证**：客户端和服务器都必须在 SGX enclave 中运行
 - **仅证书认证**：MySQL 使用 X.509 证书进行认证（无密码）
 - **SGX Quote 证书**：证书在启动时从 SGX quote 生成
-- **以太坊兼容**：使用 secp256k1 曲线生成证书
+- **以太坊兼容**：使用 secp256r1 曲线生成证书
 - **智能合约白名单**：可选的以太坊智能合约白名单配置
 - **预编译 Manifest**：Gramine manifest 在 Docker 构建期间预编译和签名
 - **交互模式**：支持交互式 SQL 查询
@@ -140,7 +140,7 @@ docker run -it \
 
 | 变量 | 值 | 描述 |
 |------|-----|------|
-| `RA_TLS_CERT_ALGORITHM` | `secp256k1` | 证书生成的椭圆曲线（以太坊兼容） |
+| `RA_TLS_CERT_ALGORITHM` | `secp256r1` | 证书生成的椭圆曲线 |
 | `RA_TLS_ENABLE_VERIFY` | `1` | 在 TLS 握手期间启用 RA-TLS 验证 |
 | `RA_TLS_REQUIRE_PEER_CERT` | `1` | 双向 TLS 认证需要对等证书 |
 | `RA_TLS_CERT_PATH` | `/var/lib/mysql-client-ssl/client-cert.pem` | 存储生成证书的路径（普通目录） |
