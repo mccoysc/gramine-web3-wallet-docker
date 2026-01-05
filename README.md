@@ -81,7 +81,6 @@ Each component builds in an independent GitHub Actions environment to avoid reso
 3. **Independent Environments**: Each compilation job runs in its own GitHub Actions runner to prevent resource exhaustion
 4. **Parallel Execution**: OpenSSL and Gramine compile in parallel; Node.js waits for OpenSSL
 5. **Dockerfile Change Detection**: Image rebuilds automatically when Dockerfile changes, even if dependencies haven't changed
-6. **GCC Compatibility**: Node.js version is capped at v22.x for compatibility with Ubuntu 22.04's GCC 11
 
 ## Usage
 

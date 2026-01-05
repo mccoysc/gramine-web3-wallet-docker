@@ -81,7 +81,6 @@
 3. **独立环境**: 每个编译任务在独立的 GitHub Actions 运行器中运行，防止资源耗尽
 4. **并行执行**: OpenSSL 和 Gramine 并行编译；Node.js 等待 OpenSSL 完成
 5. **Dockerfile 变化检测**: 即使依赖项未变化，Dockerfile 变化也会自动触发镜像重新构建
-6. **GCC 兼容性**: Node.js 版本限制为 v22.x，以兼容 Ubuntu 22.04 的 GCC 11
 
 ## 使用方法
 
