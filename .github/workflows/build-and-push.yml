@@ -1111,12 +1111,14 @@ jobs:
             
             // Create the VERSION file content
             // Format: gramine_sha openssl_version node_version build_id
-            const content = `# Docker image version tracking
-# Format: gramine_sha openssl_version node_version build_id
-# This file is updated ONLY after successful image push to registry
-# If this file doesn't match current dependency versions, image will be rebuilt
-${gramineSha} ${opensslVersion} ${nodeVersion} ${buildId}
-`;
+            const lines = [
+              '# Docker image version tracking',
+              '# Format: gramine_sha openssl_version node_version build_id',
+              '# This file is updated ONLY after successful image push to registry',
+              '# If this file doesn\'t match current dependency versions, image will be rebuilt',
+              `${gramineSha} ${opensslVersion} ${nodeVersion} ${buildId}`
+            ];
+            const content = lines.join('\n') + '\n';
             
             const contentB64 = Buffer.from(content).toString('base64');
             const filePath = 'prebuilt/image/VERSION';
