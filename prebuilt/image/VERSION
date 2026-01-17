@@ -1,0 +1,5 @@
+# Docker image version tracking
+# Format: gramine_sha openssl_version node_version build_id
+# This file is updated ONLY after successful image push to registry
+# If this file doesn't match current dependency versions, image will be rebuilt
+none none none none

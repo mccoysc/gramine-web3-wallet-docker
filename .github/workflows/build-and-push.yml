@@ -451,11 +451,28 @@ jobs:
             }
             console.log(`Node.js: current=${currentNode || 'none'} (build_id=${currentNodeBuildId || 'none'}), latest=${latestNode || 'unknown'} (target_build_id=${TARGET_BUILD_ID}), version_changed=${nodeVersionChanged}, build_id_changed=${nodeBuildIdChanged}, needs_build=${needsNode}`);
             
-            // 4. Determine if image needs rebuild
-            // Use version change signals instead of needs_* flags to ensure image rebuilds
-            // when dependencies change, even if prebuilt assets exist
-            const needsImage = dockerfileChanged || gramineChanged || opensslChanged || nodeChanged;
-            console.log(`Docker image needs rebuild: ${needsImage} (dockerfile_changed=${dockerfileChanged}, gramine_changed=${gramineChanged}, openssl_changed=${opensslChanged}, node_changed=${nodeChanged})`);
+            // 4. Check image VERSION file to determine if image needs rebuild
+            // The image VERSION file tracks what versions were used in the last successful image push
+            // Format: "gramine_sha openssl_version node_version build_id"
+            console.log('Checking Docker image version...');
+            const imageVersionData = readVersionFile('prebuilt/image/VERSION');
+            const imageVersionParts = imageVersionData.raw.split(/\s+/).filter(p => p && !p.startsWith('#'));
+            const currentImageGramine = imageVersionParts[0] || 'none';
+            const currentImageOpenSSL = imageVersionParts[1] || 'none';
+            const currentImageNode = imageVersionParts[2] || 'none';
+            const currentImageBuildId = imageVersionParts[3] || 'none';
+            
+            // Image needs rebuild if:
+            // 1. Dockerfile changed, OR
+            // 2. Any dependency version in the image doesn't match the latest version
+            const imageGramineChanged = currentImageGramine !== latestGramineSha;
+            const imageOpenSSLChanged = currentImageOpenSSL !== latestOpenSSL;
+            const imageNodeChanged = currentImageNode !== latestNode;
+            const imageBuildIdChanged = currentImageBuildId !== TARGET_BUILD_ID;
+            
+            const needsImage = dockerfileChanged || imageGramineChanged || imageOpenSSLChanged || imageNodeChanged || imageBuildIdChanged;
+            console.log(`Docker image version: gramine=${currentImageGramine.substring(0,8)}, openssl=${currentImageOpenSSL}, node=${currentImageNode}, build_id=${currentImageBuildId}`);
+            console.log(`Docker image needs rebuild: ${needsImage} (dockerfile_changed=${dockerfileChanged}, gramine_changed=${imageGramineChanged}, openssl_changed=${imageOpenSSLChanged}, node_changed=${imageNodeChanged}, build_id_changed=${imageBuildIdChanged})`);
             
             // Set outputs
             core.setOutput('needs_gramine', needsGramine.toString());
@@ -475,9 +492,10 @@ jobs:
             if (needsImage) {
               const reasons = [];
               if (dockerfileChanged) reasons.push('Dockerfile changed');
-              if (needsGramine) reasons.push('Gramine updated');
-              if (needsOpenSSL) reasons.push('OpenSSL updated');
-              if (needsNode) reasons.push('Node.js updated');
+              if (imageGramineChanged) reasons.push('Gramine updated');
+              if (imageOpenSSLChanged) reasons.push('OpenSSL updated');
+              if (imageNodeChanged) reasons.push('Node.js updated');
+              if (imageBuildIdChanged) reasons.push('Build ID changed');
               imageReason = reasons.join(', ');
             }
             
@@ -490,7 +508,7 @@ jobs:
                 ['OpenSSL', currentOpenSSL || 'none', currentOpenSSLBuildId || 'none', latestOpenSSL || 'unknown', needsOpenSSL ? '✅' : '⏭️'],
                 ['Node.js', currentNode || 'none', currentNodeBuildId || 'none', latestNode || 'unknown', needsNode ? '✅' : '⏭️'],
                 ['Dockerfile', '-', '-', '-', dockerfileChanged ? '✅ Changed' : '⏭️'],
-                ['Docker Image', '-', '-', '-', needsImage ? `✅ (${imageReason})` : '⏭️']
+                ['Docker Image', `${currentImageGramine.substring(0,8)}/${currentImageOpenSSL}/${currentImageNode}`, currentImageBuildId, `${latestGramineShaShort}/${latestOpenSSL}/${latestNode}`, needsImage ? `✅ (${imageReason})` : '⏭️']
               ])
               .write();
 
@@ -1068,6 +1086,69 @@ jobs:
           echo '```bash' >> $GITHUB_STEP_SUMMARY
           echo "docker pull ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:latest" >> $GITHUB_STEP_SUMMARY
           echo '```' >> $GITHUB_STEP_SUMMARY
+
+      - name: Update image VERSION file
+        if: github.event_name != 'pull_request' && (github.ref == 'refs/heads/main' || github.ref == 'refs/heads/master')
+        uses: actions/github-script@v7
+        env:
+          GRAMINE_SHA: ${{ needs.check-versions.outputs.gramine_sha }}
+          OPENSSL_VERSION: ${{ needs.check-versions.outputs.openssl_version }}
+          NODE_VERSION: ${{ needs.check-versions.outputs.node_version }}
+          BUILD_ID: ${{ needs.check-versions.outputs.build_id }}
+        with:
+          script: |
+            const owner = context.repo.owner;
+            const repo = context.repo.repo;
+            const branch = context.ref.replace('refs/heads/', '');
+            
+            const gramineSha = process.env.GRAMINE_SHA;
+            const opensslVersion = process.env.OPENSSL_VERSION;
+            const nodeVersion = process.env.NODE_VERSION;
+            const buildId = process.env.BUILD_ID;
+            
+            console.log('Updating image VERSION file after successful push...');
+            console.log(`Gramine: ${gramineSha.substring(0,8)}, OpenSSL: ${opensslVersion}, Node.js: ${nodeVersion}, Build ID: ${buildId}`);
+            
+            // Create the VERSION file content
+            // Format: gramine_sha openssl_version node_version build_id
+            const content = `# Docker image version tracking
+# Format: gramine_sha openssl_version node_version build_id
+# This file is updated ONLY after successful image push to registry
+# If this file doesn't match current dependency versions, image will be rebuilt
+${gramineSha} ${opensslVersion} ${nodeVersion} ${buildId}
+`;
+            
+            const contentB64 = Buffer.from(content).toString('base64');
+            const filePath = 'prebuilt/image/VERSION';
+            
+            // Get current file SHA if it exists
+            let fileSha;
+            try {
+              const { data } = await github.rest.repos.getContent({
+                owner,
+                repo,
+                path: filePath,
+                ref: branch
+              });
+              if (!Array.isArray(data)) {
+                fileSha = data.sha;
+              }
+            } catch (e) {
+              if (e.status !== 404) throw e;
+            }
+            
+            // Update the file
+            await github.rest.repos.createOrUpdateFileContents({
+              owner,
+              repo,
+              path: filePath,
+              message: `Update Docker image version (${gramineSha.substring(0,8)}/${opensslVersion}/${nodeVersion})`,
+              content: contentB64,
+              sha: fileSha,
+              branch
+            });
+            
+            console.log('Image VERSION file updated successfully');
 
   # Job 7: Check for SGX self-hosted runners
   # Only run tests when there's actual compilation (Gramine, OpenSSL, Node.js, or Docker image)
