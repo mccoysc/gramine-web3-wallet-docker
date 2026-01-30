@@ -2,4 +2,4 @@
 # Format: gramine_sha openssl_version node_version build_id
 # This file is updated ONLY after successful image push to registry
 # If this file doesn't match current dependency versions, image will be rebuilt
-none none none none
+5dc085e66405530141588f6b27a108773020631f openssl-3.6.1 v24.13.0 ubuntu24.04-gcc13
